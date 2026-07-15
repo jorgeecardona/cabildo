@@ -1,0 +1,121 @@
+"""Core data-layer behavior: sessions, topics, messaging, unread + explicit
+read semantics, DMs, and the PID rendezvous lookup."""
+
+from __future__ import annotations
+
+from agent_chat import store
+from tests.conftest import make_session
+
+
+def test_register_creates_default_subscriptions(conn):
+    make_session(conn, "s1", project_name="alpha")
+    subs = set(store.subscriptions_of(conn, "s1"))
+    assert store.DEFAULT_TOPIC in subs
+    assert store.project_topic("alpha") in subs
+
+
+def test_pid_rendezvous_lookup(conn):
+    make_session(conn, "s1", claude_pid=4242)
+    assert store.session_for_pid(conn, 4242) == "s1"
+    assert store.session_for_pid(conn, 9999) is None
+    assert store.session_for_pid(conn, 0) is None
+
+
+def test_topic_message_is_unread_for_subscribers_not_sender(conn):
+    make_session(conn, "sender", handle="snd", project_name="alpha")
+    make_session(conn, "recv", project_name="alpha")  # same project -> same topic
+    topic = store.project_topic("alpha")
+
+    store.post_message(conn, from_session="sender", from_handle="snd",
+                       body="hello team", topic=topic)
+
+    # recipient sees it unread; sender does not see own message
+    assert len(store.inbox(conn, "recv", unread_only=True)) == 1
+    assert len(store.inbox(conn, "sender", unread_only=True)) == 0
+    assert store.unread_summary(conn, "recv")["count"] == 1
+
+
+def test_messages_are_not_auto_read_only_explicit(conn):
+    make_session(conn, "a", handle="a", project_name="alpha")
+    make_session(conn, "b", project_name="alpha")
+    topic = store.project_topic("alpha")
+    store.post_message(conn, from_session="a", from_handle="a", body="m1", topic=topic)
+
+    # merely reading the inbox does NOT mark it read
+    store.inbox(conn, "b", unread_only=True)
+    assert store.unread_summary(conn, "b")["count"] == 1
+
+    # explicit read clears it
+    marked = store.mark_read(conn, "b", all_unread=True)
+    assert marked == 1
+    assert store.unread_summary(conn, "b")["count"] == 0
+    # idempotent: re-marking marks nothing new
+    assert store.mark_read(conn, "b", all_unread=True) == 0
+
+
+def test_direct_message_only_reaches_target(conn):
+    make_session(conn, "a", handle="alice")
+    make_session(conn, "b", handle="bob")
+    make_session(conn, "c", handle="carol")
+    store.post_message(conn, from_session="a", from_handle="alice",
+                       body="psst bob", to_session="b")
+
+    assert store.unread_summary(conn, "b")["count"] == 1
+    assert store.unread_summary(conn, "c")["count"] == 0
+    inbox_b = store.inbox(conn, "b")
+    assert inbox_b[0]["to_session"] == "b"
+    assert inbox_b[0]["from_display"] == "@alice"
+
+
+def test_mark_read_by_specific_ids_and_by_topic(conn):
+    make_session(conn, "a", handle="a", project_name="alpha")
+    make_session(conn, "b", project_name="alpha")
+    topic = store.project_topic("alpha")
+    m1 = store.post_message(conn, from_session="a", from_handle="a", body="1", topic=topic)
+    store.post_message(conn, from_session="a", from_handle="a", body="2", topic=topic)
+
+    assert store.mark_read(conn, "b", message_ids=[m1]) == 1
+    assert store.unread_summary(conn, "b")["count"] == 1
+    assert store.mark_read(conn, "b", topic=topic) == 1
+    assert store.unread_summary(conn, "b")["count"] == 0
+
+
+def test_post_message_requires_exactly_one_destination(conn):
+    make_session(conn, "a", handle="a")
+    import pytest
+
+    with pytest.raises(ValueError):
+        store.post_message(conn, from_session="a", from_handle="a", body="x")
+    with pytest.raises(ValueError):
+        store.post_message(conn, from_session="a", from_handle="a", body="x",
+                           topic="t", to_session="a")
+
+
+def test_active_sessions_scoped_by_project_and_excludes_self(conn):
+    make_session(conn, "a", handle="a", project="/repo/alpha", project_name="alpha")
+    make_session(conn, "b", handle="b", project="/repo/alpha", project_name="alpha")
+    make_session(conn, "c", handle="c", project="/repo/beta", project_name="beta")
+
+    peers = store.active_sessions(conn, project="/repo/alpha", exclude="a")
+    assert {p["session_id"] for p in peers} == {"b"}
+    everyone = store.active_sessions(conn, exclude="a")
+    assert {p["session_id"] for p in everyone} == {"b", "c"}
+
+
+def test_history_returns_thread_regardless_of_read_state(conn):
+    make_session(conn, "a", handle="a")
+    make_session(conn, "b", handle="b")
+    store.post_message(conn, from_session="a", from_handle="a", body="hi", to_session="b")
+    store.post_message(conn, from_session="b", from_handle="b", body="yo", to_session="a")
+    thread = store.history(conn, between=("a", "b"))
+    assert [m["body"] for m in thread] == ["hi", "yo"]
+
+
+def test_display_name_prefers_handle(conn):
+    make_session(conn, "abcd1234ef", handle="cooldev")
+    row = store.get_session(conn, "abcd1234ef")
+    assert store.display_name(row) == "@cooldev"
+    store.set_handle(conn, "abcd1234ef", "")  # cleared
+    row = store.get_session(conn, "abcd1234ef")
+    # falsy handle -> short id
+    assert store.display_name(row) == "abcd1234"
