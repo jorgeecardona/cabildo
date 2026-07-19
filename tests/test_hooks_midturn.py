@@ -4,7 +4,7 @@ guard, not the hook subprocesses — those are plumbing-only by design."""
 
 from __future__ import annotations
 
-from backchat import guard, notify, store
+from cabildo import guard, notify, store
 
 from tests.conftest import make_session
 

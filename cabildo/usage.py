@@ -12,8 +12,8 @@ desync from the timer, so a module that hardcoded a threshold would be lying
 with a straight face. It reports measured rates and answers "at this rate, when
 do I cross N?" — you supply N.
 
-    python -m backchat.usage              # trend + forecast
-    python -m backchat.usage --budget 50e6 --window 7d
+    python -m cabildo.usage              # trend + forecast
+    python -m cabildo.usage --budget 50e6 --window 7d
 """
 
 from __future__ import annotations
@@ -155,7 +155,7 @@ def _human(n: float) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="backchat-usage", description=(__doc__ or "").split("\n")[0])
+    p = argparse.ArgumentParser(prog="cabildo-usage", description=(__doc__ or "").split("\n")[0])
     p.add_argument("--days", type=float, default=7.0, help="window to scan")
     p.add_argument("--budget", type=float, default=0.0,
                    help="weighted-token budget for the window; enables the forecast")

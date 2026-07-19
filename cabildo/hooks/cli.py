@@ -1,4 +1,4 @@
-"""Console entry point for the hook scripts: `backchat-hook <event>`.
+"""Console entry point for the hook scripts: `cabildo-hook <event>`.
 
 Claude Code invokes this once per hook event with the event JSON on stdin.
 Dispatching through an installed console script (instead of a file path into
@@ -27,13 +27,13 @@ EVENTS = (
 def main() -> None:
     name = sys.argv[1] if len(sys.argv) > 1 else ""
     if name not in EVENTS:
-        print(f"backchat-hook: unknown event {name!r} "
+        print(f"cabildo-hook: unknown event {name!r} "
               f"(choose from: {', '.join(EVENTS)})", file=sys.stderr)
         return
     try:
-        importlib.import_module(f"backchat.hooks.{name}").main()
+        importlib.import_module(f"cabildo.hooks.{name}").main()
     except Exception as e:
-        print(f"[backchat {name} hook error: {e}]", file=sys.stderr)
+        print(f"[cabildo {name} hook error: {e}]", file=sys.stderr)
 
 
 if __name__ == "__main__":

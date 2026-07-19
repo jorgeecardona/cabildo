@@ -7,7 +7,7 @@ Two conventions are enforced, both scoped to the session's own project:
     while the lease is live.
   * ``file:<path>`` — an Edit/Write/NotebookEdit on a matching path is denied.
     Paths are matched repo-relative and absolute, with fnmatch globbing so a
-    claim like ``file:backchat/hooks/*`` covers the directory.
+    claim like ``file:cabildo/hooks/*`` covers the directory.
 
 Deny only ever fires for a claim held by *someone else* and still unexpired;
 everything else falls through to Claude Code's normal permission flow. The
@@ -57,7 +57,7 @@ def _deny_push(conn: sqlite3.Connection, me: sqlite3.Row, command: str) -> str |
         return None
     note = f" ({row['note']})" if row["note"] else ""
     return (
-        f"backchat: {_holder_name(conn, row)} holds the lock `{resource}`{note}, "
+        f"cabildo: {_holder_name(conn, row)} holds the lock `{resource}`{note}, "
         f"expiring in {round(row['expires_at'] - store._now())}s. Pushing now could "
         "clobber their in-flight work. Wait, or message them via `send`; take the "
         "lock with `claim` once it is free."
@@ -79,7 +79,7 @@ def _deny_file(conn: sqlite3.Connection, me: sqlite3.Row, path: str) -> str | No
         if fnmatch(str(abspath), pattern) or (rel is not None and fnmatch(rel, pattern)):
             note = f" ({row['note']})" if row["note"] else ""
             return (
-                f"backchat: {_holder_name(conn, row)} holds `{row['resource']}`{note}, "
+                f"cabildo: {_holder_name(conn, row)} holds `{row['resource']}`{note}, "
                 f"expiring in {round(row['expires_at'] - store._now())}s — this edit "
                 f"would touch {rel or path}. Coordinate via `send` before editing, "
                 "or wait for the lease to expire."

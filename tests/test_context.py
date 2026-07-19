@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from backchat.context import git_project
+from cabildo.context import git_project
 
 
 def test_git_project_finds_repo_root(tmp_path):

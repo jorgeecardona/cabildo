@@ -1,8 +1,8 @@
 """Shared plumbing for the hook scripts.
 
-Hooks are dispatched by `backchat-hook <event>` (see cli.py). They read the
+Hooks are dispatched by `cabildo-hook <event>` (see cli.py). They read the
 hook JSON from stdin and emit additionalContext via stdout JSON. They stay
-dependency-free (stdlib + backchat.store/context) and never raise: a broken
+dependency-free (stdlib + cabildo.store/context) and never raise: a broken
 hook must not break the user's session, so everything is best-effort.
 """
 

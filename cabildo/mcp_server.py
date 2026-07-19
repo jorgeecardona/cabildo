@@ -1,9 +1,9 @@
-"""The backchat MCP server (stdio).
+"""The cabildo MCP server (stdio).
 
 One instance runs per Claude Code session. It never receives the session_id from
 Claude Code, so it resolves its identity via the shared-PID rendezvous: find the
 owning `claude` process, then look up the session_id the SessionStart hook bound
-to that PID. Everything else is a thin wrapper over backchat.store.
+to that PID. Everything else is a thin wrapper over cabildo.store.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from . import store
 from .actions import ACTIONS
 from .context import git_project, resolve_claude_pid
 
-mcp = FastMCP("backchat")
+mcp = FastMCP("cabildo")
 
 # Single source of truth: the daemon's registry decides what may be requested.
 ACTION_NAMES = sorted(ACTIONS)
@@ -29,13 +29,13 @@ ACTION_NAMES = sorted(ACTIONS)
 def _me(conn) -> str:
     """Resolve *this* session's id and refresh its liveness.
 
-    Order matters. BACKCHAT_TAG is exact when present: we inherit it from the
+    Order matters. CABILDO_TAG is exact when present: we inherit it from the
     same `claude` the SessionStart hook ran under, so both ends agree without
     inferring anything. The PID rendezvous is the fallback for ordinary
     terminal sessions, and it is a guess — for a spawned `claude -p` it found a
     different claude entirely and split one agent across two bus identities.
     """
-    tag = os.environ.get("BACKCHAT_TAG")
+    tag = os.environ.get("CABILDO_TAG")
     if tag:
         sid = store.session_for_tag(conn, tag)
         if sid is not None:
@@ -71,7 +71,7 @@ def _project(conn, sid: str) -> str | None:
 # --------------------------------------------------------------------------- #
 @mcp.tool()
 def whoami() -> dict[str, Any]:
-    """Who am I in the backchat bus: my session id, handle, project, the
+    """Who am I in the cabildo bus: my session id, handle, project, the
     channels I'm subscribed to, and my unread count."""
     with store.connect() as conn:
         sid = _me(conn)

@@ -13,7 +13,7 @@ Two jobs, both cheap:
 from __future__ import annotations
 
 
-from backchat.hooks._common import emit_context, read_input
+from cabildo.hooks._common import emit_context, read_input
 
 
 def main() -> None:
@@ -22,7 +22,7 @@ def main() -> None:
     if not session_id:
         return
 
-    from backchat import notify, store
+    from cabildo import notify, store
 
     conn = store.connect()
     try:

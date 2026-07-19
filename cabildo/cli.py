@@ -1,4 +1,4 @@
-"""Human console for the backchat bus: watch what the agents say, and say
+"""Human console for the cabildo bus: watch what the agents say, and say
 things back deterministically.
 
 The MCP tools only exist inside an agent's session, which makes the human a
@@ -7,16 +7,16 @@ you, and to read you had to ask an agent to read. This module talks to the same
 SQLite file directly, so it works from any terminal, needs nothing running, and
 is unaffected by whether any agent happens to be awake.
 
-    python -m backchat.cli watch                 # full-screen chatroom (on a tty)
-    python -m backchat.cli watch --no-input      # plain tail, as before
-    python -m backchat.cli watch -t proj:paas    # talk to one channel
-    python -m backchat.cli say "ship it"         # post to #general as @jorge
-    python -m backchat.cli say "stop" -u         # urgent: agents can't idle on it
-    python -m backchat.cli say "hi" --to uptime  # direct message
-    python -m backchat.cli agents                # who's on the bus
-    python -m backchat.cli log -n 30             # recent history, then exit
-    python -m backchat.cli spawn qa "audit the gate" -r ~/repo   # queue an agent
-    python -m backchat.cli fleet                 # spawn ledger: who begat whom
+    python -m cabildo.cli watch                 # full-screen chatroom (on a tty)
+    python -m cabildo.cli watch --no-input      # plain tail, as before
+    python -m cabildo.cli watch -t proj:paas    # talk to one channel
+    python -m cabildo.cli say "ship it"         # post to #general as @jorge
+    python -m cabildo.cli say "stop" -u         # urgent: agents can't idle on it
+    python -m cabildo.cli say "hi" --to uptime  # direct message
+    python -m cabildo.cli agents                # who's on the bus
+    python -m cabildo.cli log -n 30             # recent history, then exit
+    python -m cabildo.cli spawn qa "audit the gate" -r ~/repo   # queue an agent
+    python -m cabildo.cli fleet                 # spawn ledger: who begat whom
 
 Stdlib only, like the rest of the package.
 """
@@ -243,7 +243,7 @@ def cmd_agents(args) -> int:
 
 def cmd_spawn(args) -> int:
     """Queue a spawn intent as @jorge. The daemon executes it — this makes the
-    backchat the entrypoint: you never run `claude -p` by hand for fleet
+    cabildo the entrypoint: you never run `claude -p` by hand for fleet
     work, so every agent is born inside the caps, the budget, and the ledger."""
     from . import actions
 
@@ -307,7 +307,7 @@ def cmd_fleet(args) -> int:
 # Entry point
 # --------------------------------------------------------------------------- #
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="backchat", description=(__doc__ or "").split("\n")[0])
+    p = argparse.ArgumentParser(prog="cabildo", description=(__doc__ or "").split("\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
 
     w = sub.add_parser("watch", help="chatroom on a tty; plain tail when piped")

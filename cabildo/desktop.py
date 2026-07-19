@@ -17,7 +17,7 @@ import os
 import shutil
 import subprocess
 
-APP_NAME = "backchat"
+APP_NAME = "cabildo"
 ICON = "dialog-information"
 ICON_URGENT = "dialog-warning"
 
@@ -119,5 +119,5 @@ def notify_message(m: dict) -> bool:
     summary = f"{mark}{who}" + (f" — {ctx}" if ctx else "")
     body = m.get("body") or ""
     if not m.get("urgent"):
-        body += "\n\n(reply: backchat say --to " + str(who).lstrip("@") + " ...)"
+        body += "\n\n(reply: cabildo say --to " + str(who).lstrip("@") + " ...)"
     return notify(summary, body, urgent=urgent)

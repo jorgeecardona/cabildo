@@ -28,7 +28,7 @@ GIT_TIMEOUT = 120
 GATE_TIMEOUT = 1800
 # Repo-owned, not requester-supplied. The agent asking to land does not get to
 # choose the thing that judges it.
-GATE_PATH = ".backchat/gate.sh"
+GATE_PATH = ".cabildo/gate.sh"
 
 # Worktrees live beside the repo, never inside it: a worktree under the repo
 # shows up in its own status and gets swept into someone's `git add`, which is
@@ -38,17 +38,17 @@ WORKTREE_DIRNAME = ".agent-worktrees"
 # What a spawned agent may do on the bus. It needs a voice to be useful and
 # `request` to land its work; it does not need to spawn more agents.
 BUS_TOOLS = [
-    "mcp__backchat__whoami",
-    "mcp__backchat__send",
-    "mcp__backchat__inbox",
-    "mcp__backchat__read",
-    "mcp__backchat__list_agents",
-    "mcp__backchat__set_handle",
-    "mcp__backchat__claim",
-    "mcp__backchat__release",
-    "mcp__backchat__claims",
-    "mcp__backchat__request",
-    "mcp__backchat__intents",
+    "mcp__cabildo__whoami",
+    "mcp__cabildo__send",
+    "mcp__cabildo__inbox",
+    "mcp__cabildo__read",
+    "mcp__cabildo__list_agents",
+    "mcp__cabildo__set_handle",
+    "mcp__cabildo__claim",
+    "mcp__cabildo__release",
+    "mcp__cabildo__claims",
+    "mcp__cabildo__request",
+    "mcp__cabildo__intents",
 ]
 
 
@@ -304,7 +304,7 @@ def _fail(reason: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
 # Every role shares this. The rules are stated as mechanism, not encouragement:
 # each one exists because it was violated in a shared tree on 2026-07-15.
 _COMMON = """
-You are one agent in a fleet coordinated over the backchat bus.
+You are one agent in a fleet coordinated over the cabildo bus.
 
 Your tree is yours. You are running in a dedicated git worktree on your own
 branch. Nobody else edits these files. Work here freely; never `cd` to another
@@ -550,7 +550,7 @@ def spawn(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         proc = subprocess.Popen(
             cmd, cwd=wt, stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
             start_new_session=True,  # survives the daemon; it is not our child to babysit
-            env={**os.environ, "CLAUDE_PROJECT_DIR": wt, "BACKCHAT_TAG": tag},
+            env={**os.environ, "CLAUDE_PROJECT_DIR": wt, "CABILDO_TAG": tag},
         )
         store.set_spawn_pid(conn, tag, proc.pid)
         ctx.log(f"  🚀 launched {role} pid={proc.pid} (depth {depth}, "

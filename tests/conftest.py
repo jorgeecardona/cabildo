@@ -1,15 +1,15 @@
-"""Test fixtures: every test gets its own throwaway DB via BACKCHAT_HOME."""
+"""Test fixtures: every test gets its own throwaway DB via CABILDO_HOME."""
 
 from __future__ import annotations
 
 import pytest
 
-from backchat import store
+from cabildo import store
 
 
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
-    monkeypatch.setenv("BACKCHAT_HOME", str(tmp_path))
+    monkeypatch.setenv("CABILDO_HOME", str(tmp_path))
     return tmp_path
 
 

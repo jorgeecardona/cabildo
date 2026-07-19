@@ -8,8 +8,8 @@ import subprocess
 
 import pytest
 
-from backchat import actions, store
-from backchat.store import HUMAN_SESSION
+from cabildo import actions, store
+from cabildo.store import HUMAN_SESSION
 
 
 def _ctx(**kw) -> actions.Ctx:
@@ -190,7 +190,7 @@ def test_launch_records_lineage_and_model(home, tmp_path, monkeypatch):
     assert "spawned by @jorge" in prompt        # report-back convention is stated
     assert 'request(action="spawn"' in prompt   # and so is the right way to delegate
 
-    tag = captured["env"]["BACKCHAT_TAG"]
+    tag = captured["env"]["CABILDO_TAG"]
     row = conn.execute("SELECT * FROM spawns WHERE tag=?", (tag,)).fetchone()
     assert row is not None
     assert row["parent_session"] == HUMAN_SESSION

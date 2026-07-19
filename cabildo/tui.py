@@ -1,6 +1,6 @@
 """Full-screen console chatroom for the bus: the human sits IN the room.
 
-`python -m backchat.cli watch` opens this when stdout is a terminal. Layout:
+`python -m cabildo.cli watch` opens this when stdout is a terminal. Layout:
 
     ┌ header: what you're viewing, where your words go ──┬─ agents ──┐
     │ message scroll (wrapped, colored, PgUp/PgDn)       │ roster    │
@@ -174,7 +174,7 @@ class Chat:
         pane_h = h - 3  # header + hint + input
 
         # header
-        title = f" backchat · viewing all · you talk to #{self.dest} "
+        title = f" cabildo · viewing all · you talk to #{self.dest} "
         self._put(0, 0, title[: w - 1], curses.A_REVERSE)
         self._put(0, max(0, w - 20), f" {len(self.roster)} agents on bus "[: 19],
                   curses.A_REVERSE | curses.A_DIM)

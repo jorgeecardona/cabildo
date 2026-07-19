@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from backchat import store
+from cabildo import store
 from tests.conftest import make_session
 
 

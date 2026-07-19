@@ -5,9 +5,9 @@ operation, and the strongest lock is not needing one. A single worker draining a
 queue cannot race itself, so there is no lease to expire, no lock to leak, and
 no rebase-under-you. Concurrency here would buy nothing and cost correctness.
 
-    python -m backchat.daemon                 # dry run: everything but the push
-    python -m backchat.daemon --allow-push    # actually push
-    python -m backchat.daemon --once          # drain what's queued, then exit
+    python -m cabildo.daemon                 # dry run: everything but the push
+    python -m cabildo.daemon --allow-push    # actually push
+    python -m cabildo.daemon --once          # drain what's queued, then exit
 
 Results go back three ways: the intent row (authoritative), a line on stdout,
 and a message on the bus to the requester (so an agent learns its land failed
@@ -108,7 +108,7 @@ def handle(conn, intent: dict, ctx: actions.Ctx) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="backchat-daemon", description=(__doc__ or "").split("\n")[0])
+    p = argparse.ArgumentParser(prog="cabildo-daemon", description=(__doc__ or "").split("\n")[0])
     p.add_argument("--allow-push", action="store_true",
                    help="actually push. Without it, land stops before the push and reports.")
     p.add_argument("--allow-spawn", action="store_true",

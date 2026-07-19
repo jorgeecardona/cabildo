@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from backchat.tui import parse
+from cabildo.tui import parse
 
 
 @pytest.mark.parametrize("line", ["/q", "/quit", "/exit"])

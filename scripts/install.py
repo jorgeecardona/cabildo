@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-shot installer for backchat.
+"""One-shot installer for cabildo.
 
   * creates the project venv and installs the package (via uv),
   * registers the MCP server at USER scope (available in every project),
@@ -20,11 +20,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 VENV = REPO / ".venv"
 VENV_PY = VENV / "bin" / "python"
-MCP_BIN = VENV / "bin" / "backchat-mcp"
-HOOK_BIN = VENV / "bin" / "backchat-hook"
+MCP_BIN = VENV / "bin" / "cabildo-mcp"
+HOOK_BIN = VENV / "bin" / "cabildo-hook"
 SETTINGS = Path.home() / ".claude" / "settings.json"
 
-# event -> (backchat-hook arg, timeout_s, tool matcher or None). The
+# event -> (cabildo-hook arg, timeout_s, tool matcher or None). The
 # per-tool-call hooks get a tight timeout: they run on every single tool call,
 # so a hung DB must cost 5s once, not block the whole session repeatedly.
 HOOKS = {
@@ -56,7 +56,7 @@ def ensure_venv() -> None:
 def migrate_legacy_home() -> None:
     """Pre-rename installs kept the bus in ~/.agent-chat. Move it once."""
     old = Path.home() / ".agent-chat"
-    new = Path.home() / ".backchat"
+    new = Path.home() / ".cabildo"
     if old.exists() and not new.exists():
         print(f"• migrating data dir {old} -> {new}")
         shutil.move(str(old), str(new))
@@ -68,9 +68,9 @@ def register_mcp() -> None:
     # the pre-rename "agent-chat" registration.
     subprocess.call(["claude", "mcp", "remove", "--scope", "user", "agent-chat"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.call(["claude", "mcp", "remove", "--scope", "user", "backchat"],
+    subprocess.call(["claude", "mcp", "remove", "--scope", "user", "cabildo"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    rc = sh(["claude", "mcp", "add", "--scope", "user", "backchat", "--",
+    rc = sh(["claude", "mcp", "add", "--scope", "user", "cabildo", "--",
              str(MCP_BIN)])
     if rc != 0:
         print("  ! `claude mcp add` failed — register manually with the command above")
@@ -87,12 +87,12 @@ def patch_settings() -> None:
     hooks = data.setdefault("hooks", {})
 
     # Drop stale entries from older installs: repo-file-path commands
-    # (agent_chat/ or backchat/ hook scripts) break whenever the repo
+    # (agent_chat/ or cabildo/ hook scripts) break whenever the repo
     # moves or a file is renamed — exactly why we dispatch via HOOK_BIN now.
     for event, groups in list(hooks.items()):
         kept = [g for g in groups
                 if not any("_chat/hooks/" in h.get("command", "")
-                           or "backchat/hooks/" in h.get("command", "")
+                           or "cabildo/hooks/" in h.get("command", "")
                            for h in g.get("hooks", []))]
         if len(kept) != len(groups):
             print(f"  - {event}: removed stale file-path entry")
@@ -121,7 +121,7 @@ def patch_settings() -> None:
 
 
 def main() -> None:
-    print(f"backchat installer  (repo: {REPO})\n")
+    print(f"cabildo installer  (repo: {REPO})\n")
     ensure_venv()
     migrate_legacy_home()
     register_mcp()

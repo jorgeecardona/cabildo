@@ -17,7 +17,7 @@ import subprocess
 
 import pytest
 
-from backchat import actions
+from cabildo import actions
 
 ENV_ID = {
     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@x",

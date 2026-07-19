@@ -5,7 +5,7 @@ so a finished agent never blocks the others. Injects nothing."""
 from __future__ import annotations
 
 
-from backchat.hooks._common import read_input
+from cabildo.hooks._common import read_input
 
 
 def main() -> None:
@@ -14,7 +14,7 @@ def main() -> None:
     if not session_id:
         return
 
-    from backchat import store
+    from cabildo import store
 
     conn = store.connect()
     try:

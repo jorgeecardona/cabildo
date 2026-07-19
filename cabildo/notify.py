@@ -23,7 +23,7 @@ def unread_line(conn: sqlite3.Connection, session_id: str) -> str | None:
     detail = " · ".join(parts) if parts else ""
     urgent = " ⚠ URGENT" if s["urgent"] else ""
     return (
-        f"📬 backchat: {s['count']} unread{urgent}"
+        f"📬 cabildo: {s['count']} unread{urgent}"
         + (f" — {detail}" if detail else "")
         + ". Use `inbox` to read, then `read` to mark them."
     )
@@ -37,7 +37,7 @@ def midturn_urgent_text(conn: sqlite3.Connection, session_id: str) -> str | None
     msgs = store.undelivered_urgent(conn, session_id)
     if not msgs:
         return None
-    lines = [f"⚠ backchat: {len(msgs)} URGENT message(s) just arrived:"]
+    lines = [f"⚠ cabildo: {len(msgs)} URGENT message(s) just arrived:"]
     for m in msgs:
         dest = "DM" if m["to_session"] else f"#{m['topic']}"
         preview = " ".join(m["body"].split())[:200]
@@ -58,7 +58,7 @@ def urgent_block_reason(conn: sqlite3.Connection, session_id: str) -> str | None
     if not urgent:
         return None
     lines = [
-        f"⚠ You have {len(urgent)} unread URGENT backchat message(s). Delivery is "
+        f"⚠ You have {len(urgent)} unread URGENT cabildo message(s). Delivery is "
         "pull-based, so going idle now means nobody sees your answer:"
     ]
     for m in urgent[:5]:
@@ -81,7 +81,7 @@ def session_banner(conn: sqlite3.Connection, session_id: str) -> str:
     project = me["project"] if me else None
     project_name = me["project_name"] if me else None
 
-    lines = [f"🔌 backchat online — you are {name} (session {session_id[:8]})."]
+    lines = [f"🔌 cabildo online — you are {name} (session {session_id[:8]})."]
     if project_name:
         lines.append(f"Project: {project_name} · channel #{store.project_topic(project_name)}")
 

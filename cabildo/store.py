@@ -1,6 +1,6 @@
-"""SQLite-backed shared store for the backchat IPC bus.
+"""SQLite-backed shared store for the cabildo IPC bus.
 
-One DB file (default ~/.backchat/chat.db) is shared by every Claude Code
+One DB file (default ~/.cabildo/chat.db) is shared by every Claude Code
 session's MCP subprocess *and* by the hook scripts. WAL mode + a busy timeout
 keep concurrent readers/writers from tripping over each other at this volume.
 
@@ -22,10 +22,10 @@ from typing import Any, Iterable
 # Paths / config
 # --------------------------------------------------------------------------- #
 def home() -> Path:
-    env = os.environ.get("BACKCHAT_HOME") or os.environ.get("AGENT_CHAT_HOME")
+    env = os.environ.get("CABILDO_HOME") or os.environ.get("AGENT_CHAT_HOME")
     if env:
         return Path(env)
-    p = Path(os.path.expanduser("~/.backchat"))
+    p = Path(os.path.expanduser("~/.cabildo"))
     legacy = Path(os.path.expanduser("~/.agent-chat"))
     # Pre-rename bus: keep using it until the installer moves it, so history
     # and live sessions don't split across two databases.
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     project       TEXT,
     project_name  TEXT,
     claude_pid    INTEGER,
-    -- Set for spawned agents via BACKCHAT_TAG in the environment. The PID
+    -- Set for spawned agents via CABILDO_TAG in the environment. The PID
     -- rendezvous guesses; a tag is told. Both the SessionStart hook and the MCP
     -- server inherit the same env from the same `claude`, so they agree by
     -- construction instead of by inference.
@@ -153,7 +153,7 @@ CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status, id);
 -- lives in the DB and not in daemon memory because a restarted daemon must
 -- still see the agents its predecessor launched, or every cap and depth limit
 -- resets to zero on restart. `tag` is the identity handed to the child via
--- BACKCHAT_TAG before the child exists; `session_id` is backfilled when the
+-- CABILDO_TAG before the child exists; `session_id` is backfilled when the
 -- child's SessionStart hook registers carrying that tag.
 CREATE TABLE IF NOT EXISTS spawns (
     tag            TEXT PRIMARY KEY,

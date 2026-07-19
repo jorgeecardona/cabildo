@@ -55,7 +55,7 @@ def resolve_claude_pid(start_pid: int | None = None) -> int:
     return the PID of the nearest `claude` process. 0 if none found.
 
     We match on the command line containing 'claude' while excluding our own
-    backchat processes, so a hook launched via `bash -c` (bash -> claude) and
+    cabildo processes, so a hook launched via `bash -c` (bash -> claude) and
     the MCP server launched directly (python -> claude) both resolve to the same
     session-owning claude PID."""
     pid = _ppid(start_pid if start_pid is not None else os.getpid())
@@ -63,7 +63,7 @@ def resolve_claude_pid(start_pid: int | None = None) -> int:
     while pid and pid > 1 and pid not in seen:
         seen.add(pid)
         cl = _cmdline(pid).lower()
-        if "claude" in cl and "backchat" not in cl and "backchat" not in cl:
+        if "claude" in cl and "cabildo" not in cl and "cabildo" not in cl:
             return pid
         pid = _ppid(pid)
     return 0

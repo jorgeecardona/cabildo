@@ -1,4 +1,4 @@
-# backchat CI/CD -- test, then on the default branch publish to PyPI via OIDC
+# cabildo CI/CD -- test, then on the default branch publish to PyPI via OIDC
 # Trusted Publishing when pyproject's version isn't on PyPI yet (no stored API
 # token). Same publishing mechanism as pytest-parallex and musil; plain uv
 # instead of moon/proto because this repo has no task graph (yet).
@@ -26,7 +26,7 @@ ci:
       aud: pypi
   environment:
     name: pypi
-    url: https://pypi.org/project/backchat/
+    url: https://pypi.org/project/cabildo/
   before_script:
     # slim image is bare; the land() tests drive real git against a bare remote.
     - apt-get update && apt-get install -y --no-install-recommends git ca-certificates

@@ -15,17 +15,17 @@ if uv run python - "$V" <<'PY'
 import json, sys, urllib.request, urllib.error
 version = sys.argv[1]
 try:
-    data = json.load(urllib.request.urlopen("https://pypi.org/pypi/backchat/json"))
+    data = json.load(urllib.request.urlopen("https://pypi.org/pypi/cabildo/json"))
     sys.exit(0 if version in data["releases"] else 1)
 except Exception:
     sys.exit(1)
 PY
 then
-    echo "release: backchat $V already on PyPI -- nothing to do"
+    echo "release: cabildo $V already on PyPI -- nothing to do"
     exit 0
 fi
 
-echo "release: publishing backchat $V to PyPI"
+echo "release: publishing cabildo $V to PyPI"
 rm -rf dist
 uv build --out-dir dist
 sh scripts/pypi-publish

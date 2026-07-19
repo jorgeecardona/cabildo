@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 
-from backchat.hooks._common import emit_context, read_input
+from cabildo.hooks._common import emit_context, read_input
 
 
 def main() -> None:
@@ -17,9 +17,9 @@ def main() -> None:
         return
     cwd = data.get("cwd") or os.getcwd()
 
-    from backchat import store
-    from backchat.context import git_project, resolve_claude_pid
-    from backchat import notify
+    from cabildo import store
+    from cabildo.context import git_project, resolve_claude_pid
+    from cabildo import notify
 
     root, name = git_project(cwd)
     pid = resolve_claude_pid()
@@ -29,7 +29,7 @@ def main() -> None:
         # SessionStart was missed (e.g. hook added mid-session).
         store.register_session(
             conn, session_id, cwd=cwd, project=root, project_name=name, claude_pid=pid,
-            tag=os.environ.get("BACKCHAT_TAG"),
+            tag=os.environ.get("CABILDO_TAG"),
         )
         line = notify.unread_line(conn, session_id)
     finally:

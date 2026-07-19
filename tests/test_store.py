@@ -3,7 +3,7 @@ read semantics, DMs, and the PID rendezvous lookup."""
 
 from __future__ import annotations
 
-from backchat import store
+from cabildo import store
 from tests.conftest import make_session
 
 

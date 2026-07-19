@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import pytest
 
-from backchat import mcp_server as srv
-from backchat import store
+from cabildo import mcp_server as srv
+from cabildo import store
 
 
 @pytest.fixture()

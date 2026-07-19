@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 
-from backchat.hooks._common import read_input
+from cabildo.hooks._common import read_input
 
 
 def main() -> None:
@@ -27,8 +27,8 @@ def main() -> None:
     if data.get("stop_hook_active"):
         return
 
-    from backchat import store
-    from backchat import notify
+    from cabildo import store
+    from cabildo import notify
 
     conn = store.connect()
     try:

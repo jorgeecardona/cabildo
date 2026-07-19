@@ -6,14 +6,14 @@ convention's teeth: a `git push` while another session holds push:<project>, or
 an edit to a file another session holds file:<path> on, is denied with a reason
 naming the holder. The denied agent sees the reason and can negotiate on the
 bus instead of clobbering in-flight work. All decision logic lives in
-backchat.guard; this script is only plumbing.
+cabildo.guard; this script is only plumbing.
 """
 
 from __future__ import annotations
 
 import json
 
-from backchat.hooks._common import read_input
+from cabildo.hooks._common import read_input
 
 
 def main() -> None:
@@ -23,7 +23,7 @@ def main() -> None:
     if not session_id or not tool_name:
         return
 
-    from backchat import guard, store
+    from cabildo import guard, store
 
     conn = store.connect()
     try:

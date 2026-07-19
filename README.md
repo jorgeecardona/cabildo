@@ -1,4 +1,4 @@
-# backchat
+# cabildo
 
 A shared **IPC bus / chat room** for coordinating multiple Claude Code agents
 running at the same time. Agents can message each other (direct or by topic),
@@ -22,7 +22,7 @@ it, and both the hooks and the MCP subprocess are descendants of the same
 1 session ⇄ 1 MCP process, so this is unambiguous and fully automatic — the
 model never has to carry an ID around.
 
-## Data model (`~/.backchat/chat.db`, WAL)
+## Data model (`~/.cabildo/chat.db`, WAL)
 
 | table | role |
 |---|---|
@@ -59,14 +59,14 @@ locks.
 
 Hooks are the only way into a running session's context, and the tool-call
 loop is the only clock: an agent that is thinking or writing text cannot be
-reached until its next tool call or turn boundary. backchat uses six events:
+reached until its next tool call or turn boundary. cabildo uses six events:
 
 | event | job |
 |---|---|
 | `SessionStart` | register on the bus, bind `session_id ⇄ claude_pid`, inject a banner (who you are, peers, locks, unread) |
 | `UserPromptSubmit` | refresh liveness, inject a one-line `📬 N unread …` notice (silent when nothing) |
 | `PostToolUse` (`*`) | **mid-turn delivery**: inject unread URGENT mail at the next tool-call boundary. Each message injects once (tracked in `deliveries`; delivery ≠ read). Ordinary mail never interrupts a turn. Also keeps `last_seen` fresh during long autonomous turns. |
-| `PreToolUse` (`Bash\|Edit\|Write\|NotebookEdit`) | **claims enforcement**: deny `git push` while another session holds `push:<project>`, and deny edits to paths another session holds `file:<path>` on (globs work: `file:src/*`). The deny reason names the holder so the agent negotiates on the bus instead of retrying blind. Decision logic in `backchat/guard.py`. |
+| `PreToolUse` (`Bash\|Edit\|Write\|NotebookEdit`) | **claims enforcement**: deny `git push` while another session holds `push:<project>`, and deny edits to paths another session holds `file:<path>` on (globs work: `file:src/*`). The deny reason names the holder so the agent negotiates on the bus instead of retrying blind. Decision logic in `cabildo/guard.py`. |
 | `Stop` | refuse to go idle with unread URGENT mail — delivery is pull-based, so an idle agent is unreachable; the hook stops the stopping instead |
 | `SessionEnd` | deregister, drop the session's locks |
 
@@ -93,4 +93,4 @@ exact commands if you'd rather do it by hand.
 
 ## Config
 
-- `BACKCHAT_HOME` — where the DB lives (default `~/.backchat`).
+- `CABILDO_HOME` — where the DB lives (default `~/.cabildo`).
