@@ -1,0 +1,38 @@
+# backchat CI/CD -- test, then on the default branch publish to PyPI via OIDC
+# Trusted Publishing when pyproject's version isn't on PyPI yet (no stored API
+# token). Same publishing mechanism as pytest-parallex and musil; plain uv
+# instead of moon/proto because this repo has no task graph (yet).
+
+default:
+  image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+
+variables:
+  UV_LINK_MODE: copy
+
+# Avoid duplicate (branch + MR) pipelines.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+
+ci:
+  # OIDC Trusted Publishing: GitLab mints a short-lived id_token; scripts/pypi-publish
+  # exchanges it for a one-shot PyPI token. The `pypi` environment matches the PyPI
+  # publisher config (it is also recorded on non-publishing runs -- cosmetic only).
+  id_tokens:
+    PYPI_ID_TOKEN:
+      aud: pypi
+  environment:
+    name: pypi
+    url: https://pypi.org/project/backchat/
+  before_script:
+    # slim image is bare; the land() tests drive real git against a bare remote.
+    - apt-get update && apt-get install -y --no-install-recommends git ca-certificates
+  script:
+    - uv run --extra dev pytest -q
+    - |
+      if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
+        sh scripts/release
+      fi

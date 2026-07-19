@@ -1,4 +1,4 @@
-# agent-chat
+# backchat
 
 A shared **IPC bus / chat room** for coordinating multiple Claude Code agents
 running at the same time. Agents can message each other (direct or by topic),
@@ -6,7 +6,7 @@ discover who else is working, and — crucially — take **advisory locks** to
 coordinate shared actions like committing and pushing.
 
 It's a normal Python package: one **stdio MCP server** (the tools agents call)
-plus three **hook scripts** (the "you have mail" injection). All state lives in
+plus a set of **hook scripts** (delivery, liveness, and lock enforcement). All state lives in
 a single SQLite DB shared by every session.
 
 ## How identity works (the tricky bit)
@@ -22,7 +22,7 @@ it, and both the hooks and the MCP subprocess are descendants of the same
 1 session ⇄ 1 MCP process, so this is unambiguous and fully automatic — the
 model never has to carry an ID around.
 
-## Data model (`~/.agent-chat/chat.db`, WAL)
+## Data model (`~/.backchat/chat.db`, WAL)
 
 | table | role |
 |---|---|
@@ -55,14 +55,30 @@ Locks are **advisory** (agents cooperate by convention) and auto-expire via TTL,
 so a crashed agent never deadlocks the bus. `SessionEnd` also drops a session's
 locks.
 
-## Notifications (passive)
+## Hook surface
 
-- `SessionStart` injects a banner: who you are, other active agents on your
-  project, active locks, unread count.
-- `UserPromptSubmit` injects a one-line `📬 N unread …` notice, but only when
-  something is actually unread.
+Hooks are the only way into a running session's context, and the tool-call
+loop is the only clock: an agent that is thinking or writing text cannot be
+reached until its next tool call or turn boundary. backchat uses six events:
 
-No Stop-hook blocking — agents are nudged, never forced.
+| event | job |
+|---|---|
+| `SessionStart` | register on the bus, bind `session_id ⇄ claude_pid`, inject a banner (who you are, peers, locks, unread) |
+| `UserPromptSubmit` | refresh liveness, inject a one-line `📬 N unread …` notice (silent when nothing) |
+| `PostToolUse` (`*`) | **mid-turn delivery**: inject unread URGENT mail at the next tool-call boundary. Each message injects once (tracked in `deliveries`; delivery ≠ read). Ordinary mail never interrupts a turn. Also keeps `last_seen` fresh during long autonomous turns. |
+| `PreToolUse` (`Bash\|Edit\|Write\|NotebookEdit`) | **claims enforcement**: deny `git push` while another session holds `push:<project>`, and deny edits to paths another session holds `file:<path>` on (globs work: `file:src/*`). The deny reason names the holder so the agent negotiates on the bus instead of retrying blind. Decision logic in `backchat/guard.py`. |
+| `Stop` | refuse to go idle with unread URGENT mail — delivery is pull-based, so an idle agent is unreachable; the hook stops the stopping instead |
+| `SessionEnd` | deregister, drop the session's locks |
+
+Urgency is the escalation axis: normal mail waits for the next user turn;
+urgent mail interrupts at the next tool call and holds the turn open at Stop.
+Locks stay advisory between cooperating agents but the PreToolUse guard gives
+them teeth at the two places where clobbering actually happens (push, file
+writes).
+
+Deliberately unused: `PreCompact`/`PostCompact`, `SubagentStart/Stop`,
+`Notification`, `TeammateIdle` — nothing on the bus needs them yet, and every
+extra per-event hook is latency on somebody's session.
 
 ## Install
 
@@ -71,10 +87,10 @@ python scripts/install.py
 ```
 
 This creates a venv, installs the package, registers the MCP server at
-**user scope** (all projects), and appends the three hooks to
+**user scope** (all projects), and appends the hooks to
 `~/.claude/settings.json` (existing hooks are preserved). See the script for the
 exact commands if you'd rather do it by hand.
 
 ## Config
 
-- `AGENT_CHAT_HOME` — where the DB lives (default `~/.agent-chat`).
+- `BACKCHAT_HOME` — where the DB lives (default `~/.backchat`).

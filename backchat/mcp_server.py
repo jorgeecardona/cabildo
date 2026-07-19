@@ -1,9 +1,9 @@
-"""The agent-chat MCP server (stdio).
+"""The backchat MCP server (stdio).
 
 One instance runs per Claude Code session. It never receives the session_id from
 Claude Code, so it resolves its identity via the shared-PID rendezvous: find the
 owning `claude` process, then look up the session_id the SessionStart hook bound
-to that PID. Everything else is a thin wrapper over agent_chat.store.
+to that PID. Everything else is a thin wrapper over backchat.store.
 """
 
 from __future__ import annotations
@@ -14,18 +14,33 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from . import store
+from .actions import ACTIONS
 from .context import git_project, resolve_claude_pid
 
-mcp = FastMCP("agent-chat")
+mcp = FastMCP("backchat")
+
+# Single source of truth: the daemon's registry decides what may be requested.
+ACTION_NAMES = sorted(ACTIONS)
 
 
 # --------------------------------------------------------------------------- #
 # Identity resolution
 # --------------------------------------------------------------------------- #
 def _me(conn) -> str:
-    """Resolve *this* session's id and refresh its liveness. Falls back to a
-    PID-derived provisional id if the SessionStart hook hasn't registered us yet
-    (rare: hooks fire before the first tool call)."""
+    """Resolve *this* session's id and refresh its liveness.
+
+    Order matters. BACKCHAT_TAG is exact when present: we inherit it from the
+    same `claude` the SessionStart hook ran under, so both ends agree without
+    inferring anything. The PID rendezvous is the fallback for ordinary
+    terminal sessions, and it is a guess — for a spawned `claude -p` it found a
+    different claude entirely and split one agent across two bus identities.
+    """
+    tag = os.environ.get("BACKCHAT_TAG")
+    if tag:
+        sid = store.session_for_tag(conn, tag)
+        if sid is not None:
+            store.touch(conn, sid)
+            return sid
     pid = resolve_claude_pid()
     sid = store.session_for_pid(conn, pid)
     if sid is None:
@@ -56,7 +71,7 @@ def _project(conn, sid: str) -> str | None:
 # --------------------------------------------------------------------------- #
 @mcp.tool()
 def whoami() -> dict[str, Any]:
-    """Who am I in the agent-chat bus: my session id, handle, project, the
+    """Who am I in the backchat bus: my session id, handle, project, the
     channels I'm subscribed to, and my unread count."""
     with store.connect() as conn:
         sid = _me(conn)
@@ -191,7 +206,8 @@ def send(
 
 def _resolve_recipient(conn, to: str) -> str | None:
     """Resolve `to` to a session_id. Accepts an exact session id, a 'pid-...'
-    id, or a @handle / handle (most-recently-seen active match wins)."""
+    id, a @handle / handle, or a short session-id prefix as shown by
+    `list_agents` and message senders (most-recently-seen active match wins)."""
     to = to.lstrip("@")
     row = store.get_session(conn, to)
     if row is not None:
@@ -201,7 +217,18 @@ def _resolve_recipient(conn, to: str) -> str | None:
         "ORDER BY last_seen_at DESC LIMIT 1",
         (to,),
     ).fetchone()
-    return match["session_id"] if match else None
+    if match:
+        return match["session_id"]
+    # display_name() advertises session_id[:8], so accept that back as an address.
+    if len(to) >= 4:
+        match = conn.execute(
+            "SELECT session_id FROM sessions WHERE session_id LIKE ? AND status='active' "
+            "ORDER BY last_seen_at DESC LIMIT 1",
+            (to.replace("%", "").replace("_", "") + "%",),
+        ).fetchone()
+        if match:
+            return match["session_id"]
+    return None
 
 
 @mcp.tool()
@@ -336,6 +363,81 @@ def claims(all_projects: bool = False) -> list[dict[str, Any]]:
             }
             for r in rows
         ]
+
+
+# --------------------------------------------------------------------------- #
+# Control plane
+# --------------------------------------------------------------------------- #
+@mcp.tool()
+def request(action: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Ask the daemon to do something deterministic on your behalf. Returns
+    immediately with an intent id — this queues work, it does not run it.
+
+    The daemon executes one intent at a time, so `land` cannot race another
+    agent's `land`. That serialisation is the point: don't push yourself.
+
+    Actions:
+      land  — fetch, rebase onto the target, run the repo's gate, then push.
+              params: {"cwd": "<your worktree>", "target": "main", "remote": "origin"}
+              Requires a CLEAN tree: it lands your commits, it will not decide
+              what to commit for you. On conflict it aborts and hands it back.
+      spawn — launch a headless helper agent in its own git worktree.
+              params: {"role": "pm"|"qa"|"ux", "task": "<real instruction>",
+                       "repo": "<path>", "target": "main",
+                       "model": "haiku"|"sonnet"|"opus" (optional, default omits)}
+              You become the parent: the new agent is told who spawned it and
+              will DM you its outcome. The daemon enforces a fleet cap, a
+              spawn-depth limit, and the usage budget — a refusal is an answer,
+              not something to retry. Prefer haiku/sonnet for grunt work; every
+              agent burns the same shared usage window.
+      ask   — put a question in front of the human as a desktop notification
+              with buttons. params: {"question": "...", "options": ["yes","no"]}
+              His answer arrives later as an urgent DM from @jorge — don't block.
+
+    Poll `intents` for the outcome, or just wait — the daemon DMs you the result
+    (urgently, if it failed).
+    """
+    with store.connect() as conn:
+        sid = _me(conn)
+        if action not in ACTION_NAMES:
+            return {"ok": False, "error": f"unknown action {action!r}; allowed: {ACTION_NAMES}"}
+        handle, project = _handle(conn, sid), _project(conn, sid)
+        # Identity is stamped here, from the resolved session — never taken from
+        # params. An agent must not be able to ask in someone else's name.
+        p = {k: v for k, v in (params or {}).items() if not k.startswith("_")}
+        p |= {"_from_session": sid, "_from_handle": handle, "_project": project}
+        iid = store.request_intent(
+            conn,
+            from_session=sid,
+            from_handle=handle,
+            project=project,
+            action=action,
+            params=p,
+        )
+        return {"ok": True, "intent_id": iid, "status": "pending",
+                "note": "queued — the daemon will DM you the result"}
+
+
+@mcp.tool()
+def intents(status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
+    """Look at the control queue: what's been asked of the daemon and how it
+    went. Optionally filter by status (pending/running/done/failed/rejected)."""
+    with store.connect() as conn:
+        _me(conn)
+        out = []
+        for i in store.list_intents(conn, status=status, limit=limit):
+            r = i.get("result") or {}
+            out.append({
+                "id": i["id"],
+                "action": i["action"],
+                "status": i["status"],
+                "by": i["from_handle"] or i["from_session"][:8],
+                "params": i["params"],
+                "reason": r.get("reason"),
+                "landed": r.get("landed"),
+                "gate": r.get("gate"),
+            })
+        return out
 
 
 def main() -> None:

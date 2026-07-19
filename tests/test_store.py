@@ -3,15 +3,23 @@ read semantics, DMs, and the PID rendezvous lookup."""
 
 from __future__ import annotations
 
-from agent_chat import store
+from backchat import store
 from tests.conftest import make_session
 
 
 def test_register_creates_default_subscriptions(conn):
     make_session(conn, "s1", project_name="alpha")
     subs = set(store.subscriptions_of(conn, "s1"))
-    assert store.DEFAULT_TOPIC in subs
-    assert store.project_topic("alpha") in subs
+    # Isolation by default: an agent's only default home is its own project
+    # channel. #general exists but is opt-in via join_topic.
+    assert subs == {store.project_topic("alpha")}
+    assert store.DEFAULT_TOPIC in {t["name"] for t in store.list_topics(conn)}
+
+
+def test_general_is_opt_in(conn):
+    make_session(conn, "s1", project_name="alpha")
+    store.subscribe(conn, "s1", store.DEFAULT_TOPIC)
+    assert store.DEFAULT_TOPIC in set(store.subscriptions_of(conn, "s1"))
 
 
 def test_pid_rendezvous_lookup(conn):

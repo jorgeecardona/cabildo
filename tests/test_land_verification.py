@@ -17,7 +17,7 @@ import subprocess
 
 import pytest
 
-from agent_chat import actions
+from backchat import actions
 
 ENV_ID = {
     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@x",
@@ -38,9 +38,13 @@ def sh(cmd, cwd, env=None):
 def on_remote(origin, sha, branch="main") -> bool:
     """Ground truth, asked of the remote itself: is sha on the branch at all —
     tip or not? This is the question land() is really answering."""
+    # --git-dir, not cwd: environments that set safe.bareRepository=explicit
+    # (Claude Code injects it via GIT_CONFIG_*) refuse git run from inside a
+    # bare repo unless the git dir is named explicitly.
     return subprocess.run(
-        ["git", "merge-base", "--is-ancestor", sha, f"refs/heads/{branch}"],
-        cwd=str(origin), capture_output=True,
+        ["git", "--git-dir", str(origin), "merge-base", "--is-ancestor",
+         sha, f"refs/heads/{branch}"],
+        capture_output=True,
     ).returncode == 0
 
 

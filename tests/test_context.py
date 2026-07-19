@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agent_chat.context import git_project
+from backchat.context import git_project
 
 
 def test_git_project_finds_repo_root(tmp_path):

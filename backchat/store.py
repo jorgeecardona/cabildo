@@ -1,6 +1,6 @@
-"""SQLite-backed shared store for the agent-chat IPC bus.
+"""SQLite-backed shared store for the backchat IPC bus.
 
-One DB file (default ~/.agent-chat/chat.db) is shared by every Claude Code
+One DB file (default ~/.backchat/chat.db) is shared by every Claude Code
 session's MCP subprocess *and* by the hook scripts. WAL mode + a busy timeout
 keep concurrent readers/writers from tripping over each other at this volume.
 
@@ -10,6 +10,7 @@ resolved paths. `time.time()` floats are used for all timestamps.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
@@ -21,7 +22,16 @@ from typing import Any, Iterable
 # Paths / config
 # --------------------------------------------------------------------------- #
 def home() -> Path:
-    return Path(os.environ.get("AGENT_CHAT_HOME", os.path.expanduser("~/.agent-chat")))
+    env = os.environ.get("BACKCHAT_HOME") or os.environ.get("AGENT_CHAT_HOME")
+    if env:
+        return Path(env)
+    p = Path(os.path.expanduser("~/.backchat"))
+    legacy = Path(os.path.expanduser("~/.agent-chat"))
+    # Pre-rename bus: keep using it until the installer moves it, so history
+    # and live sessions don't split across two databases.
+    if not p.exists() and legacy.exists():
+        return legacy
+    return p
 
 
 def db_path() -> Path:
@@ -32,6 +42,11 @@ DEFAULT_TOPIC = "general"
 # A session is considered "active" if seen within this many seconds.
 ACTIVE_WINDOW = 30 * 60
 
+# The human's identity on the bus: a stable pseudo-session, so agents can address
+# him exactly like they address each other.
+HUMAN_SESSION = "human:jorge"
+HUMAN_HANDLE = "jorge"
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -41,12 +56,20 @@ CREATE TABLE IF NOT EXISTS sessions (
     project       TEXT,
     project_name  TEXT,
     claude_pid    INTEGER,
+    -- Set for spawned agents via BACKCHAT_TAG in the environment. The PID
+    -- rendezvous guesses; a tag is told. Both the SessionStart hook and the MCP
+    -- server inherit the same env from the same `claude`, so they agree by
+    -- construction instead of by inference.
+    tag           TEXT,
     status        TEXT NOT NULL DEFAULT 'active',   -- active | ended
     created_at    REAL NOT NULL,
     last_seen_at  REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_pid ON sessions(claude_pid);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
+-- idx_sessions_tag is created in _migrate(), not here: on an existing database
+-- the CREATE TABLE above is a no-op, so indexing `tag` from this script throws
+-- "no such column" before the migration has a chance to add it.
 
 CREATE TABLE IF NOT EXISTS topics (
     name        TEXT PRIMARY KEY,
@@ -83,6 +106,17 @@ CREATE TABLE IF NOT EXISTS reads (
     PRIMARY KEY (message_id, session_id)
 );
 
+-- Mid-turn delivery receipts: messages a hook already surfaced into a session's
+-- context. Delivery is NOT read — the agent still has to `read` them; this
+-- table only stops the PostToolUse hook re-injecting the same message on every
+-- subsequent tool call.
+CREATE TABLE IF NOT EXISTS deliveries (
+    message_id    INTEGER NOT NULL,
+    session_id    TEXT NOT NULL,
+    delivered_at  REAL NOT NULL,
+    PRIMARY KEY (message_id, session_id)
+);
+
 -- Advisory leases: the coordination primitive (e.g. resource='push:<project>').
 CREATE TABLE IF NOT EXISTS claims (
     resource        TEXT PRIMARY KEY,
@@ -93,6 +127,53 @@ CREATE TABLE IF NOT EXISTS claims (
     acquired_at     REAL NOT NULL,
     expires_at      REAL NOT NULL
 );
+
+-- Control plane. Deliberately NOT chat: agents ask for an action by inserting a
+-- structured row, and the daemon executes it. Natural language never reaches the
+-- trust path, so the same request always means the same thing.
+CREATE TABLE IF NOT EXISTS intents (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at    REAL NOT NULL,
+    from_session  TEXT NOT NULL,
+    from_handle   TEXT,
+    project       TEXT,
+    action        TEXT NOT NULL,
+    params        TEXT NOT NULL,                   -- JSON object
+    status        TEXT NOT NULL DEFAULT 'pending', -- pending|running|done|failed|rejected
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    worker        TEXT,                            -- daemon instance that took it
+    started_at    REAL,
+    finished_at   REAL,
+    result        TEXT                             -- JSON object
+);
+CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status, id);
+
+-- Spawn ledger: one row per agent the daemon launched. This is the birth
+-- certificate — who asked (parentage), what for, and what became of it. It
+-- lives in the DB and not in daemon memory because a restarted daemon must
+-- still see the agents its predecessor launched, or every cap and depth limit
+-- resets to zero on restart. `tag` is the identity handed to the child via
+-- BACKCHAT_TAG before the child exists; `session_id` is backfilled when the
+-- child's SessionStart hook registers carrying that tag.
+CREATE TABLE IF NOT EXISTS spawns (
+    tag            TEXT PRIMARY KEY,
+    parent_session TEXT NOT NULL,
+    role           TEXT NOT NULL,
+    task           TEXT NOT NULL,
+    model          TEXT,                              -- NULL = claude's default
+    depth          INTEGER NOT NULL DEFAULT 1,        -- human/terminal parent = 0
+    pid            INTEGER,
+    worktree       TEXT,
+    branch         TEXT,
+    log            TEXT,
+    session_id     TEXT,
+    status         TEXT NOT NULL DEFAULT 'launched',  -- launched|registered|dead|ended
+    created_at     REAL NOT NULL,
+    ended_at       REAL
+);
+CREATE INDEX IF NOT EXISTS idx_spawns_parent ON spawns(parent_session);
+CREATE INDEX IF NOT EXISTS idx_spawns_session ON spawns(session_id);
+CREATE INDEX IF NOT EXISTS idx_spawns_status ON spawns(status);
 """
 
 
@@ -108,7 +189,25 @@ def connect() -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns to tables that already exist.
+
+    CREATE TABLE IF NOT EXISTS is a no-op against a live database, so a new
+    column in SCHEMA silently never appears on anyone's actual bus — the schema
+    would claim a shape the file doesn't have. Additive only; nothing here drops
+    or rewrites data.
+    """
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+    if "tag" not in have:
+        conn.execute("ALTER TABLE sessions ADD COLUMN tag TEXT")
+    # Unconditional: the column now exists either way (fresh via SCHEMA, old via
+    # the ALTER above), and this is the only place it is safe to index it.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_tag ON sessions(tag)")
+    conn.commit()
 
 
 def _now() -> float:
@@ -152,6 +251,7 @@ def register_session(
     project: str | None = None,
     project_name: str | None = None,
     claude_pid: int | None = None,
+    tag: str | None = None,
 ) -> None:
     """Idempotent upsert of a session + its default subscriptions. Called from
     the SessionStart hook (authoritative session_id) and, defensively, from the
@@ -163,20 +263,31 @@ def register_session(
     if row is None:
         conn.execute(
             "INSERT INTO sessions(session_id, cwd, project, project_name, claude_pid, "
-            "status, created_at, last_seen_at) VALUES (?,?,?,?,?, 'active', ?, ?)",
-            (session_id, cwd, project, project_name, claude_pid, now, now),
+            "tag, status, created_at, last_seen_at) VALUES (?,?,?,?,?,?, 'active', ?, ?)",
+            (session_id, cwd, project, project_name, claude_pid, tag, now, now),
         )
     else:
         conn.execute(
             "UPDATE sessions SET "
             "cwd=COALESCE(?,cwd), project=COALESCE(?,project), "
             "project_name=COALESCE(?,project_name), claude_pid=COALESCE(?,claude_pid), "
-            "status='active', last_seen_at=? WHERE session_id=?",
-            (cwd, project, project_name, claude_pid, now, session_id),
+            "tag=COALESCE(?,tag), status='active', last_seen_at=? WHERE session_id=?",
+            (cwd, project, project_name, claude_pid, tag, now, session_id),
         )
-    # Default channels: global #general + the per-project channel.
-    ensure_topic(conn, DEFAULT_TOPIC)
-    subscribe(conn, session_id, DEFAULT_TOPIC)
+    if tag:
+        # Close the loop with the spawn ledger: the daemon recorded this tag
+        # before the child existed; the child's registration is what proves the
+        # launch actually became an agent.
+        conn.execute(
+            "UPDATE spawns SET session_id=?, status='registered' "
+            "WHERE tag=? AND session_id IS NULL",
+            (session_id, tag),
+        )
+    # An agent's default home is its OWN project channel — nothing else. #general
+    # still exists as a fleet-wide room, but it is opt-in (join_topic): a CRM
+    # agent must never receive paas chatter just by starting up. Isolation by
+    # default; broadcasting on purpose.
+    ensure_topic(conn, DEFAULT_TOPIC)  # keep the room available to join
     if project_name:
         pt = project_topic(project_name)
         ensure_topic(conn, pt, project=project, created_by=session_id)
@@ -199,6 +310,13 @@ def end_session(conn: sqlite3.Connection, session_id: str) -> None:
     )
     # Drop this session's advisory claims so nothing it held blocks others.
     conn.execute("DELETE FROM claims WHERE holder_session=?", (session_id,))
+    # A spawned agent that ends cleanly closes its ledger row, freeing its slot
+    # under the fleet cap without waiting for a PID liveness sweep.
+    conn.execute(
+        "UPDATE spawns SET status='ended', ended_at=? "
+        "WHERE session_id=? AND status IN ('launched','registered')",
+        (_now(), session_id),
+    )
     conn.commit()
 
 
@@ -214,6 +332,19 @@ def get_session(conn: sqlite3.Connection, session_id: str) -> sqlite3.Row | None
     return conn.execute(
         "SELECT * FROM sessions WHERE session_id=?", (session_id,)
     ).fetchone()
+
+
+def session_for_tag(conn: sqlite3.Connection, tag: str) -> str | None:
+    """Resolve identity from the env tag a spawned agent was born with. Exact,
+    unlike the PID walk: a spawned `claude -p` is not a terminal's descendant,
+    and the ancestor search happily finds somebody else's claude."""
+    if not tag:
+        return None
+    row = conn.execute(
+        "SELECT session_id FROM sessions WHERE tag=? ORDER BY last_seen_at DESC LIMIT 1",
+        (tag,),
+    ).fetchone()
+    return row["session_id"] if row else None
 
 
 def session_for_pid(conn: sqlite3.Connection, claude_pid: int) -> str | None:
@@ -384,6 +515,34 @@ def mark_read(
     return n
 
 
+def undelivered_urgent(
+    conn: sqlite3.Connection, session_id: str, *, limit: int = 10
+) -> list[dict[str, Any]]:
+    """Unread URGENT messages that no mid-turn hook has surfaced yet. The
+    PostToolUse hook injects these once and records them in `deliveries`."""
+    where, args = _inbox_where(session_id)
+    q = (
+        "SELECT m.*, r.read_at AS read_at FROM messages m "
+        "LEFT JOIN reads r ON r.message_id=m.id AND r.session_id=? "
+        "LEFT JOIN deliveries d ON d.message_id=m.id AND d.session_id=? "
+        f"WHERE {where} AND m.urgent=1 AND r.read_at IS NULL "
+        "AND d.delivered_at IS NULL ORDER BY m.created_at ASC LIMIT ?"
+    )
+    return [_msg_dict(r) for r in conn.execute(q, [session_id, session_id, *args, limit])]
+
+
+def mark_delivered(
+    conn: sqlite3.Connection, session_id: str, message_ids: Iterable[int]
+) -> None:
+    now = _now()
+    conn.executemany(
+        "INSERT OR IGNORE INTO deliveries(message_id, session_id, delivered_at) "
+        "VALUES (?,?,?)",
+        [(mid, session_id, now) for mid in message_ids],
+    )
+    conn.commit()
+
+
 def history(
     conn: sqlite3.Connection,
     *,
@@ -481,6 +640,184 @@ def release_claim(conn: sqlite3.Connection, *, resource: str, holder_session: st
     )
     conn.commit()
     return cur.rowcount > 0
+
+
+# --------------------------------------------------------------------------- #
+# Spawns (the lineage ledger)
+# --------------------------------------------------------------------------- #
+def record_spawn(
+    conn: sqlite3.Connection,
+    *,
+    tag: str,
+    parent_session: str,
+    role: str,
+    task: str,
+    model: str | None = None,
+    depth: int = 1,
+    pid: int | None = None,
+    worktree: str | None = None,
+    branch: str | None = None,
+    log: str | None = None,
+) -> None:
+    conn.execute(
+        "INSERT INTO spawns(tag, parent_session, role, task, model, depth, pid, "
+        "worktree, branch, log, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (tag, parent_session, role, task, model, depth, pid, worktree, branch,
+         log, _now()),
+    )
+    conn.commit()
+
+
+def set_spawn_pid(conn: sqlite3.Connection, tag: str, pid: int) -> None:
+    conn.execute("UPDATE spawns SET pid=? WHERE tag=?", (pid, tag))
+    conn.commit()
+
+
+def mark_spawn_dead(conn: sqlite3.Connection, tag: str) -> None:
+    conn.execute(
+        "UPDATE spawns SET status='dead', ended_at=? "
+        "WHERE tag=? AND status IN ('launched','registered')",
+        (_now(), tag),
+    )
+    conn.commit()
+
+
+def spawn_depth_of(conn: sqlite3.Connection, session_id: str | None) -> int:
+    """How deep in the spawn tree this session sits. 0 for anything that was
+    not spawned (a human terminal session, the daemon, @jorge). Read from the
+    ledger, never from a caller's claim: an agent must not be able to present
+    itself shallower than it is."""
+    if not session_id:
+        return 0
+    row = conn.execute(
+        "SELECT depth FROM spawns WHERE session_id=? ORDER BY created_at DESC LIMIT 1",
+        (session_id,),
+    ).fetchone()
+    return int(row["depth"]) if row else 0
+
+
+def live_spawns(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Rows that claim to be running. Claim only — callers who need the truth
+    must check the PID (see actions._reconcile_live)."""
+    return conn.execute(
+        "SELECT * FROM spawns WHERE status IN ('launched','registered') "
+        "ORDER BY created_at"
+    ).fetchall()
+
+
+def list_spawns(conn: sqlite3.Connection, *, limit: int = 30) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT * FROM spawns ORDER BY created_at DESC LIMIT ?", (limit,)
+    ).fetchall()
+    out = []
+    for r in reversed(rows):
+        d = dict(r)
+        d["parent_display"] = display_name(
+            get_session(conn, r["parent_session"]), r["parent_session"]
+        )
+        d["agent_display"] = (
+            display_name(get_session(conn, r["session_id"]), r["session_id"])
+            if r["session_id"] else None
+        )
+        out.append(d)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Intents (the control plane)
+# --------------------------------------------------------------------------- #
+def request_intent(
+    conn: sqlite3.Connection,
+    *,
+    from_session: str,
+    from_handle: str | None,
+    project: str | None,
+    action: str,
+    params: dict[str, Any],
+) -> int:
+    cur = conn.execute(
+        "INSERT INTO intents(created_at, from_session, from_handle, project, action, "
+        "params) VALUES (?,?,?,?,?,?)",
+        (_now(), from_session, from_handle, project, action, json.dumps(params)),
+    )
+    conn.commit()
+    return int(cur.lastrowid or 0)
+
+
+def take_next_intent(conn: sqlite3.Connection, worker: str) -> dict[str, Any] | None:
+    """Atomically claim the oldest pending intent.
+
+    One UPDATE..RETURNING rather than SELECT-then-UPDATE: the read and the write
+    are a single statement, so two daemons can never hand the same row to two
+    workers. Landing being serialised is the entire point of this table.
+    """
+    row = conn.execute(
+        "UPDATE intents SET status='running', worker=?, started_at=?, attempts=attempts+1 "
+        "WHERE id = (SELECT id FROM intents WHERE status='pending' ORDER BY id LIMIT 1) "
+        "RETURNING *",
+        (worker, _now()),
+    ).fetchone()
+    conn.commit()
+    return intent_dict(row)
+
+
+def finish_intent(
+    conn: sqlite3.Connection,
+    intent_id: int,
+    *,
+    status: str,
+    result: dict[str, Any],
+) -> None:
+    if status not in ("done", "failed", "rejected"):
+        raise ValueError(f"bad terminal status {status!r}")
+    conn.execute(
+        "UPDATE intents SET status=?, finished_at=?, result=? WHERE id=?",
+        (status, _now(), json.dumps(result), intent_id),
+    )
+    conn.commit()
+
+
+def intent_dict(r: sqlite3.Row | None) -> dict[str, Any] | None:
+    if r is None:
+        return None
+    d = dict(r)
+    d["params"] = json.loads(d["params"]) if d["params"] else {}
+    d["result"] = json.loads(d["result"]) if d["result"] else None
+    return d
+
+
+def list_intents(
+    conn: sqlite3.Connection, *, status: str | None = None, limit: int = 30
+) -> list[dict[str, Any]]:
+    q = "SELECT * FROM intents"
+    a: list[Any] = []
+    if status:
+        q += " WHERE status=?"
+        a.append(status)
+    q += " ORDER BY id DESC LIMIT ?"
+    a.append(limit)
+    out = [intent_dict(r) for r in conn.execute(q, a)]
+    return [d for d in out if d is not None]
+
+
+def get_intent(conn: sqlite3.Connection, intent_id: int) -> dict[str, Any] | None:
+    return intent_dict(
+        conn.execute("SELECT * FROM intents WHERE id=?", (intent_id,)).fetchone()
+    )
+
+
+def reap_stale_intents(conn: sqlite3.Connection, older_than: float) -> int:
+    """A daemon killed mid-action leaves rows stuck in 'running' forever. Fail
+    them loudly rather than leaving a queue that silently never drains."""
+    cutoff = _now() - older_than
+    cur = conn.execute(
+        "UPDATE intents SET status='failed', finished_at=?, "
+        "result=json_object('error', 'daemon died while running this intent') "
+        "WHERE status='running' AND started_at < ?",
+        (_now(), cutoff),
+    )
+    conn.commit()
+    return cur.rowcount
 
 
 def list_claims(

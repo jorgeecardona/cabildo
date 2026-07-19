@@ -6,9 +6,8 @@ the passive "you have mail" delivery that runs on every user turn."""
 from __future__ import annotations
 
 import os
-import sys
 
-from _common import emit_context, read_input  # noqa: E402
+from backchat.hooks._common import emit_context, read_input
 
 
 def main() -> None:
@@ -18,9 +17,9 @@ def main() -> None:
         return
     cwd = data.get("cwd") or os.getcwd()
 
-    from agent_chat import store
-    from agent_chat.context import git_project, resolve_claude_pid
-    from agent_chat import notify
+    from backchat import store
+    from backchat.context import git_project, resolve_claude_pid
+    from backchat import notify
 
     root, name = git_project(cwd)
     pid = resolve_claude_pid()
@@ -29,16 +28,11 @@ def main() -> None:
         # Idempotent: keeps last_seen fresh and re-binds pid->session_id in case
         # SessionStart was missed (e.g. hook added mid-session).
         store.register_session(
-            conn, session_id, cwd=cwd, project=root, project_name=name, claude_pid=pid
+            conn, session_id, cwd=cwd, project=root, project_name=name, claude_pid=pid,
+            tag=os.environ.get("BACKCHAT_TAG"),
         )
         line = notify.unread_line(conn, session_id)
     finally:
         conn.close()
     emit_context("UserPromptSubmit", line)
 
-
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(f"[agent-chat prompt_submit hook error: {e}]", file=sys.stderr)

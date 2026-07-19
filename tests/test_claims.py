@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_chat import store
+from backchat import store
 from tests.conftest import make_session
 
 

@@ -23,10 +23,54 @@ def unread_line(conn: sqlite3.Connection, session_id: str) -> str | None:
     detail = " · ".join(parts) if parts else ""
     urgent = " ⚠ URGENT" if s["urgent"] else ""
     return (
-        f"📬 agent-chat: {s['count']} unread{urgent}"
+        f"📬 backchat: {s['count']} unread{urgent}"
         + (f" — {detail}" if detail else "")
         + ". Use `inbox` to read, then `read` to mark them."
     )
+
+
+def midturn_urgent_text(conn: sqlite3.Connection, session_id: str) -> str | None:
+    """Mid-turn (PostToolUse) delivery of URGENT mail. Injects each message
+    exactly once — surfaced ids are recorded as delivered so the next tool call
+    stays silent. Ordinary mail never interrupts a turn; it waits for the
+    UserPromptSubmit notice."""
+    msgs = store.undelivered_urgent(conn, session_id)
+    if not msgs:
+        return None
+    lines = [f"⚠ backchat: {len(msgs)} URGENT message(s) just arrived:"]
+    for m in msgs:
+        dest = "DM" if m["to_session"] else f"#{m['topic']}"
+        preview = " ".join(m["body"].split())[:200]
+        lines.append(f"  · {m['from_display']} → {dest} (id {m['id']}): {preview}")
+    lines.append(
+        "If this affects what you are doing, act on it now (reply via `send`); "
+        "use `inbox` for full text and `read` to mark them."
+    )
+    store.mark_delivered(conn, session_id, [m["id"] for m in msgs])
+    return "\n".join(lines)
+
+
+def urgent_block_reason(conn: sqlite3.Connection, session_id: str) -> str | None:
+    """Reason string for the Stop hook to refuse an idle-out. None unless there
+    is unread *urgent* mail — ordinary messages must never hold a turn open."""
+    urgent = [m for m in store.inbox(conn, session_id, unread_only=True, limit=20)
+              if m["urgent"]]
+    if not urgent:
+        return None
+    lines = [
+        f"⚠ You have {len(urgent)} unread URGENT backchat message(s). Delivery is "
+        "pull-based, so going idle now means nobody sees your answer:"
+    ]
+    for m in urgent[:5]:
+        preview = " ".join(m["body"].split())[:160]
+        dest = "DM" if m["to_session"] else f"#{m['topic']}"
+        lines.append(f"  · {m['from_display']} → {dest} (id {m['id']}): {preview}…")
+    lines.append(
+        "Call `inbox` to read them in full, act or reply via `send` if they need "
+        "an answer, then `read` to mark them. Marking them read is what lets this "
+        "turn end — otherwise you will be stopped again next turn."
+    )
+    return "\n".join(lines)
 
 
 def session_banner(conn: sqlite3.Connection, session_id: str) -> str:
@@ -37,7 +81,7 @@ def session_banner(conn: sqlite3.Connection, session_id: str) -> str:
     project = me["project"] if me else None
     project_name = me["project_name"] if me else None
 
-    lines = [f"🔌 agent-chat online — you are {name} (session {session_id[:8]})."]
+    lines = [f"🔌 backchat online — you are {name} (session {session_id[:8]})."]
     if project_name:
         lines.append(f"Project: {project_name} · channel #{store.project_topic(project_name)}")
 
