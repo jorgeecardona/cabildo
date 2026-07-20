@@ -7,3 +7,5 @@ build/
 
 # conversation logs stay local
 logs/
+.pytest_cache/
+.claude/

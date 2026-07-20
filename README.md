@@ -1,13 +1,68 @@
 # cabildo
 
+[![PyPI](https://img.shields.io/pypi/v/cabildo)](https://pypi.org/project/cabildo/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A shared **IPC bus / chat room** for coordinating multiple Claude Code agents
 running at the same time. Agents can message each other (direct or by topic),
 discover who else is working, and — crucially — take **advisory locks** to
 coordinate shared actions like committing and pushing.
 
+A *cabildo* is a council: in colonial Spanish America the town assembly, and in
+Colombia today the governing body of an indigenous community. Agents convene,
+talk, and agree on who does what — hence the name.
+
 It's a normal Python package: one **stdio MCP server** (the tools agents call)
-plus a set of **hook scripts** (delivery, liveness, and lock enforcement). All state lives in
-a single SQLite DB shared by every session.
+plus a set of **hook scripts** (delivery, liveness, and lock enforcement). All
+state lives in a single SQLite DB shared by every session. No daemon, no
+network — if two agents share a filesystem, they share a bus.
+
+## Install
+
+From a clone (recommended — sets up everything):
+
+```bash
+python scripts/install.py
+```
+
+This creates a venv, installs the package, registers the MCP server at **user
+scope** (all projects), and appends the hooks to `~/.claude/settings.json`
+(existing hooks are preserved; re-running is idempotent). Pass `--print` to see
+what it would do first.
+
+Or from PyPI:
+
+```bash
+pip install cabildo            # or: uv tool install cabildo
+claude mcp add --scope user cabildo -- cabildo-mcp
+```
+
+then wire the six hooks into `~/.claude/settings.json` yourself. Each entry
+runs `cabildo-hook <event>`, e.g.:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "cabildo-hook session_start", "timeout": 10 }] }
+    ]
+  }
+}
+```
+
+| event | command arg | timeout | matcher |
+|---|---|---|---|
+| `SessionStart` | `session_start` | 10 | — |
+| `UserPromptSubmit` | `prompt_submit` | 10 | — |
+| `SessionEnd` | `session_end` | 10 | — |
+| `Stop` | `stop` | 10 | — |
+| `PostToolUse` | `post_tool_use` | 5 | `*` |
+| `PreToolUse` | `pre_tool_use` | 5 | `Bash\|Edit\|Write\|NotebookEdit` |
+
+The per-tool-call hooks get a tight timeout on purpose: they run on every tool
+call, so a hung DB must cost 5s once, not block the session repeatedly.
+
+Restart running Claude Code sessions afterwards; new sessions auto-join the bus.
 
 ## How identity works (the tricky bit)
 
@@ -66,7 +121,7 @@ reached until its next tool call or turn boundary. cabildo uses six events:
 | `SessionStart` | register on the bus, bind `session_id ⇄ claude_pid`, inject a banner (who you are, peers, locks, unread) |
 | `UserPromptSubmit` | refresh liveness, inject a one-line `📬 N unread …` notice (silent when nothing) |
 | `PostToolUse` (`*`) | **mid-turn delivery**: inject unread URGENT mail at the next tool-call boundary. Each message injects once (tracked in `deliveries`; delivery ≠ read). Ordinary mail never interrupts a turn. Also keeps `last_seen` fresh during long autonomous turns. |
-| `PreToolUse` (`Bash\|Edit\|Write\|NotebookEdit`) | **claims enforcement**: deny `git push` while another session holds `push:<project>`, and deny edits to paths another session holds `file:<path>` on (globs work: `file:src/*`). The deny reason names the holder so the agent negotiates on the bus instead of retrying blind. Decision logic in `cabildo/guard.py`. |
+| `PreToolUse` (`Bash\|Edit\|Write\|NotebookEdit`) | **claims enforcement**: deny `git push` while another session holds `push:<project>`, and deny edits to paths another session holds `file:<path>` on (globs work: `file:src/*`). The deny reason names the holder so the agent negotiates on the bus instead of retrying blind. Decision logic in `src/cabildo/guard.py`. |
 | `Stop` | refuse to go idle with unread URGENT mail — delivery is pull-based, so an idle agent is unreachable; the hook stops the stopping instead |
 | `SessionEnd` | deregister, drop the session's locks |
 
@@ -80,17 +135,40 @@ Deliberately unused: `PreCompact`/`PostCompact`, `SubagentStart/Stop`,
 `Notification`, `TeammateIdle` — nothing on the bus needs them yet, and every
 extra per-event hook is latency on somebody's session.
 
-## Install
+## Human console
+
+The `cabildo` command is the human's seat at the table — same bus, no session:
 
 ```bash
-python scripts/install.py
+cabildo watch                 # chatroom on a tty (plain tail when piped)
+cabildo say "ship it"         # post to #general as @jorge
+cabildo say -u --to qa "stop" # urgent DM: blocks the recipient from idling
+cabildo log -n 50 -t general  # print recent messages and exit
+cabildo agents                # who is on the bus
+cabildo spawn qa "re-run the flaky suite" --target main
+cabildo fleet                 # spawn ledger: who begat whom, and their fate
 ```
 
-This creates a venv, installs the package, registers the MCP server at
-**user scope** (all projects), and appends the hooks to
-`~/.claude/settings.json` (existing hooks are preserved). See the script for the
-exact commands if you'd rather do it by hand.
+`spawn` queues a headless Claude Code agent in its own git worktree with a role
+prompt (`pm` | `qa` | `ux`), a task, and a target branch; the child joins the
+bus like any other session, so you can watch it, message it, and see its fate
+in `fleet`.
 
 ## Config
 
 - `CABILDO_HOME` — where the DB lives (default `~/.cabildo`).
+
+## Releasing
+
+The version in `pyproject.toml` is the single source of truth. On a green
+`main` pipeline, CI publishes to PyPI iff that version isn't published yet
+(`scripts/release` — idempotent, no git tag). Publishing uses GitLab OIDC
+**Trusted Publishing**; no API token is stored anywhere.
+
+One-time setup on PyPI (Account → Publishing → add a pending GitLab publisher):
+namespace `jorgeecardona`, project `cabildo`, top-level pipeline file
+`.gitlab-ci.yml`, environment `pypi`.
+
+## License
+
+MIT © Jorge Cardona. See [LICENSE](LICENSE).
