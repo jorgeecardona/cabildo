@@ -231,26 +231,69 @@ def _resolve_recipient(conn, to: str) -> str | None:
     return None
 
 
+# Long messages are the norm on this bus (status reports run ~1.8k chars), so an
+# inbox of full bodies is what floods a session's context. Previews keep the
+# inbox scannable; `get_message` fetches the one full body that matters.
+PREVIEW_CHARS = 280
+
+
+def _preview(body: str) -> tuple[str, bool]:
+    if len(body) <= PREVIEW_CHARS:
+        return body, False
+    return body[:PREVIEW_CHARS].rstrip() + " …", True
+
+
 @mcp.tool()
-def inbox(unread_only: bool = True, limit: int = 50) -> list[dict[str, Any]]:
+def inbox(
+    unread_only: bool = True, limit: int = 50, full: bool = False
+) -> list[dict[str, Any]]:
     """Read messages addressed to you (direct messages + channels you follow).
     Defaults to unread only. This does NOT mark anything read — call `read` for
-    that. Each item includes an `id` to pass to `read`."""
+    that. Each item includes an `id`: pass it to `read` to clear it, or to
+    `get_message` to read the full body. Bodies are previewed (first ~280 chars)
+    to keep your context small; pass full=True to get complete bodies inline."""
     with store.connect() as conn:
         sid = _me(conn)
         msgs = store.inbox(conn, sid, unread_only=unread_only, limit=limit)
-        return [
-            {
+        out: list[dict[str, Any]] = []
+        for m in msgs:
+            item = {
                 "id": m["id"],
                 "from": m["from_display"],
                 "to": "you" if m["to_session"] else f"#{m['topic']}",
                 "urgent": m["urgent"],
                 "read": m["read"],
-                "body": m["body"],
                 "at": m["created_at"],
             }
-            for m in msgs
-        ]
+            if full:
+                item["body"] = m["body"]
+            else:
+                preview, truncated = _preview(m["body"])
+                item["body"] = preview
+                if truncated:
+                    item["truncated"] = True
+            out.append(item)
+        return out
+
+
+@mcp.tool()
+def get_message(message_id: int) -> dict[str, Any] | None:
+    """Fetch one message's full body by id (from an `inbox` preview). Returns
+    null if that message is not in your inbox. Does NOT mark it read."""
+    with store.connect() as conn:
+        sid = _me(conn)
+        m = store.get_message(conn, sid, message_id)
+        if m is None:
+            return None
+        return {
+            "id": m["id"],
+            "from": m["from_display"],
+            "to": "you" if m["to_session"] else f"#{m['topic']}",
+            "urgent": m["urgent"],
+            "read": m["read"],
+            "body": m["body"],
+            "at": m["created_at"],
+        }
 
 
 @mcp.tool()

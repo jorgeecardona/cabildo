@@ -24,6 +24,45 @@ def test_git_project_falls_back_to_cwd_without_repo(tmp_path):
     assert name == "loose"
 
 
+def _make_worktree(tmp_path, *, commondir=True):
+    """Build a repo + one linked worktree. Returns (repo, worktree_dir)."""
+    repo = tmp_path / "myrepo"
+    (repo / ".git").mkdir(parents=True)
+    wt_gitdir = repo / ".git" / "worktrees" / "feature"
+    wt_gitdir.mkdir(parents=True)
+    if commondir:
+        # git writes commondir relative to the worktree gitdir; "../.." -> .git
+        (wt_gitdir / "commondir").write_text("../..\n")
+    wt = tmp_path / "feature-wt"
+    wt.mkdir()
+    (wt / ".git").write_text(f"gitdir: {wt_gitdir}\n")
+    return repo, wt
+
+
+def test_worktree_maps_to_main_repo(tmp_path):
+    repo, wt = _make_worktree(tmp_path)
+    root, name = git_project(str(wt))
+    assert root == str(repo)
+    assert name == "myrepo"
+
+
+def test_cwd_inside_worktree_maps_to_main_repo(tmp_path):
+    repo, wt = _make_worktree(tmp_path)
+    sub = wt / "src" / "pkg"
+    sub.mkdir(parents=True)
+    root, name = git_project(str(sub))
+    assert root == str(repo)
+    assert name == "myrepo"
+
+
+def test_worktree_without_commondir_still_resolves(tmp_path):
+    # Unusual layout: no commondir file -> fall back to gitdir grandparent.
+    repo, wt = _make_worktree(tmp_path, commondir=False)
+    root, name = git_project(str(wt))
+    assert root == str(repo)
+    assert name == "myrepo"
+
+
 # --------------------------------------------------------------------------- #
 # Executable identification (the resolve_claude_pid matcher)
 # --------------------------------------------------------------------------- #

@@ -91,3 +91,52 @@ def test_list_agents_scoped_to_project(two_agents):
     two_agents(111)
     peers = srv.list_agents()
     assert {p["session_id"] for p in peers} == {"B"}
+
+
+def test_inbox_previews_long_bodies_and_get_message_fetches_full(two_agents):
+    two_agents(111)
+    long_body = "A" * 2000
+    srv.send(long_body, to="bob")
+
+    two_agents(222)
+    box = srv.inbox()
+    assert len(box) == 1
+    item = box[0]
+    # The inbox item is a preview, not the whole 2000-char body.
+    assert item["truncated"] is True
+    assert len(item["body"]) <= srv.PREVIEW_CHARS + 5  # + " …"
+    assert item["body"].endswith("…")
+
+    # Fetch the full body by id; it does NOT mark the message read.
+    full = srv.get_message(item["id"])
+    assert full is not None
+    assert full["body"] == long_body
+    assert srv.whoami()["unread"] == 1
+
+
+def test_inbox_short_body_is_not_truncated(two_agents):
+    two_agents(111)
+    srv.send("short one", to="bob")
+    two_agents(222)
+    item = srv.inbox()[0]
+    assert item["body"] == "short one"
+    assert "truncated" not in item
+
+
+def test_inbox_full_flag_returns_complete_bodies(two_agents):
+    two_agents(111)
+    srv.send("B" * 1000, to="bob")
+    two_agents(222)
+    item = srv.inbox(full=True)[0]
+    assert len(item["body"]) == 1000
+    assert "truncated" not in item
+
+
+def test_get_message_denies_out_of_inbox(two_agents):
+    # alice sends bob a DM; alice must not fetch her own message back.
+    two_agents(111)
+    srv.send("for bob only", to="bob")
+    two_agents(222)
+    mid = srv.inbox()[0]["id"]
+    two_agents(111)
+    assert srv.get_message(mid) is None

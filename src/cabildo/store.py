@@ -423,11 +423,17 @@ def post_message(
 
 
 def _inbox_where(session_id: str) -> tuple[str, list[Any]]:
-    """SQL predicate for 'messages addressed to me': DMs to me, or messages in
-    a topic I'm subscribed to. Never my own messages."""
+    """SQL predicate for 'messages addressed to me': DMs to me, or channel
+    messages posted to a topic I'm subscribed to *after I joined it*. Never my
+    own messages.
+
+    The joined_at bound is what keeps a fresh session from inheriting a
+    channel's entire backlog as unread: subscribing to #proj:paas with 100
+    prior messages must not hand the new agent 100 unread (~50k tokens of
+    context) the moment it starts. A DM is always yours regardless of timing."""
     return (
-        "(m.to_session=? OR (m.topic IS NOT NULL AND m.topic IN "
-        "(SELECT topic FROM subscriptions WHERE session_id=?))) "
+        "(m.to_session=? OR EXISTS (SELECT 1 FROM subscriptions s "
+        "WHERE s.session_id=? AND s.topic=m.topic AND m.created_at >= s.joined_at)) "
         "AND m.from_session!=?",
         [session_id, session_id, session_id],
     )
@@ -477,6 +483,23 @@ def unread_summary(conn: sqlite3.Connection, session_id: str) -> dict[str, Any]:
         "by_sender": by_sender,
         "by_topic": by_topic,
     }
+
+
+def get_message(
+    conn: sqlite3.Connection, session_id: str, message_id: int
+) -> dict[str, Any] | None:
+    """Full record of a single message, but only if it is actually in this
+    session's inbox. This is the companion to the previews `inbox` returns: the
+    agent reads compact previews, then fetches the full body of the one it cares
+    about by id — instead of every full body flooding context up front."""
+    where, args = _inbox_where(session_id)
+    row = conn.execute(
+        "SELECT m.*, r.read_at AS read_at FROM messages m "
+        "LEFT JOIN reads r ON r.message_id=m.id AND r.session_id=? "
+        f"WHERE {where} AND m.id=?",
+        [session_id, *args, message_id],
+    ).fetchone()
+    return _msg_dict(row) if row else None
 
 
 def mark_read(
@@ -804,6 +827,46 @@ def get_intent(conn: sqlite3.Connection, intent_id: int) -> dict[str, Any] | Non
     return intent_dict(
         conn.execute("SELECT * FROM intents WHERE id=?", (intent_id,)).fetchone()
     )
+
+
+def _pid_alive(pid: int) -> bool:
+    """True if `pid` names a live process. PermissionError means it exists but
+    isn't ours (still alive); ProcessLookupError / bad pid means gone."""
+    if not pid or pid <= 1:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def reap_dead_sessions(conn: sqlite3.Connection, is_alive=None) -> int:
+    """Mark 'active' sessions ended when their owning `claude` process is gone.
+
+    The SessionEnd hook is the clean path, but a killed terminal or crashed
+    claude never fires it, leaving zombie 'active' rows that accumulate unread
+    forever and clutter list_agents (74 rows, ~48 'active', ~5 truly running as
+    of this writing). A session whose claude_pid no longer resolves to a live
+    process is ended via end_session (which also releases its claims and closes
+    its spawn rows). Under-reaps by design: a recycled PID that now belongs to
+    some other live process just isn't reaped, which is the safe direction.
+    Sessions with no recorded pid are left to last_seen aging."""
+    alive = is_alive or _pid_alive
+    rows = conn.execute(
+        "SELECT session_id, claude_pid FROM sessions WHERE status='active'"
+    ).fetchall()
+    reaped = 0
+    for r in rows:
+        pid = r["claude_pid"]
+        if pid and not alive(pid):
+            end_session(conn, r["session_id"])
+            reaped += 1
+    return reaped
 
 
 def reap_stale_intents(conn: sqlite3.Connection, older_than: float) -> int:

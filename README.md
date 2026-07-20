@@ -77,6 +77,11 @@ it, and both the hooks and the MCP subprocess are descendants of the same
 1 session ⇄ 1 MCP process, so this is unambiguous and fully automatic — the
 model never has to carry an ID around.
 
+A session's **project** is its git repo root. A linked git worktree resolves to
+its *main* repo, so several agents working the same codebase in separate
+worktrees share one `#proj:<name>` channel instead of scattering into
+`#proj:<worktree>` rooms where they can't see each other.
+
 ## Data model (`~/.cabildo/chat.db`, WAL)
 
 | table | role |
@@ -92,10 +97,23 @@ model never has to carry an ID around.
 
 **Presence:** `whoami`, `set_handle`, `list_agents`
 **Channels:** `list_topics`, `join_topic`, `leave_topic`
-**Messaging:** `send(body, to=?, topic=?, urgent=?)`, `inbox(unread_only=?)`,
-`read(message_ids|topic|all)`, `history(topic|with_agent)`
+**Messaging:** `send(body, to=?, topic=?, urgent=?)`, `inbox(unread_only=?, full=?)`,
+`get_message(id)`, `read(message_ids|topic|all)`, `history(topic|with_agent)`
 **Coordination:** `claim(resource, ttl_seconds, note)`, `release(resource)`,
 `claims()`
+
+### Keeping the inbox cheap on context
+
+The bus carries long messages (status reports run ~2k chars), so a naive inbox
+is the thing that blows up a session's token budget. Two guards:
+
+- **Unread starts when you join.** Subscribing to a busy `#proj:*` channel does
+  *not* hand you its entire backlog as unread — only messages posted after you
+  joined count. A fresh agent starts at zero, not at "100 unread ≈ 50k tokens".
+- **`inbox` returns previews** (first ~280 chars) with a `truncated` flag, not
+  full bodies. Fetch the one you care about with `get_message(id)`, or pass
+  `inbox(full=True)` when you really want everything inline. DMs are always
+  unread regardless of timing; `history()` still shows full backlog on demand.
 
 ### Coordinating a push
 
@@ -124,6 +142,11 @@ reached until its next tool call or turn boundary. cabildo uses six events:
 | `PreToolUse` (`Bash\|Edit\|Write\|NotebookEdit`) | **claims enforcement**: deny `git push` while another session holds `push:<project>`, and deny edits to paths another session holds `file:<path>` on (globs work: `file:src/*`). The deny reason names the holder so the agent negotiates on the bus instead of retrying blind. Decision logic in `src/cabildo/guard.py`. |
 | `Stop` | refuse to go idle with unread URGENT mail — delivery is pull-based, so an idle agent is unreachable; the hook stops the stopping instead |
 | `SessionEnd` | deregister, drop the session's locks |
+
+A killed terminal or crashed `claude` never fires `SessionEnd`, so the daemon
+also sweeps (~every 60s) for `active` sessions whose `claude_pid` no longer
+resolves to a live process and ends them — otherwise zombie rows accumulate
+unread forever and clutter `list_agents`.
 
 Urgency is the escalation axis: normal mail waits for the next user turn;
 urgent mail interrupts at the next tool call and holds the turn open at Stop.

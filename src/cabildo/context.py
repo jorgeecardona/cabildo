@@ -98,13 +98,49 @@ def resolve_claude_pid(start_pid: int | None = None) -> int:
 # --------------------------------------------------------------------------- #
 # Project detection
 # --------------------------------------------------------------------------- #
+def _worktree_main_root(git_file: Path) -> Path | None:
+    """If `git_file` is a git-worktree marker (a regular `.git` *file* holding
+    `gitdir: <path>`), return the main working tree's root; else None.
+
+    A linked worktree's .git file points at <main>/.git/worktrees/<name>. That
+    dir's `commondir` resolves to the main <main>/.git, whose parent is the repo
+    root. Without this, every worktree looks like its own project and agents on
+    the same repo land in separate channels (proj:mcp-oauth instead of
+    proj:paas), unable to see each other."""
+    try:
+        text = git_file.read_text().strip()
+    except OSError:
+        return None
+    if not text.startswith("gitdir:"):
+        return None
+    gitdir = Path(text[len("gitdir:"):].strip())
+    if not gitdir.is_absolute():
+        gitdir = (git_file.parent / gitdir).resolve()
+    commondir_file = gitdir / "commondir"
+    try:
+        common = commondir_file.read_text().strip()
+        common_git = common if os.path.isabs(common) else str((gitdir / common).resolve())
+    except OSError:
+        # No commondir (unexpected layout): fall back to .git/worktrees/<n> -> .git
+        common_git = str(gitdir.parent.parent)
+    return Path(common_git).parent
+
+
 def git_project(cwd: str | None = None) -> tuple[str, str]:
     """Return (project_root, project_name) for `cwd`.
 
     project_root is the nearest ancestor containing a .git entry; if there is no
-    git repo we fall back to cwd itself. project_name is the basename."""
+    git repo we fall back to cwd itself. A linked worktree resolves to its main
+    repo so agents on the same codebase share one project. project_name is the
+    basename."""
     start = Path(cwd or os.getcwd()).resolve()
     for d in (start, *start.parents):
-        if (d / ".git").exists():
+        dot_git = d / ".git"
+        if dot_git.is_dir():
+            return str(d), d.name
+        if dot_git.is_file():
+            main_root = _worktree_main_root(dot_git)
+            if main_root is not None:
+                return str(main_root), main_root.name
             return str(d), d.name
     return str(start), start.name

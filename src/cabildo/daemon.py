@@ -26,6 +26,10 @@ from . import actions, desktop, store
 
 # A 'running' intent older than this means the daemon died holding it.
 STALE_AFTER = actions.GATE_TIMEOUT + 300
+# How often the poll loop sweeps for sessions whose owning claude died without
+# firing the SessionEnd hook. Cheap (one os.kill per active session) but not
+# worth doing on every 2s tick.
+REAP_SESSIONS_EVERY = 60.0
 
 DAEMON_SESSION = "daemon"
 DAEMON_HANDLE = "daemon"
@@ -163,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
          f"notify={'on' if notifying else 'off'} · "
          f"budget={'%.0f/%gd' % (args.budget, args.budget_days) if args.budget else 'none'}")
 
+    last_reap = 0.0
     try:
         while True:
             intent = store.take_next_intent(conn, worker)
@@ -174,6 +179,12 @@ def main(argv: list[str] | None = None) -> int:
                     last_msg = m["id"]
                     if desktop.notify_message(m):
                         _log(f"🔔 {m['from_display']}: {str(m['body'])[:60]!r}")
+            now = time.monotonic()
+            if now - last_reap >= REAP_SESSIONS_EVERY:
+                last_reap = now
+                dead = store.reap_dead_sessions(conn)
+                if dead:
+                    _log(f"reaped {dead} session(s) whose claude process is gone")
             if args.once:
                 _log("queue empty — exiting")
                 return 0
