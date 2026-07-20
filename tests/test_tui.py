@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from cabildo.tui import parse
+from cabildo.tui import parse, resolve_topic
 
 
 @pytest.mark.parametrize("line", ["/q", "/quit", "/exit"])
@@ -57,3 +57,29 @@ def test_slash_words_that_are_not_commands_still_post():
     kind, p = parse("/usr/bin/python is the wrong interpreter")
     assert kind == "send"
     assert p["body"].startswith("/usr/bin/python")
+
+
+@pytest.mark.parametrize("line", ["/p paas", "/proj paas", "/p #paas"])
+def test_p_jumps_to_project_by_bare_name(line):
+    # `/p paas` retargets to the project; resolution to proj:paas happens in
+    # submit (needs the topic list), so parse just carries the bare name.
+    assert parse(line) == ("switch", {"topic": "paas"})
+
+
+@pytest.mark.parametrize("line", ["/p", "/proj", "/p   "])
+def test_p_alone_lists_projects(line):
+    assert parse(line)[0] == "projects"
+
+
+def test_p_prefixed_speech_still_posts():
+    # "/proceed ..." is speech, not the /p command (no space right after /p).
+    assert parse("/proceed with the merge")[0] == "send"
+
+
+def test_resolve_topic_maps_bare_name_to_project_channel():
+    existing = {"proj:paas", "general", "proj:agent-chat"}
+    assert resolve_topic("paas", existing) == "proj:paas"       # bare -> project
+    assert resolve_topic("#paas", existing) == "proj:paas"      # hash stripped
+    assert resolve_topic("general", existing) == "general"      # exact match wins
+    assert resolve_topic("proj:paas", existing) == "proj:paas"  # already qualified
+    assert resolve_topic("brand-new", existing) == "brand-new"  # unknown -> verbatim

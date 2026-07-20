@@ -11,9 +11,10 @@
     └─────────────────────────────────────────────────────────────────┘
 
 Typing posts as @jorge. `@name hello` DMs an agent; `/u ...` sends urgent
-(agents with the Stop hook cannot idle past it); `/t topic` retargets where
-plain lines go. The view always shows every channel and DM on the bus — this is
-the operator's console, not a subscriber's.
+(agents with the Stop hook cannot idle past it); `/p <project>` jumps to that
+project's channel (`/p` alone lists them), and `/t topic` retargets to any
+channel. The view always shows every channel and DM on the bus — this is the
+operator's console, not a subscriber's.
 
 Stdlib only (curses), like the rest of the package.
 """
@@ -32,7 +33,19 @@ SIDEBAR_W = 24          # hidden when the terminal is too narrow to afford it
 MIN_COLS_FOR_SIDEBAR = 72
 POLL_MS = 200           # input timeout doubles as the DB poll interval
 ROSTER_EVERY = 2.0      # seconds between roster/claims refreshes
-HINT = "@name msg=DM · /u msg=urgent · /t topic=retarget · PgUp/PgDn · /q=quit"
+HINT = "@name=DM · /u=urgent · /p <project>=go · /t topic · PgUp/PgDn · /q=quit"
+
+
+def resolve_topic(name: str, existing: set[str]) -> str:
+    """Map a typed target to a real channel. A bare project name resolves to
+    its #proj:<name> channel when that exists, so `/t paas` (or `/p paas`) just
+    works instead of forcing the full `/t proj:paas`. An exact match wins; an
+    unknown name is used verbatim (creating a new channel, the old behavior)."""
+    name = name.lstrip("#")
+    if name in existing:
+        return name
+    proj = store.project_topic(name)
+    return proj if proj in existing else name
 
 
 # --------------------------------------------------------------------------- #
@@ -54,6 +67,13 @@ def parse(line: str) -> tuple[str, dict]:
         parts = line.split(None, 1)
         topic = parts[1].strip().lstrip("#") if len(parts) > 1 else ""
         return ("switch", {"topic": topic}) if topic else ("noop", {})
+    # `/p` = jump to a project channel by bare name; `/p` alone lists them.
+    if line == "/p" or line == "/proj":
+        return "projects", {}
+    if line.startswith("/p ") or line.startswith("/proj "):
+        parts = line.split(None, 1)
+        name = parts[1].strip().lstrip("#") if len(parts) > 1 else ""
+        return ("switch", {"topic": name}) if name else ("projects", {})
     urgent = False
     if line == "/u":
         return "noop", {}
@@ -239,8 +259,20 @@ class Chat:
             return False
         if kind == "noop":
             return True
+        if kind == "projects":
+            projs = sorted(
+                t["name"][len("proj:"):]
+                for t in store.list_topics(self.conn)
+                if t["name"].startswith("proj:")
+            )
+            self.notice = (
+                "projects (use /p <name>): " + ", ".join(projs)
+                if projs else "no project channels yet"
+            )
+            return True
         if kind == "switch":
-            self.dest = p["topic"]
+            existing = {t["name"] for t in store.list_topics(self.conn)}
+            self.dest = resolve_topic(p["topic"], existing)
             store.ensure_topic(self.conn, self.dest, created_by=HUMAN_SESSION)
             return True
         to_session = None
