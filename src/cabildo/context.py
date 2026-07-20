@@ -41,29 +41,55 @@ def _ppid(pid: int) -> int:
         return 0
 
 
-def _cmdline(pid: int) -> str:
+def _argv(pid: int) -> list[str]:
     try:
-        return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\x00", b" ").decode(
-            "utf-8", "replace"
-        )
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
     except OSError:
+        return []
+    return [a.decode("utf-8", "replace") for a in raw.split(b"\x00") if a]
+
+
+# Shells are opaque wrappers (`bash -c '<anything>'`); never identify a process
+# by what its -c string mentions. Interpreters are transparent: the script path
+# in argv[1:] is what the process really is.
+_SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "fish"}
+_INTERPRETERS = ("python", "node", "bun", "deno")
+
+
+def _exe_id(argv: list[str]) -> str:
+    """The token that says what program this is: argv[0], or the script path
+    for interpreter-launched processes ('node .../claude-code/cli.js'). Shell
+    wrappers return '' — a `bash -c` string quoting 'claude' is not claude."""
+    if not argv:
         return ""
+    base = os.path.basename(argv[0]).lower()
+    if base in _SHELLS:
+        return ""
+    if base.startswith(_INTERPRETERS):
+        for arg in argv[1:]:
+            if not arg.startswith("-"):
+                return arg.lower()
+        return ""
+    return argv[0].lower()
 
 
 def resolve_claude_pid(start_pid: int | None = None) -> int:
     """Walk the ancestor chain from `start_pid` (default: this process) and
     return the PID of the nearest `claude` process. 0 if none found.
 
-    We match on the command line containing 'claude' while excluding our own
-    cabildo processes, so a hook launched via `bash -c` (bash -> claude) and
-    the MCP server launched directly (python -> claude) both resolve to the same
-    session-owning claude PID."""
+    Identification uses the *executable* only (argv[0], or the script path for
+    interpreter-launched processes) — never the argument tail. A prompt like
+    `claude -p 'talk on the cabildo bus'` must not disqualify its own claude
+    (that bug bound every such agent to an outer session and misattributed
+    everything it sent), and a `bash -c '... cabildo ...'` wrapper must not
+    qualify as one. cabildo's own binaries are excluded so a hook or MCP
+    process installed under a claude-ish path never matches itself."""
     pid = _ppid(start_pid if start_pid is not None else os.getpid())
     seen: set[int] = set()
     while pid and pid > 1 and pid not in seen:
         seen.add(pid)
-        cl = _cmdline(pid).lower()
-        if "claude" in cl and "cabildo" not in cl and "cabildo" not in cl:
+        exe = _exe_id(_argv(pid))
+        if "claude" in exe and "cabildo" not in exe:
             return pid
         pid = _ppid(pid)
     return 0
