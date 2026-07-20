@@ -174,6 +174,23 @@ CREATE TABLE IF NOT EXISTS spawns (
 CREATE INDEX IF NOT EXISTS idx_spawns_parent ON spawns(parent_session);
 CREATE INDEX IF NOT EXISTS idx_spawns_session ON spawns(session_id);
 CREATE INDEX IF NOT EXISTS idx_spawns_status ON spawns(status);
+
+-- Cost telemetry: one row per hook fire. `injected_chars` is the size of the
+-- additionalContext the hook pushed into the model's context (0 when silent);
+-- `elapsed_ms` is the hook subprocess wall time. Together these answer "what
+-- does running cabildo cost me" for the passive overhead: context tokens
+-- (chars/~4) and per-tool-call latency. Written best-effort by the hook
+-- dispatcher; a failure here never breaks a session.
+CREATE TABLE IF NOT EXISTS hook_metrics (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    at             REAL NOT NULL,
+    session_id     TEXT,
+    event          TEXT NOT NULL,
+    injected_chars INTEGER NOT NULL DEFAULT 0,
+    elapsed_ms     REAL
+);
+CREATE INDEX IF NOT EXISTS idx_hook_metrics_at ON hook_metrics(at);
+CREATE INDEX IF NOT EXISTS idx_hook_metrics_session ON hook_metrics(session_id);
 """
 
 
@@ -867,6 +884,59 @@ def reap_dead_sessions(conn: sqlite3.Connection, is_alive=None) -> int:
             end_session(conn, r["session_id"])
             reaped += 1
     return reaped
+
+
+def record_hook_metric(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str | None,
+    event: str,
+    injected_chars: int,
+    elapsed_ms: float | None,
+) -> None:
+    """Append one cost-telemetry row for a hook fire. Best-effort: callers wrap
+    this so a metrics write never propagates an error into the user's session."""
+    conn.execute(
+        "INSERT INTO hook_metrics(at, session_id, event, injected_chars, elapsed_ms) "
+        "VALUES (?,?,?,?,?)",
+        (_now(), session_id, event, int(injected_chars), elapsed_ms),
+    )
+    conn.commit()
+
+
+def hook_metrics_summary(
+    conn: sqlite3.Connection, *, since: float | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    """Aggregate hook cost telemetry, optionally since a timestamp / for one
+    session. Returns overall totals plus a per-event breakdown."""
+    where = "1=1"
+    args: list[Any] = []
+    if since is not None:
+        where += " AND at >= ?"
+        args.append(since)
+    if session_id is not None:
+        where += " AND session_id = ?"
+        args.append(session_id)
+
+    per_event = [
+        dict(r) for r in conn.execute(
+            f"SELECT event, COUNT(*) AS fires, "
+            f"COALESCE(SUM(injected_chars),0) AS chars, "
+            f"COALESCE(SUM(CASE WHEN injected_chars>0 THEN 1 ELSE 0 END),0) AS injections, "
+            f"AVG(elapsed_ms) AS avg_ms, COALESCE(SUM(elapsed_ms),0) AS total_ms "
+            f"FROM hook_metrics WHERE {where} GROUP BY event ORDER BY chars DESC",
+            args,
+        )
+    ]
+    total = conn.execute(
+        f"SELECT COUNT(*) AS fires, COALESCE(SUM(injected_chars),0) AS chars, "
+        f"COALESCE(SUM(elapsed_ms),0) AS total_ms, "
+        f"COUNT(DISTINCT session_id) AS sessions, MIN(at) AS first_at, MAX(at) AS last_at "
+        f"FROM hook_metrics WHERE {where}",
+        args,
+    ).fetchone()
+    return {"total": dict(total), "per_event": per_event}
 
 
 def reap_stale_intents(conn: sqlite3.Connection, older_than: float) -> int:

@@ -17,6 +17,7 @@ is unaffected by whether any agent happens to be awake.
     python -m cabildo.cli log -n 30             # recent history, then exit
     python -m cabildo.cli spawn qa "audit the gate" -r ~/repo   # queue an agent
     python -m cabildo.cli fleet                 # spawn ledger: who begat whom
+    python -m cabildo.cli cost -d 7 --rate 3    # what running cabildo cost you
 
 Stdlib only, like the rest of the package.
 """
@@ -275,6 +276,72 @@ def cmd_spawn(args) -> int:
     return 0
 
 
+def _fmt_tokens(chars: int) -> str:
+    from .transcript import CHARS_PER_TOKEN
+    return f"{chars // CHARS_PER_TOKEN:,} tok"
+
+
+def cmd_cost(args) -> int:
+    """What running cabildo costs: context it injects (hook_metrics), the hook
+    latency per tool call, and the tokens agents spend calling its tools
+    (scanned from Claude Code transcripts)."""
+    from . import transcript
+    from .transcript import CHARS_PER_TOKEN
+
+    since = time.time() - args.days * 86400 if args.days else None
+    window = f"last {args.days}d" if args.days else "all time"
+    conn = store.connect()
+
+    # --- 1 & 2: passive overhead cabildo pushes into sessions + hook latency ---
+    m = store.hook_metrics_summary(conn, since=since, session_id=args.session)
+    t = m["total"]
+    print(f"{C.BOLD}cabildo cost · {window}"
+          f"{' · session ' + args.session[:8] if args.session else ''}{C.OFF}\n")
+
+    print(f"{C.BOLD}1. Context injected by hooks{C.OFF} "
+          f"{C.DIM}(banners, unread lines — billed every turn while in context){C.OFF}")
+    if t["fires"]:
+        print(f"   {t['chars']:,} chars ≈ {_fmt_tokens(t['chars'])} "
+              f"over {t['fires']:,} hook fires, {t['sessions']} session(s)")
+        print(f"\n{C.BOLD}2. Hook latency{C.OFF} "
+              f"{C.DIM}(a subprocess per hook fire; the recurring cost when quiet){C.OFF}")
+        print(f"   {'event':<16}{'fires':>8}{'injected':>12}{'chars':>10}{'avg ms':>9}{'total s':>10}")
+        for e in m["per_event"]:
+            print(f"   {e['event']:<16}{e['fires']:>8,}{e['injections']:>12,}"
+                  f"{e['chars']:>10,}{(e['avg_ms'] or 0):>9.1f}{(e['total_ms'] or 0)/1000:>10.1f}")
+    else:
+        print(f"   {C.DIM}no hook_metrics yet — the instrumented hooks must be "
+              f"installed & a session run before data appears.{C.OFF}")
+
+    # --- 3: tokens agents spend calling cabildo tools (from transcripts) ---
+    print(f"\n{C.BOLD}3. Agent tool traffic{C.OFF} "
+          f"{C.DIM}(cabildo tool calls + results, scanned from transcripts — approx){C.OFF}")
+    tr = transcript.scan(session_id=args.session)
+    if tr["calls"]:
+        print(f"   {tr['calls']:,} calls across {tr['files']} transcript(s): "
+              f"{tr['input_chars']:,} in + {tr['output_chars']:,} out chars "
+              f"≈ {tr['tokens_est']:,} tok")
+        print(f"\n   {'tool':<28}{'calls':>8}{'in tok':>10}{'out tok':>10}")
+        for name, e in sorted(tr["by_tool"].items(),
+                              key=lambda kv: -(kv[1]["input_chars"] + kv[1]["output_chars"])):
+            short = name.replace("mcp__cabildo__", "")
+            print(f"   {short:<28}{e['calls']:>8,}"
+                  f"{e['input_chars']//CHARS_PER_TOKEN:>10,}"
+                  f"{e['output_chars']//CHARS_PER_TOKEN:>10,}")
+    else:
+        print(f"   {C.DIM}no cabildo tool calls found in transcripts.{C.OFF}")
+
+    if args.rate:
+        total_tok = t["chars"] // CHARS_PER_TOKEN + tr["tokens_est"]
+        print(f"\n{C.BOLD}≈ €{total_tok / 1_000_000 * args.rate:.4f}{C.OFF} "
+              f"{C.DIM}at €{args.rate}/1M tok (rough; ignores prompt caching, "
+              f"which makes re-sent context much cheaper){C.OFF}")
+    else:
+        print(f"\n{C.DIM}Pass --rate <€ per 1M tokens> for a € estimate. Caveat: "
+              f"prompt caching makes re-sent context far cheaper than raw tokens.{C.OFF}")
+    return 0
+
+
 def cmd_fleet(args) -> int:
     conn = store.connect()
     rows = store.list_spawns(conn, limit=args.n)
@@ -344,6 +411,14 @@ def main(argv: list[str] | None = None) -> int:
     fl = sub.add_parser("fleet", help="spawn ledger: who begat whom, and their fate")
     fl.add_argument("-n", type=int, default=20)
     fl.set_defaults(fn=cmd_fleet)
+
+    co = sub.add_parser("cost", help="what running cabildo costs: injected context, hook latency, tool traffic")
+    co.add_argument("-d", "--days", type=float, default=0,
+                    help="only the last N days (default: all time)")
+    co.add_argument("--session", help="scope to one session id")
+    co.add_argument("--rate", type=float,
+                    help="€ per 1M tokens, for a rough € estimate")
+    co.set_defaults(fn=cmd_cost)
 
     args = p.parse_args(argv)
     return args.fn(args)

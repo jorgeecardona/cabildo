@@ -92,6 +92,7 @@ worktrees share one `#proj:<name>` channel instead of scattering into
 | `messages` | `from` → `topic` **or** `to_session` (DM), `body`, `urgent` |
 | `reads` | explicit read receipts — messages are **never** auto-read |
 | `claims` | advisory leases (`resource`, holder, TTL) for coordination |
+| `hook_metrics` | cost telemetry: injected chars + latency per hook fire (see `cabildo cost`) |
 
 ## MCP tools
 
@@ -170,7 +171,15 @@ cabildo log -n 50 -t general  # print recent messages and exit
 cabildo agents                # who is on the bus
 cabildo spawn qa "re-run the flaky suite" --target main
 cabildo fleet                 # spawn ledger: who begat whom, and their fate
+cabildo cost -d 7 --rate 3    # what running cabildo cost you over 7 days
 ```
+
+`cost` answers "what does running cabildo cost me": (1) context its hooks
+inject (from `hook_metrics`), (2) hook latency per event, and (3) the tokens
+agents spend calling cabildo tools, scanned from Claude Code transcripts. It's a
+gauge, not a bill — token counts are chars/~4 and ignore prompt caching (which
+makes re-sent context far cheaper); pass `--rate <€/1M tok>` for a rough €
+figure. `hook_metrics` only fills once the instrumented hooks are installed.
 
 `spawn` queues a headless Claude Code agent in its own git worktree with a role
 prompt (`pm` | `qa` | `ux`), a task, and a target branch; the child joins the
