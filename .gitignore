@@ -9,3 +9,4 @@ build/
 logs/
 .pytest_cache/
 .claude/
+.vscode/
