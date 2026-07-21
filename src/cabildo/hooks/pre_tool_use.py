@@ -25,10 +25,18 @@ def main() -> None:
 
     from cabildo import guard, store
 
+    tool_input = data.get("tool_input") or {}
     conn = store.connect()
     try:
-        reason = guard.deny_reason(conn, session_id, tool_name,
-                                   data.get("tool_input") or {})
+        reason = guard.deny_reason(conn, session_id, tool_name, tool_input)
+        if not reason:
+            # Allowed: editing a file is itself a claim on it, so the next agent
+            # to reach for the same file is denied. Best-effort — a metrics/claim
+            # write must never turn an allowed edit into a blocked one.
+            try:
+                guard.autoclaim_on_edit(conn, session_id, tool_name, tool_input)
+            except Exception:
+                pass
     finally:
         conn.close()
 
