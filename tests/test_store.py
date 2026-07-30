@@ -125,5 +125,37 @@ def test_display_name_prefers_handle(conn):
     assert store.display_name(row) == "@cooldev"
     store.set_handle(conn, "abcd1234ef", "")  # cleared
     row = store.get_session(conn, "abcd1234ef")
-    # falsy handle -> short id
-    assert store.display_name(row) == "abcd1234"
+    # falsy handle -> deterministic robot codename
+    from cabildo import names
+    assert store.display_name(row) == names.robot_name("abcd1234ef")
+
+
+def test_robot_name_is_deterministic_and_id_like():
+    from cabildo import names
+
+    sid = "8f801073-440e-4c02-956f-511a8704a7bc"
+    name = names.robot_name(sid)
+    # stable: same id -> same name every time
+    assert name == names.robot_name(sid)
+    # shaped like <adjective>-<noun>-<hhhhh>, tail carries the id's leading hex
+    adj, noun, tail = name.split("-")
+    assert adj in names.ADJECTIVES
+    assert noun in names.NOUNS
+    assert tail == "8f801"
+    # distinct ids generally get distinct names
+    assert names.robot_name("f6200761-0000-0000-0000-000000000000") != name
+    # empty / unknown collapses to "?"
+    assert names.robot_name("") == "?"
+    assert names.robot_name(None) == "?"
+
+
+def test_robot_name_resolves_as_address(conn):
+    from cabildo import names
+
+    sid = "8f801073-440e-4c02-956f-511a8704a7bc"
+    make_session(conn, sid)
+    name = names.robot_name(sid)
+    assert store.session_for_robot_name(conn, name) == sid
+    assert store.session_for_robot_name(conn, name.lower()) == sid  # case-insensitive
+    assert store.session_for_robot_name(conn, "@" + name) == sid    # @-prefixed
+    assert store.session_for_robot_name(conn, "NOPE-00") is None

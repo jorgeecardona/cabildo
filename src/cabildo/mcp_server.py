@@ -13,7 +13,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from . import store
+from . import names, store
 from .actions import ACTIONS
 from .context import git_project, resolve_claude_pid
 
@@ -66,6 +66,43 @@ def _project(conn, sid: str) -> str | None:
     return row["project"] if row else None
 
 
+def _project_name(conn, sid: str) -> str | None:
+    row = store.get_session(conn, sid)
+    return row["project_name"] if row else None
+
+
+def _visible_projects(conn, sid: str) -> set[str] | None:
+    """Dial A: the set of project *names* this session may see and talk to on
+    the local bus — itself plus any peers its owner explicitly linked. Projects
+    are isolated by default, so a name only appears here once linked
+    (`cabildo project <yours> --link <other>`).
+
+    Returns None when we can't determine our own project (no name, or the
+    registry is unreadable). Callers treat None as 'no restriction' and fall
+    back to pre-isolation behavior rather than hiding the whole bus from a
+    session that has no project identity.
+    """
+    name = (_project_name(conn, sid) or "").strip().lower()
+    if not name:
+        return None
+    try:
+        from . import cloud
+
+        return cloud.peers_visible(name)
+    except Exception:
+        return None
+
+
+def _proj_topic_name(topic: str | None) -> str | None:
+    """If `topic` is a per-project channel (proj:<name>), return <name> lowered,
+    else None. The proj:<name> channel is a project's private space, so it's the
+    unit Dial A gates on."""
+    t = (topic or "").lstrip("#").strip()
+    if t.startswith("proj:"):
+        return t[len("proj:") :].strip().lower()
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # Presence / identity tools
 # --------------------------------------------------------------------------- #
@@ -98,11 +135,19 @@ def set_handle(handle: str) -> dict[str, Any]:
 @mcp.tool()
 def list_agents(all_projects: bool = False) -> list[dict[str, Any]]:
     """List other active agents. By default only agents on the SAME project
-    (git repo) as you; set all_projects=True to see everyone."""
+    (git repo) as you; set all_projects=True to also see agents on projects
+    LINKED to yours. Projects are isolated on the bus, so you never see a
+    project you haven't linked (`cabildo project <yours> --link <other>`)."""
     with store.connect() as conn:
         sid = _me(conn)
+        visible = _visible_projects(conn, sid)
         project = None if all_projects else _project(conn, sid)
         rows = store.active_sessions(conn, project=project, exclude=sid)
+        if visible is not None:
+            rows = [
+                r for r in rows
+                if (r["project_name"] or "").strip().lower() in visible
+            ]
         return [
             {
                 "session_id": r["session_id"],
@@ -133,6 +178,13 @@ def join_topic(topic: str) -> dict[str, Any]:
     topic = topic.lstrip("#")
     with store.connect() as conn:
         sid = _me(conn)
+        visible = _visible_projects(conn, sid)
+        pj = _proj_topic_name(topic)
+        if visible is not None and pj is not None and pj not in visible:
+            return {"ok": False,
+                    "error": f"#{topic} is project '{pj}'s private channel, "
+                             f"not linked to yours — `cabildo project <yours> "
+                             f"--link {pj}` to allow"}
         store.ensure_topic(conn, topic, created_by=sid)
         store.subscribe(conn, sid, topic)
         conn.commit()
@@ -190,6 +242,26 @@ def send(
                         "error": "no project channel; specify `to` or `topic`"}
             topic = store.project_topic(pname)
 
+        # Dial A: projects are isolated. You may DM an agent, or post to a
+        # project channel, only for your own project or one you've linked.
+        visible = _visible_projects(conn, sid)
+        if visible is not None:
+            if to_session is not None:
+                trow = store.get_session(conn, to_session)
+                tname = ((trow["project_name"] if trow else "") or "").strip().lower()
+                if tname and tname not in visible:
+                    return {"ok": False,
+                            "error": f"'{to}' is on project '{tname}', not linked "
+                                     f"to yours — `cabildo project <yours> --link "
+                                     f"{tname}` to allow"}
+            else:
+                pj = _proj_topic_name(topic)
+                if pj is not None and pj not in visible:
+                    return {"ok": False,
+                            "error": f"#{topic} is project '{pj}'s channel, not "
+                                     f"linked to yours — `cabildo project <yours> "
+                                     f"--link {pj}` to allow"}
+
         mid = store.post_message(
             conn,
             from_session=sid,
@@ -219,7 +291,11 @@ def _resolve_recipient(conn, to: str) -> str | None:
     ).fetchone()
     if match:
         return match["session_id"]
-    # display_name() advertises session_id[:8], so accept that back as an address.
+    # display_name() advertises a robot codename (BENDER-8F) — accept it back.
+    by_name = store.session_for_robot_name(conn, to)
+    if by_name:
+        return by_name
+    # ...and still accept the raw session_id[:8] prefix it replaced.
     if len(to) >= 4:
         match = conn.execute(
             "SELECT session_id FROM sessions WHERE session_id LIKE ? AND status='active' "
@@ -327,6 +403,10 @@ def history(
     message thread with that agent."""
     with store.connect() as conn:
         sid = _me(conn)
+        visible = _visible_projects(conn, sid)
+        pj = _proj_topic_name(topic)
+        if visible is not None and pj is not None and pj not in visible:
+            return []
         between = None
         if with_agent is not None:
             other = _resolve_recipient(conn, with_agent)
@@ -474,7 +554,7 @@ def intents(status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
                 "id": i["id"],
                 "action": i["action"],
                 "status": i["status"],
-                "by": i["from_handle"] or i["from_session"][:8],
+                "by": i["from_handle"] or names.robot_name(i["from_session"]),
                 "params": i["params"],
                 "reason": r.get("reason"),
                 "landed": r.get("landed"),
