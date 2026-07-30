@@ -310,46 +310,97 @@ def _resolve_recipient(conn, to: str) -> str | None:
 # Long messages are the norm on this bus (status reports run ~1.8k chars), so an
 # inbox of full bodies is what floods a session's context. Previews keep the
 # inbox scannable; `get_message` fetches the one full body that matters.
+#
+# Per-message previews alone were not enough. Measured over two weeks, `inbox`
+# was 39% of everything cabildo costs in tokens — and the average hid the
+# problem: p50 1.7k chars, p90 4.8k, worst 43.6k in ONE call. A per-message cap
+# cannot bound that, because the cost scales with how many messages are waiting;
+# an agent that comes back to a busy channel pays the whole backlog at once. So
+# the budget is on the WHOLE response, and the previews shrink to fit it.
 PREVIEW_CHARS = 280
+MIN_PREVIEW_CHARS = 90          # below this a preview stops being informative
+INBOX_BUDGET_CHARS = 2000       # ~500 tokens for a full inbox call
+DEFAULT_INBOX_LIMIT = 15
+# id/from/to/at/urgent/truncated + JSON punctuation, per message. Budgeting only
+# the bodies would blow the ceiling by ~60% on a crowded inbox, which is the
+# number that made this worth fixing in the first place.
+ENVELOPE_CHARS = 90
 
 
-def _preview(body: str) -> tuple[str, bool]:
-    if len(body) <= PREVIEW_CHARS:
+def _preview(body: str, limit: int = PREVIEW_CHARS) -> tuple[str, bool]:
+    if len(body) <= limit:
         return body, False
-    return body[:PREVIEW_CHARS].rstrip() + " …", True
+    return body[:limit].rstrip() + " …", True
+
+
+def _preview_budget(bodies: list[str], budget: int) -> int:
+    """How many chars each preview gets: the budget split evenly, clamped.
+
+    Even split rather than proportional — a 6k-char status report is not six
+    times as urgent to skim as a 1k one, and letting one long message eat the
+    budget is exactly the failure being fixed. Short messages don't use their
+    whole share, so what they leave is handed back to the rest.
+    """
+    if not bodies:
+        return PREVIEW_CHARS
+    share = max(MIN_PREVIEW_CHARS, budget // len(bodies))
+    slack = sum(share - len(b) for b in bodies if len(b) < share)
+    long_ones = sum(1 for b in bodies if len(b) >= share)
+    if long_ones and slack > 0:
+        share += slack // long_ones
+    return min(PREVIEW_CHARS, share)
 
 
 @mcp.tool()
 def inbox(
-    unread_only: bool = True, limit: int = 50, full: bool = False
-) -> list[dict[str, Any]]:
+    unread_only: bool = True,
+    limit: int = DEFAULT_INBOX_LIMIT,
+    full: bool = False,
+    budget_chars: int = INBOX_BUDGET_CHARS,
+) -> dict[str, Any]:
     """Read messages addressed to you (direct messages + channels you follow).
     Defaults to unread only. This does NOT mark anything read — call `read` for
-    that. Each item includes an `id`: pass it to `read` to clear it, or to
-    `get_message` to read the full body. Bodies are previewed (first ~280 chars)
-    to keep your context small; pass full=True to get complete bodies inline."""
+    that.
+
+    Returns {"messages": [...], "more": N}. Each item has an `id`: pass it to
+    `read` to clear it, or to `get_message` for the full body. Bodies are
+    previewed, and the whole response is kept under `budget_chars` (~500 tokens)
+    so a busy channel can't flood your context — previews shrink when many
+    messages are waiting. `more` counts what didn't fit; call again after
+    reading. full=True returns complete bodies and ignores the budget: use it
+    when you already know the inbox is small."""
     with store.connect() as conn:
         sid = _me(conn)
+        limit = max(1, limit)
         msgs = store.inbox(conn, sid, unread_only=unread_only, limit=limit)
+        # The real remainder, not "at least one more": an agent deciding whether
+        # to drain its inbox needs the size of what it hasn't seen.
+        more = max(0, store.inbox_count(conn, sid, unread_only=unread_only) - len(msgs))
+
+        usable = max(0, budget_chars - ENVELOPE_CHARS * len(msgs))
+        share = PREVIEW_CHARS if full else _preview_budget(
+            [m["body"] or "" for m in msgs], usable)
         out: list[dict[str, Any]] = []
         for m in msgs:
             item = {
                 "id": m["id"],
                 "from": m["from_display"],
                 "to": "you" if m["to_session"] else f"#{m['topic']}",
-                "urgent": m["urgent"],
-                "read": m["read"],
                 "at": m["created_at"],
             }
+            if m["urgent"]:
+                item["urgent"] = True          # false is the norm; don't spend on it
+            if not unread_only and m["read"]:
+                item["read"] = True
             if full:
                 item["body"] = m["body"]
             else:
-                preview, truncated = _preview(m["body"])
+                preview, truncated = _preview(m["body"] or "", share)
                 item["body"] = preview
                 if truncated:
-                    item["truncated"] = True
+                    item["truncated"] = True   # get_message(id) for the rest
             out.append(item)
-        return out
+        return {"messages": out, "more": more}
 
 
 @mcp.tool()

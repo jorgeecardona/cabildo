@@ -45,16 +45,16 @@ def test_send_to_handle_and_inbox_and_read_flow(two_agents):
 
     # bob sees it unread, reads inbox (no auto-mark), then explicitly reads it
     two_agents(222)
-    box = srv.inbox()
+    box = srv.inbox()["messages"]
     assert len(box) == 1
     assert box[0]["from"] == "@alice"
-    assert box[0]["read"] is False
+    assert "read" not in box[0]          # unread_only: saying so would be noise
     mid = box[0]["id"]
 
     assert srv.whoami()["unread"] == 1
     r = srv.read(message_ids=[mid])
     assert r["marked_read"] == 1 and r["unread_remaining"] == 0
-    assert srv.inbox(unread_only=True) == []
+    assert srv.inbox(unread_only=True)["messages"] == []
 
 
 def test_send_defaults_to_project_channel(two_agents):
@@ -99,7 +99,7 @@ def test_inbox_previews_long_bodies_and_get_message_fetches_full(two_agents):
     srv.send(long_body, to="bob")
 
     two_agents(222)
-    box = srv.inbox()
+    box = srv.inbox()["messages"]
     assert len(box) == 1
     item = box[0]
     # The inbox item is a preview, not the whole 2000-char body.
@@ -118,7 +118,7 @@ def test_inbox_short_body_is_not_truncated(two_agents):
     two_agents(111)
     srv.send("short one", to="bob")
     two_agents(222)
-    item = srv.inbox()[0]
+    item = srv.inbox()["messages"][0]
     assert item["body"] == "short one"
     assert "truncated" not in item
 
@@ -127,7 +127,7 @@ def test_inbox_full_flag_returns_complete_bodies(two_agents):
     two_agents(111)
     srv.send("B" * 1000, to="bob")
     two_agents(222)
-    item = srv.inbox(full=True)[0]
+    item = srv.inbox(full=True)["messages"][0]
     assert len(item["body"]) == 1000
     assert "truncated" not in item
 
@@ -137,6 +137,94 @@ def test_get_message_denies_out_of_inbox(two_agents):
     two_agents(111)
     srv.send("for bob only", to="bob")
     two_agents(222)
-    mid = srv.inbox()[0]["id"]
+    mid = srv.inbox()["messages"][0]["id"]
     two_agents(111)
     assert srv.get_message(mid) is None
+
+
+# --------------------------------------------------------------------------- #
+# Inbox budget
+#
+# Measured over two weeks of real use, `inbox` was 39% of everything cabildo
+# costs in tokens, and the mean hid the shape: p50 1.7k chars, p90 4.8k, worst
+# 43.6k in a single call. A per-message preview cap can't bound that — the cost
+# scales with how many messages are waiting, so an agent returning to a busy
+# channel pays the whole backlog at once.
+# --------------------------------------------------------------------------- #
+def _chars(payload) -> int:
+    import json
+    return len(json.dumps(payload))
+
+
+def test_a_backlog_cannot_flood_the_context(two_agents):
+    two_agents(111)
+    for i in range(15):
+        srv.send(f"status report {i}: " + "A" * 2000, to="bob")
+
+    two_agents(222)
+    res = srv.inbox()
+    assert _chars(res) < srv.INBOX_BUDGET_CHARS * 1.6, (
+        f"one inbox call returned {_chars(res)} chars"
+    )
+    assert len(res["messages"]) == 15
+    assert all(m.get("truncated") for m in res["messages"])
+
+
+def test_previews_shrink_as_the_backlog_grows(two_agents):
+    two_agents(111)
+    srv.send("X" * 3000, to="bob")
+    two_agents(222)
+    alone = len(srv.inbox()["messages"][0]["body"])
+
+    two_agents(111)
+    for _ in range(9):
+        srv.send("X" * 3000, to="bob")
+    two_agents(222)
+    crowded = len(srv.inbox()["messages"][0]["body"])
+
+    assert alone == srv.PREVIEW_CHARS + 2      # + " …"
+    assert crowded < alone
+    assert crowded >= srv.MIN_PREVIEW_CHARS    # still worth reading
+
+
+def test_short_messages_hand_their_share_back(two_agents):
+    """A budget split evenly would starve one long message among many short
+    ones for no reason — the short ones never used their share."""
+    two_agents(111)
+    for _ in range(9):
+        srv.send("ok", to="bob")
+    srv.send("Y" * 3000, to="bob")
+
+    two_agents(222)
+    msgs = srv.inbox()["messages"]
+    longest = max(msgs, key=lambda m: len(m["body"]))
+    assert len(longest["body"]) > srv.INBOX_BUDGET_CHARS // 10
+
+
+def test_more_counts_what_did_not_fit(two_agents):
+    two_agents(111)
+    for i in range(20):
+        srv.send(f"msg {i}", to="bob")
+
+    two_agents(222)
+    res = srv.inbox(limit=5)
+    assert len(res["messages"]) == 5
+    assert res["more"] == 15, "an agent must be able to tell there's a backlog"
+    assert srv.inbox()["more"] == 20 - srv.DEFAULT_INBOX_LIMIT
+
+
+def test_more_is_zero_when_the_inbox_fits(two_agents):
+    two_agents(111)
+    srv.send("only one", to="bob")
+    two_agents(222)
+    assert srv.inbox()["more"] == 0
+
+
+def test_full_still_means_full(two_agents):
+    """The escape hatch has to actually escape — otherwise an agent that needs
+    the whole thing has no way to get it except get_message in a loop."""
+    two_agents(111)
+    srv.send("Z" * 5000, to="bob")
+    two_agents(222)
+    item = srv.inbox(full=True)["messages"][0]
+    assert len(item["body"]) == 5000

@@ -507,6 +507,22 @@ def inbox(
     return [_msg_dict(r) for r in conn.execute(q, args)]
 
 
+def inbox_count(
+    conn: sqlite3.Connection, session_id: str, *, unread_only: bool = True
+) -> int:
+    """How many messages the inbox would return with no limit. Lets a capped
+    `inbox` say how much it is holding back instead of just "there is more"."""
+    where, args = _inbox_where(session_id)
+    q = (
+        "SELECT COUNT(*) AS n FROM messages m "
+        "LEFT JOIN reads r ON r.message_id=m.id AND r.session_id=? "
+        f"WHERE {where}"
+    )
+    if unread_only:
+        q += " AND r.read_at IS NULL"
+    return int(conn.execute(q, [session_id, *args]).fetchone()["n"])
+
+
 def unread_summary(conn: sqlite3.Connection, session_id: str) -> dict[str, Any]:
     """Compact aggregate used by the notification hooks."""
     rows = inbox(conn, session_id, unread_only=True, limit=200)
