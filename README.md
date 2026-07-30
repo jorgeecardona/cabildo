@@ -129,6 +129,26 @@ Locks are **advisory** (agents cooperate by convention) and auto-expire via TTL,
 so a crashed agent never deadlocks the bus. `SessionEnd` also drops a session's
 locks.
 
+### What the daemon will and won't land
+
+`land` is a request, and the daemon judges it before acting:
+
+- **Uncommitted *tracked* changes block it.** The daemon lands commits; it never
+  stages or commits for you. Untracked files do not block — they cannot reach a
+  commit, so refusing over a scratch file is noise, and the one gate an agent
+  can't explain is the one it starts deleting files to get past. The step log
+  says how many were ignored. When the only dirty file is Claude Code's own
+  `.claude/settings.json` (it rewrites that when you accept a permission), the
+  refusal says so — otherwise the agent looks for work it never did.
+- **Stale requests are refused, not run** (`--max-intent-age`, default 2h). An
+  intent is a statement about a moment: the branch it targeted has moved, the
+  tree it described is gone, and the agent that asked is usually dead. A daemon
+  coming up at login and draining a week-old queue is not obedience. Expired
+  intents get their own terminal status (not `failed` — nothing was attempted)
+  and a non-urgent DM, so week-old junk can't buy itself a desktop popup.
+- **A push it can't verify is never reported as landed** — and a push it can't
+  *see* is never reported as failed either. See `tests/test_land_verification.py`.
+
 ## Hook surface
 
 Hooks are the only way into a running session's context, and the tool-call
@@ -172,6 +192,8 @@ cabildo agents                # who is on the bus
 cabildo spawn qa "re-run the flaky suite" --target main
 cabildo fleet                 # spawn ledger: who begat whom, and their fate
 cabildo cost -d 7 --rate 3    # what running cabildo cost you over 7 days
+cabildo add --project paas .  # put this folder on the bus (see below)
+cabildo service install       # run the daemon in the background (see below)
 ```
 
 `cost` answers "what does running cabildo cost me": (1) context its hooks
@@ -186,9 +208,80 @@ prompt (`pm` | `qa` | `ux`), a task, and a target branch; the child joins the
 bus like any other session, so you can watch it, message it, and see its fate
 in `fleet`.
 
+## Adding a folder
+
+A project is a git repo, named after its directory. That guess is wrong in two
+cases: the repo is called `paas-infra` but everyone says "paas", and one package
+of a monorepo deserves to be its own project. `cabildo add` pins the answer:
+
+```bash
+cabildo add --project paas .          # this repo IS "paas", for every session opened here
+cabildo add --exact -p api packages/api   # one folder of a monorepo, as its own project
+cabildo add --uplink content .        # pin it and set how much reaches the cloud
+cabildo add --print .                 # show what would be written, change nothing
+cabildo add --remove .                # undo both halves
+```
+
+Two things happen, and only these two:
+
+1. **the folder is pinned** in `~/.cabildo/cloud.json` (absolute, symlinks
+   resolved). Hooks, the MCP server, and the CLI all resolve a session's project
+   through that registry, so the name is consistent everywhere. Deepest
+   registered folder wins, which is what makes `--exact` work inside a repo.
+2. **`.mcp.json` is written** in the folder, registering the `cabildo` MCP
+   server at **project scope** — so any Claude Code session started there gets
+   the tools without per-project setup. Other servers already in the file are
+   left alone. The command is written as bare `cabildo-mcp` when that resolves
+   on PATH, since `.mcp.json` is a checked-in file and your `~/.venv` path means
+   nothing on a teammate's machine. The entry also carries
+   `env: {CABILDO_PROJECT: <name>}`, so a fresh clone gets the right name before
+   anyone runs `cabildo add` there.
+
+The hooks stay user-scope (`scripts/install.py`, once) — they're what makes a
+session *join*, be listed, and be held to its claims. `cabildo add` says so if
+they're missing.
+
+## Background services
+
+The daemon (intents queue + desktop notifications) and the cloud mirror want to
+outlive the terminal you started them in. `cabildo service` writes plain
+**systemd --user** units to `~/.config/systemd/user/`:
+
+```bash
+cabildo service install --allow-push --allow-spawn   # the daemon
+cabildo service install --sync                       # + mirror to the dashboard
+cabildo service install --print                      # show the units, write nothing
+cabildo service                                      # status
+cabildo service logs -f                              # journalctl for both units
+cabildo service restart --unit daemon
+cabildo service uninstall
+```
+
+User-space, not a system unit: everything these processes touch is yours — the
+bus under `~/.cabildo`, your worktrees, your `claude` credentials, your desktop
+session. Two environment details are baked into the unit because they're the
+difference between "works in my terminal" and "works as a service": your `PATH`
+(systemd's default doesn't include wherever `claude` lives) and
+`DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus` (without it `notify-send`
+autolaunches a private bus and pops notifications nobody sees).
+
+The daemon installs **dry-run** unless you pass `--allow-push` / `--allow-spawn`
+— a service you forgot you installed must not be able to push or launch agents.
+Services stop at logout unless you pass `--linger`.
+
+Every unit cabildo writes is stamped, and the installer **refuses to overwrite a
+unit file it didn't write** (it prints the existing `ExecStart` and stops).
+`cabildo-sync.service` is a name people hand-roll — often around
+`webapp/runner.py`, which does more than `cabildo sync` does. Read it, then
+either `--force` to replace it or install only the rest with
+`--unit daemon`. Status marks such a unit as *not written by cabildo*, and
+`uninstall` skips it.
+
 ## Config
 
 - `CABILDO_HOME` — where the DB lives (default `~/.cabildo`).
+- `CABILDO_PROJECT` — override the project name for a session, ahead of both the
+  pinned folder and the git guess.
 
 ## Releasing
 
