@@ -69,6 +69,12 @@ class Ctx:
     # Weighted-token ceiling for the trailing window; 0 disables the throttle.
     budget: float = 0.0
     budget_days: float = 7.0
+    # Seconds a queued intent may wait before the daemon refuses it instead of
+    # running it. A request is a snapshot of a moment: the branch it wanted to
+    # land on has moved, the agent that asked is gone, and nobody is watching the
+    # result. Draining a week-old queue on startup is how a daemon does damage
+    # while technically doing what it was told. 0 disables the ceiling.
+    max_intent_age: float = 2 * 3600.0
     log: Callable[[str], None] = lambda _m: None
 
 
@@ -100,6 +106,35 @@ def run(args: list[str], cwd: str, timeout: int = GIT_TIMEOUT) -> tuple[int, str
 
 def git(args: list[str], cwd: str, timeout: int = GIT_TIMEOUT) -> tuple[int, str]:
     return run(["git", *args], cwd, timeout)
+
+
+# Files Claude Code rewrites by itself — accepting a permission prompt edits
+# settings.json mid-session. When they are the *only* thing standing between an
+# agent and a land, the agent didn't do it and won't think to look there.
+_CLAUDE_OWN = (".claude/settings.json", ".claude/settings.local.json")
+
+
+def _porcelain_path(line: str) -> str:
+    """The path out of one `git status --porcelain` line.
+
+    Not a fixed slice: the XY status field is two columns, but the leading space
+    of ' M file' is gone by the time output reaches us (git()'s .strip()), so a
+    line is 'M file' or 'MM file' depending on the state. Split off the first
+    field instead, and take the destination of a rename."""
+    body = line.strip()
+    body = body.split(maxsplit=1)[1] if " " in body else body
+    if " -> " in body:                       # 'R  old -> new'
+        body = body.split(" -> ", 1)[1]
+    return body.strip().strip('"')
+
+
+def _claude_settings_hint(dirty_lines: list[str]) -> str:
+    paths = [_porcelain_path(ln) for ln in dirty_lines]
+    if paths and all(p in _CLAUDE_OWN for p in paths):
+        return ("\n\nNote: that is Claude Code's own settings file, which it "
+                "rewrites when you accept a permission — probably not your work. "
+                "Commit it or `git checkout --` it, then re-request.")
+    return ""
 
 
 # --------------------------------------------------------------------------- #
@@ -140,17 +175,25 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     branch = branch.strip()
 
     # 1. Refuse a dirty tree. Landing half-written work is exactly the failure
-    #    mode this whole system exists to prevent.
+    #    mode this whole system exists to prevent — but only *tracked* changes
+    #    can end up in a commit, and therefore in the push. An untracked scratch
+    #    file blocks nothing and blocking on it turns a correct refusal into
+    #    noise: the requester reads "dirty", cannot see why it matters, and
+    #    starts deleting things to get past the gate.
     rc, out = git(["status", "--porcelain"], root)
     if rc != 0:
         return _fail("could not read git status", steps)
-    if out:
+    tracked = [ln for ln in out.splitlines() if not ln.startswith("??")]
+    untracked = [ln for ln in out.splitlines() if ln.startswith("??")]
+    if tracked:
         return _fail(
-            "working tree is dirty — commit or stash first. The daemon lands "
-            f"commits, it does not decide what to commit:\n{out[:2000]}",
+            "working tree has uncommitted tracked changes — commit or stash "
+            "first. The daemon lands commits, it does not decide what to "
+            f"commit:\n{chr(10).join(tracked)[:2000]}" + _claude_settings_hint(tracked),
             steps,
         )
-    step("status", 0, "clean")
+    step("status", 0,
+         f"clean ({len(untracked)} untracked file(s) ignored)" if untracked else "clean")
 
     # 2. Fetch.
     if not step("fetch", *git(["fetch", remote, target], root)):

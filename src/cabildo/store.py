@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
+from . import names
+
 
 # --------------------------------------------------------------------------- #
 # Paths / config
@@ -94,7 +96,12 @@ CREATE TABLE IF NOT EXISTS messages (
     to_session    TEXT,               -- set => direct message
     project       TEXT,
     body          TEXT NOT NULL,
-    urgent        INTEGER NOT NULL DEFAULT 0
+    urgent        INTEGER NOT NULL DEFAULT 0,
+    -- 'local'  => born here; the cloud mirror pushes it up.
+    -- 'cloud'  => composed in the hosted dashboard and pulled down by the
+    --             runner. The uplink must skip these or it echoes them back up
+    --             as duplicates, forever.
+    origin        TEXT NOT NULL DEFAULT 'local'
 );
 CREATE INDEX IF NOT EXISTS idx_messages_topic ON messages(topic);
 CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_session);
@@ -139,7 +146,7 @@ CREATE TABLE IF NOT EXISTS intents (
     project       TEXT,
     action        TEXT NOT NULL,
     params        TEXT NOT NULL,                   -- JSON object
-    status        TEXT NOT NULL DEFAULT 'pending', -- pending|running|done|failed|rejected
+    status        TEXT NOT NULL DEFAULT 'pending', -- pending|running|done|failed|rejected|expired
     attempts      INTEGER NOT NULL DEFAULT 0,
     worker        TEXT,                            -- daemon instance that took it
     started_at    REAL,
@@ -224,6 +231,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # Unconditional: the column now exists either way (fresh via SCHEMA, old via
     # the ALTER above), and this is the only place it is safe to index it.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_tag ON sessions(tag)")
+
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
+    if "origin" not in have:
+        conn.execute(
+            "ALTER TABLE messages ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'")
     conn.commit()
 
 
@@ -394,14 +406,31 @@ def active_sessions(
 
 
 def display_name(row: sqlite3.Row | None, session_id: str | None = None) -> str:
-    """Short human label for a session: @handle if set, else short id."""
+    """Human label for a session: @handle if set, else its robot codename.
+
+    The codename (BENDER-8F) is a deterministic function of the session_id, so
+    it doubles as the id — and it's what replaced the old bland session_id[:8]."""
     if row is not None:
         if row["handle"]:
             return f"@{row['handle']}"
         session_id = row["session_id"]
-    if not session_id:
-        return "?"
-    return session_id[:8]
+    return names.robot_name(session_id)
+
+
+def session_for_robot_name(conn: sqlite3.Connection, name: str) -> str | None:
+    """Reverse a robot codename (BENDER-8F) back to its session_id.
+
+    Deterministic names mean no lookup table: recompute the name over active
+    sessions and match case-insensitively. Most-recently-seen wins on the
+    (rare) collision, mirroring the short-id resolver."""
+    want = name.lstrip("@").upper()
+    for r in conn.execute(
+        "SELECT session_id FROM sessions WHERE status='active' "
+        "ORDER BY last_seen_at DESC"
+    ):
+        if names.robot_name(r["session_id"]).upper() == want:
+            return r["session_id"]
+    return None
 
 
 def subscriptions_of(conn: sqlite3.Connection, session_id: str) -> list[str]:
@@ -426,14 +455,15 @@ def post_message(
     to_session: str | None = None,
     project: str | None = None,
     urgent: bool = False,
+    origin: str = "local",
 ) -> int:
     if (topic is None) == (to_session is None):
         raise ValueError("exactly one of topic / to_session must be set")
     cur = conn.execute(
         "INSERT INTO messages(created_at, from_session, from_handle, topic, to_session, "
-        "project, body, urgent) VALUES (?,?,?,?,?,?,?,?)",
+        "project, body, urgent, origin) VALUES (?,?,?,?,?,?,?,?,?)",
         (_now(), from_session, from_handle, topic, to_session, project, body,
-         1 if urgent else 0),
+         1 if urgent else 0, origin),
     )
     conn.commit()
     return int(cur.lastrowid or 0)
@@ -614,7 +644,7 @@ def history(
 def _msg_dict(r: sqlite3.Row) -> dict[str, Any]:
     d = dict(r)
     d["urgent"] = bool(d.get("urgent"))
-    d["from_display"] = f"@{r['from_handle']}" if r["from_handle"] else r["from_session"][:8]
+    d["from_display"] = f"@{r['from_handle']}" if r["from_handle"] else names.robot_name(r["from_session"])
     d["read"] = ("read_at" in d.keys()) and d.get("read_at") is not None
     return d
 
@@ -808,7 +838,10 @@ def finish_intent(
     status: str,
     result: dict[str, Any],
 ) -> None:
-    if status not in ("done", "failed", "rejected"):
+    # 'expired' is its own terminal state, not a flavour of 'failed': nothing was
+    # attempted, so nothing failed, and a retry-on-failure reader must be able to
+    # tell those apart.
+    if status not in ("done", "failed", "rejected", "expired"):
         raise ValueError(f"bad terminal status {status!r}")
     conn.execute(
         "UPDATE intents SET status=?, finished_at=?, result=? WHERE id=?",
@@ -937,6 +970,21 @@ def hook_metrics_summary(
         args,
     ).fetchone()
     return {"total": dict(total), "per_event": per_event}
+
+
+def count_pending_intents(
+    conn: sqlite3.Connection, *, older_than: float = 0.0
+) -> int:
+    """How many intents are waiting — all of them, or only those queued more than
+    `older_than` seconds ago. The daemon says this out loud at startup: a backlog
+    it is about to refuse is worth one line, and a backlog it is about to RUN is
+    worth even more."""
+    q = "SELECT COUNT(*) AS n FROM intents WHERE status='pending'"
+    a: list[Any] = []
+    if older_than:
+        q += " AND created_at < ?"
+        a.append(_now() - older_than)
+    return int(conn.execute(q, a).fetchone()["n"])
 
 
 def reap_stale_intents(conn: sqlite3.Connection, older_than: float) -> int:

@@ -150,3 +150,63 @@ def test_unverifiable_push_is_not_reported_as_not_landed(repo, monkeypatch):
     assert "verif" in (res.get("reason") or "").lower(), (
         f"an unverifiable land must say so, got: {res.get('reason')!r}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# What counts as "dirty"
+#
+# Refusing a dirty tree is right, but only tracked changes can reach a commit and
+# therefore the push. Blocking on an untracked scratch file makes a correct
+# refusal look arbitrary — and the obvious way past an arbitrary gate is to start
+# deleting files.
+# --------------------------------------------------------------------------- #
+def test_untracked_files_do_not_block_a_land(repo):
+    origin, work, sha = repo
+    (work / "scratch.md").write_text("notes to self\n")
+    (work / "build.log").write_text("noise\n")
+
+    res = land(work)
+    assert res["ok"] and res["landed"] is True, (
+        f"an untracked file blocked a land it cannot affect: {res.get('reason')}"
+    )
+    assert on_remote(origin, sha)
+    assert (work / "scratch.md").exists(), "land must not clean the tree"
+    status = next(s for s in res["steps"] if s["step"] == "status")
+    assert "untracked" in status["out"], "the ignored files should be visible"
+
+
+def test_modified_tracked_file_still_blocks(repo):
+    _origin, work, _sha = repo
+    (work / "f.txt").write_text("half-written\n")
+    res = land(work)
+    assert res["ok"] is False and not res.get("landed")
+    assert "tracked" in res["reason"]
+    assert "f.txt" in res["reason"]
+
+
+def test_staged_but_uncommitted_change_still_blocks(repo):
+    _origin, work, _sha = repo
+    (work / "new.txt").write_text("staged\n")
+    sh(["git", "add", "new.txt"], work)
+    res = land(work)
+    assert res["ok"] is False and "new.txt" in res["reason"]
+
+
+def test_claude_own_settings_gets_a_pointed_hint(repo):
+    """Claude Code rewrites .claude/settings.json when you accept a permission.
+    An agent told only 'dirty' will not think to look there — it didn't do it."""
+    _origin, work, _sha = repo
+    (work / ".claude").mkdir()
+    (work / ".claude" / "settings.json").write_text('{"permissions": {}}\n')
+    sh(["git", "add", ".claude/settings.json"], work)
+    sh(["git", "commit", "-m", "settings"], work)
+    (work / ".claude" / "settings.json").write_text('{"permissions": {"allow": []}}\n')
+
+    res = land(work)
+    assert res["ok"] is False
+    assert "Claude Code's own settings file" in res["reason"]
+
+    # ...but not when real work is dirty too: then the hint would be a lie.
+    (work / "f.txt").write_text("also mine\n")
+    res = land(work)
+    assert "Claude Code's own settings file" not in res["reason"]

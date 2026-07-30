@@ -22,7 +22,7 @@ import socket
 import sys
 import time
 
-from . import actions, desktop, store
+from . import actions, desktop, names, store
 
 # A 'running' intent older than this means the daemon died holding it.
 STALE_AFTER = actions.GATE_TIMEOUT + 300
@@ -58,7 +58,8 @@ def _log(msg: str) -> None:
 def _report(conn, intent: dict, status: str, result: dict) -> None:
     """Tell the requester what happened, on the bus, as a DM."""
     ok = result.get("ok")
-    head = "✅" if (ok and result.get("landed")) else ("⚠️" if ok else "❌")
+    head = "⌛" if result.get("expired") else (
+        "✅" if (ok and result.get("landed")) else ("⚠️" if ok else "❌"))
     body = [
         f"{head} intent #{intent['id']} `{intent['action']}` → {status}",
         result.get("reason") or "",
@@ -78,14 +79,40 @@ def _report(conn, intent: dict, status: str, result: dict) -> None:
             body="\n".join(b for b in body if b),
             to_session=intent["from_session"],
             project=intent.get("project"),
-            # A failed land blocks that agent from idling until it looks.
-            urgent=not ok,
+            # A failed land blocks that agent from idling until it looks. An
+            # EXPIRED one does not: urgent mail also pops a desktop notification
+            # for the human, and a week-old request nobody is waiting on must not
+            # buy itself a popup.
+            urgent=not ok and not result.get("expired"),
         )
     except Exception as e:  # a broken report must not poison the queue
         _log(f"  (could not post result: {e})")
 
 
+def _age(intent: dict) -> float:
+    return max(0.0, time.time() - float(intent.get("created_at") or 0))
+
+
 def handle(conn, intent: dict, ctx: actions.Ctx) -> None:
+    # An intent is a request about a moment. By the time a daemon comes up after
+    # a day off, the target branch has moved, the tree it described is gone, and
+    # the agent that asked is dead — so executing the backlog is not obedience,
+    # it is acting on stale facts nobody is watching. Refuse, and say why.
+    age = _age(intent)
+    if ctx.max_intent_age and age > ctx.max_intent_age:
+        result = {
+            "ok": False,
+            "expired": True,
+            "reason": f"expired: queued {age / 3600:.1f}h ago, ceiling is "
+                      f"{ctx.max_intent_age / 3600:.1f}h. Nothing was run — the "
+                      f"tree and the target branch have moved since. Re-request "
+                      f"it if you still want it.",
+        }
+        store.finish_intent(conn, intent["id"], status="expired", result=result)
+        _log(f"⌛ #{intent['id']} {intent['action']} expired ({age / 3600:.1f}h old)")
+        _report(conn, intent, "expired", result)
+        return
+
     fn = actions.ACTIONS.get(intent["action"])
     if fn is None:
         result = {
@@ -97,7 +124,7 @@ def handle(conn, intent: dict, ctx: actions.Ctx) -> None:
         _report(conn, intent, "rejected", result)
         return
 
-    _log(f"▶ #{intent['id']} {intent['action']} from {intent['from_handle'] or intent['from_session'][:8]}")
+    _log(f"▶ #{intent['id']} {intent['action']} from {intent['from_handle'] or names.robot_name(intent['from_session'])}")
     try:
         result = fn(intent["params"], ctx)
         status = "done" if result.get("ok") else "failed"
@@ -126,6 +153,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="weighted-token ceiling over --budget-days; refuse to spawn past it. "
                         "0 disables the throttle.")
     p.add_argument("--budget-days", type=float, default=7.0, help="window for --budget")
+    p.add_argument("--max-intent-age", type=float, default=2.0,
+                   help="hours a queued intent may wait before the daemon refuses "
+                        "it instead of running it (0 disables)")
     p.add_argument("--once", action="store_true", help="drain the queue and exit")
     p.add_argument("--interval", type=float, default=2.0, help="poll seconds")
     p.add_argument("--no-notify", action="store_true",
@@ -149,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
         max_depth=args.max_depth,
         budget=args.budget,
         budget_days=args.budget_days,
+        max_intent_age=args.max_intent_age * 3600.0,
         log=_log,
     )
 
@@ -165,7 +196,17 @@ def main(argv: list[str] | None = None) -> int:
          f"spawn={'ENABLED' if args.allow_spawn else 'dry-run'} "
          f"(≤{args.max_agents} agents, depth ≤{args.max_depth}) · "
          f"notify={'on' if notifying else 'off'} · "
-         f"budget={'%.0f/%gd' % (args.budget, args.budget_days) if args.budget else 'none'}")
+         f"budget={'%.0f/%gd' % (args.budget, args.budget_days) if args.budget else 'none'} · "
+         f"intent age ≤{'%gh' % args.max_intent_age if args.max_intent_age else 'unbounded'}")
+
+    # What is already in the queue, before touching any of it. A daemon coming up
+    # with push enabled onto a backlog it did not queue is the moment to be loud.
+    waiting = store.count_pending_intents(conn)
+    if waiting:
+        stale = store.count_pending_intents(conn, older_than=ctx.max_intent_age)
+        fresh = waiting - stale if ctx.max_intent_age else waiting
+        _log(f"queue: {waiting} pending — {stale} will be refused as expired, "
+             f"{fresh} will be RUN")
 
     last_reap = 0.0
     try:
