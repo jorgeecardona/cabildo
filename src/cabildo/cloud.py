@@ -159,9 +159,42 @@ def _save_registry(reg: dict[str, dict]) -> Path:
     return p
 
 
+# Rows on the bus identify their project two different ways: sessions carry a
+# `project_name` ("paas"), while messages and claims carry `project`, an absolute
+# path. The dials are keyed by name, so every path-keyed lookup silently missed
+# the registry and fell through to the default — the dial existed and did
+# nothing. It failed closed for messages (nothing left when it should have) and
+# open for claims (a `none` project's locks would still be pushed). One
+# normalizer, applied inside the lookup, so no caller has to remember which
+# shape it is holding.
+_KEY_TTL = 10.0
+_key_cache: dict[str, tuple[float, str]] = {}
+
+
+def project_key(value: Any) -> str:
+    """The registry key for a project named either way: a name stays a name, an
+    absolute path resolves through the same logic a session uses (pins, linked
+    worktrees, git root) so `/…/paas/.claude/worktrees/x` is still `paas`."""
+    v = str(value or "").strip()
+    if not v.startswith("/"):
+        return _norm(v)
+    now = time.time()
+    hit = _key_cache.get(v)
+    if hit and now - hit[0] < _KEY_TTL:
+        return hit[1]
+    try:
+        from . import context
+        name = _norm(context.git_project(v)[1])
+    except Exception:
+        name = _norm(os.path.basename(v.rstrip("/")))
+    _key_cache[v] = (now, name)
+    return name
+
+
 def uplink_of(name: Any) -> str:
-    """The effective uplink level for a project (its own, or the default)."""
-    e = _registry().get(_norm(name))
+    """The effective uplink level for a project (its own, or the default).
+    Accepts a project name or a project path."""
+    e = _registry().get(project_key(name))
     lvl = _norm(e.get("uplink")) if e else ""
     return lvl if lvl in _UPLINK_RANK else default_uplink()
 
@@ -202,7 +235,7 @@ def set_default_uplink(level: str) -> str:
 
 def peers_of(name: Any) -> list[str]:
     """Projects `name` is explicitly linked to on the local bus."""
-    e = _registry().get(_norm(name))
+    e = _registry().get(project_key(name))
     return list(e.get("peers") or []) if e else []
 
 
@@ -235,8 +268,9 @@ def remove_peer(name: str, peer: str) -> list[str]:
 
 def peers_visible(name: Any) -> set[str]:
     """The set of projects an agent in `name` may see on the bus: itself + its
-    linked peers. Used to enforce cross-project isolation."""
-    n = _norm(name)
+    linked peers. Used to enforce cross-project isolation. Takes a name or a
+    path, like every other lookup here."""
+    n = project_key(name)
     return {n} | set(peers_of(n)) if n else set()
 
 
@@ -319,9 +353,12 @@ def project_for_path(path: Any) -> tuple[str, str] | None:
 
 def message_project(topic: Any, project: Any = None) -> str | None:
     """The project a bus message belongs to: its stored project, else the name
-    embedded in a `proj:<name>` topic, else None (a cross-cutting channel)."""
+    embedded in a `proj:<name>` topic, else None (a cross-cutting channel).
+
+    Always a registry key — the stored `project` is a path, and returning it raw
+    is what made the message dial a no-op."""
     if project:
-        return _norm(project)
+        return project_key(project)
     t = str(topic or "")
     if t.startswith("proj:"):
         return _norm(t[5:])

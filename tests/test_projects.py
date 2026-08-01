@@ -355,3 +355,59 @@ def test_ordinary_paths_are_untouched(cfg_home):
     repo = make_repo(cfg_home / "code" / "thing")
     assert context.scratchpad_origin(repo) is None
     assert context.git_project(str(repo))[1] == "thing"
+
+
+# --------------------------------------------------------------------------- #
+# The dial has to be keyed on what the rows actually carry
+#
+# Sessions store `project_name` ("paas"); messages and claims store `project`,
+# an absolute path. The dials are keyed by name, so every path-keyed lookup
+# missed the registry and silently used the default. Live effect: setting
+# paas -> messages did nothing (the dashboard's message pane stayed frozen), and
+# a `none` project's claims were still being pushed.
+# --------------------------------------------------------------------------- #
+def test_a_path_resolves_to_the_same_dial_as_its_name(cfg_home):
+    repo = make_repo(cfg_home / "code" / "paas")
+    cloud.set_uplink("paas", "messages")
+    assert cloud.uplink_of("paas") == "messages"
+    assert cloud.uplink_of(str(repo)) == "messages", "the path missed the registry"
+    assert cloud.uplink_allows(str(repo), "messages")
+
+
+def test_an_opted_out_project_does_not_leak_through_its_path(cfg_home):
+    """The failing-open half: claims carry paths, so `none` wasn't enforced."""
+    repo = make_repo(cfg_home / "journal")
+    cloud.set_uplink("journal", "none")
+    assert cloud.uplink_allows(str(repo), "presence") is False
+
+
+def test_message_project_returns_a_registry_key_not_a_path(cfg_home):
+    repo = make_repo(cfg_home / "code" / "paas")
+    assert cloud.message_project("proj:paas", str(repo)) == "paas"
+    assert cloud.message_project(None, str(repo)) == "paas"
+    assert cloud.message_project("proj:paas", None) == "paas"
+    assert cloud.message_project("general", None) is None
+
+
+def test_a_worktree_path_resolves_to_its_repo(cfg_home):
+    repo = make_repo(cfg_home / "code" / "paas")
+    wt = repo / ".claude" / "worktrees" / "feature"
+    wt.mkdir(parents=True)
+    (wt / ".git").write_text(f"gitdir: {repo}/.git/worktrees/feature\n")
+    cloud.set_uplink("paas", "messages")
+    assert cloud.uplink_allows(str(wt), "messages"), "a worktree lost its dial"
+
+
+def test_a_pin_decides_the_dial_for_its_path(cfg_home):
+    repo = make_repo(cfg_home / "code" / "paas-infra")
+    cloud.register_root("paas", str(repo))
+    cloud.set_uplink("paas", "none")
+    assert cloud.project_key(str(repo)) == "paas"
+    assert cloud.uplink_allows(str(repo), "presence") is False
+
+
+def test_peers_take_a_path_too(cfg_home):
+    repo = make_repo(cfg_home / "code" / "paas")
+    cloud.add_peer("paas", "tyko")
+    assert cloud.peers_of(str(repo)) == ["tyko"]
+    assert cloud.peers_visible(str(repo)) == {"paas", "tyko"}
