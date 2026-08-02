@@ -1,40 +1,51 @@
 """Decision logic for the PreToolUse guard hook: turn advisory claims into
 enforced ones at the tool-call boundary.
 
-Three conventions are enforced, all scoped to the session's own project:
+Four conventions are enforced, all scoped to the session's own project:
 
-  * ``push:<project_name>`` — a `git push` from any other session is denied
-    while the lease is live.
   * ``file:<path>`` — an Edit/Write/NotebookEdit on a matching path is denied.
     Paths are matched repo-relative and absolute, with fnmatch globbing so a
     claim like ``file:cabildo/hooks/*`` covers the directory. And, crucially,
     an *allowed* edit auto-takes a short lease on that path (``autoclaim_on_edit``)
     so the guard has something to enforce without any agent remembering to
     claim — the first agent to touch a file owns it briefly; the next is denied.
+  * ``git push`` — denied while ``push:<project_name>`` is held by someone else,
+    and *also* denied while any other agent is simply live on the project, with
+    the reason pointing at ``request land``. A lease you hold yourself is the
+    deliberate escape hatch.
+  * blanket staging in a shared working tree — ``git add -A``, ``git add .``,
+    ``git commit -a`` — is denied while another agent shares the same checkout,
+    because it sweeps their half-written files into your commit.
   * destructive git in a shared working tree — ``git reset --hard``, a
     discarding ``checkout``/``restore``, ``clean -f``, ``stash`` — is denied
     while any *other* agent is active on the project, because those wipe the
     whole tree's uncommitted work, not just one claimed file.
 
-Deny only ever fires for a claim held by *someone else* and still unexpired (or
-for a tree-wide git op with live peers); everything else falls through to Claude
-Code's normal permission flow. The reason string names the holder/peers so the
-denied agent can go negotiate on the bus instead of retrying blind.
+The last three are one story: concurrent agents on one repo collide at commit
+and push, and every recovery from that collision (reset, revert, force-push)
+destroys more than the collision did. So the guard stops the collision instead
+of the recovery, and every deny names the ordered path through — ``land``, which
+the daemon runs one at a time.
+
+Deny only ever fires against a live peer or a claim held by *someone else*;
+everything else falls through to Claude Code's normal permission flow. The reason
+string names the holder/peers so the denied agent can go negotiate on the bus
+instead of retrying blind.
 """
 
 from __future__ import annotations
 
+import os
 import re
+import shlex
 import sqlite3
 from fnmatch import fnmatch
 from pathlib import PurePosixPath
 from typing import Any
 
 from . import store
+from .context import tree_root
 
-# `git ... push ...` as its own shell command: start of string or after a
-# separator, so `echo "git push"` in a commit message doesn't trip it.
-_PUSH_RE = re.compile(r"(?:^|[;&|]\s*)git\s+(?:[^;&|]*\s)?push\b")
 
 # Working-tree-destroying git ops. Each matches only as its own shell command
 # (start or after ;&|), so the same words inside a quoted string don't trip it.
@@ -55,12 +66,88 @@ _DESTRUCTIVE_GIT = [
      "git stash"),
 ]
 
+# Staging the whole tree rather than named paths. Matched on *tokens*, not on
+# the raw string: `git commit -m "add -A support"` must not read as `git add -A`,
+# and a message is one token while a flag is another.
+_STAGE_ALL = {"-A", "--all", "-u", "--update", "--no-ignore-removal", ".", ":/"}
+# git's own options that swallow the next token, so the subcommand is found past
+# `git -C /repo add`.
+_GIT_OPT_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
+
 _FILE_TOOLS = {"Edit": "file_path", "Write": "file_path", "NotebookEdit": "notebook_path"}
 
 # How long an auto-claim taken on edit lasts. Short, and refreshed on every
 # re-edit, so an agent that moves on releases the file within minutes without
 # needing to remember; SessionEnd drops it immediately.
 AUTOCLAIM_TTL = 600.0
+
+
+def _argvs(command: str) -> list[list[str]]:
+    """A shell string split into one argv per command.
+
+    Tokenising is what keeps `git commit -m "add -A support"` out of the
+    blanket-stage check: the message is a single token, and a token is not a
+    flag. Unparseable input yields nothing — this guard catches the ordinary
+    case, it does not try to out-parse bash."""
+    try:
+        tokens = shlex.split(command, comments=True)
+    except ValueError:                    # unbalanced quotes; not ours to fix
+        return []
+    out: list[list[str]] = []
+    cur: list[str] = []
+    for tok in tokens:
+        if tok in (";", "&&", "||", "|", "&"):
+            if cur:
+                out.append(cur)
+            cur = []
+        else:
+            cur.append(tok)
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _git_subcommand(argv: list[str]) -> tuple[str | None, list[str]]:
+    """(subcommand, its arguments) for a git argv, skipping git's own options."""
+    if not argv or os.path.basename(argv[0]) != "git":
+        return None, []
+    i = 1
+    while i < len(argv):
+        tok = argv[i]
+        if tok in _GIT_OPT_WITH_VALUE:
+            i += 2
+            continue
+        if tok.startswith("-"):
+            i += 1
+            continue
+        return tok, argv[i + 1:]
+    return None, []
+
+
+def _is_push(command: str) -> bool:
+    """True if `command` runs `git push` — the subcommand, not the word.
+
+    Tokenised for the same reason as staging, plus one this file learned the
+    hard way: `git stash push -m wip` contains "push" and is its opposite. A
+    pattern that reads the string mislabels it; reading the subcommand cannot."""
+    return any(_git_subcommand(argv)[0] == "push" for argv in _argvs(command))
+
+
+def _stages_whole_tree(argv: list[str]) -> str | None:
+    """Label for a command that stages or commits the *whole* tree instead of
+    named paths, else None. `git add src/x.py` is fine; `git add -A` is not."""
+    sub, rest = _git_subcommand(argv)
+    if sub == "add":
+        return next((f"git add {t}" for t in rest if t in _STAGE_ALL), None)
+    if sub == "commit":
+        # -a, and short bundles containing it (-am). `--amend` is two dashes and
+        # is not `--all`, so it falls through — amending is not staging.
+        for tok in rest:
+            if tok == "--all" or (
+                tok.startswith("-") and not tok.startswith("--") and "a" in tok[1:]
+            ):
+                return f"git commit {tok}"
+    return None
 
 
 def _held_by_other(
@@ -79,19 +166,88 @@ def _holder_name(conn: sqlite3.Connection, row: sqlite3.Row) -> str:
     )
 
 
+def _held_by_me(conn: sqlite3.Connection, resource: str, session_id: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM claims WHERE resource=? AND expires_at>? AND holder_session=?",
+        (resource, store._now(), session_id),
+    ).fetchone() is not None
+
+
 def _deny_push(conn: sqlite3.Connection, me: sqlite3.Row, command: str) -> str | None:
-    if not _PUSH_RE.search(command):
+    if not _is_push(command):
         return None
     resource = f"push:{me['project_name']}"
     row = _held_by_other(conn, resource, me["session_id"])
-    if not row:
-        return None
-    note = f" ({row['note']})" if row["note"] else ""
+    if row:
+        note = f" ({row['note']})" if row["note"] else ""
+        return (
+            f"cabildo: {_holder_name(conn, row)} holds the lock `{resource}`{note}, "
+            f"expiring in {round(row['expires_at'] - store._now())}s. Pushing now could "
+            "clobber their in-flight work. Wait, or message them via `send`; take the "
+            "lock with `claim` once it is free."
+        )
+    # Nobody else holds the lock — but an unlocked push is still a race the
+    # moment another agent is live here. Two agents that both fetched the same
+    # tip both believe they are fast-forwarding; the loser then reaches for
+    # rebase, revert or force-push, and *that* is what eats commits. The daemon
+    # already runs one intent at a time, which is the ordering nobody can get
+    # right by hand, so send them there rather than letting them find out.
+    if _held_by_me(conn, resource, me["session_id"]):
+        return None                       # you took the lock: peers are the ones denied
+    peers = store.active_sessions(conn, project=me["project"], exclude=me["session_id"])
+    if not peers:
+        return None                       # alone: push is nobody's business but yours
+    who = ", ".join(store.display_name(p) for p in peers[:5])
     return (
-        f"cabildo: {_holder_name(conn, row)} holds the lock `{resource}`{note}, "
-        f"expiring in {round(row['expires_at'] - store._now())}s. Pushing now could "
-        "clobber their in-flight work. Wait, or message them via `send`; take the "
-        "lock with `claim` once it is free."
+        f"cabildo: {len(peers)} other agent(s) live on {me['project_name']} ({who}) — "
+        "a direct push races them. Queue it instead; the daemon fetches, rebases "
+        "onto the target, runs the repo's gate, pushes, and verifies against the "
+        "remote, one intent at a time:\n"
+        f'    request(action="land", params={{"cwd": "{me["cwd"] or me["project"]}", '
+        '"target": "<branch you are landing on, e.g. main>"})\n'
+        "It lands commits and never decides what to commit, so commit first and "
+        "leave no tracked changes behind. It DMs you the result. If you really "
+        f"must push by hand, take `{resource}` with `claim` first — that denies "
+        "the others and makes the rebase yours to own."
+    )
+
+
+def _deny_blanket_stage(
+    conn: sqlite3.Connection, me: sqlite3.Row, command: str
+) -> str | None:
+    """Deny `git add -A` / `git commit -a` while another agent shares this exact
+    working tree.
+
+    Staging is not dangerous; staging *indiscriminately* is. In a shared
+    checkout it sweeps whatever the other agent has half-written into your
+    commit, and the fix for that — reset, revert, force-push — destroys more
+    than the mistake did. Separate worktrees have separate indexes, so this
+    never fires on agents who isolated themselves properly."""
+    label = None
+    for argv in _argvs(command):
+        label = _stages_whole_tree(argv)
+        if label:
+            break
+    if label is None:
+        return None
+    # cwd is what says *which checkout*; project can't (it collapses worktrees).
+    # A row without one tells us nothing, so it is not treated as a sharer.
+    if not me["cwd"]:
+        return None
+    mine = tree_root(me["cwd"])
+    sharers = [
+        p for p in store.active_sessions(conn, project=me["project"],
+                                         exclude=me["session_id"])
+        if p["cwd"] and tree_root(p["cwd"]) == mine
+    ]
+    if not sharers:
+        return None
+    who = ", ".join(store.display_name(p) for p in sharers[:5])
+    return (
+        f"cabildo: `{label}` in a working tree shared with {len(sharers)} other "
+        f"agent(s) ({who}) commits their half-written files as if they were "
+        "yours. Stage the paths you actually changed (`git add <path> ...`), or "
+        "isolate yourself first (`git worktree add`)."
     )
 
 
@@ -152,7 +308,11 @@ def deny_reason(
         return None
     if tool_name == "Bash" and me["project_name"]:
         command = tool_input.get("command") or ""
-        return _deny_push(conn, me, command) or _deny_destructive_git(conn, me, command)
+        return (
+            _deny_push(conn, me, command)
+            or _deny_blanket_stage(conn, me, command)
+            or _deny_destructive_git(conn, me, command)
+        )
     key = _FILE_TOOLS.get(tool_name)
     if key:
         path = tool_input.get(key)

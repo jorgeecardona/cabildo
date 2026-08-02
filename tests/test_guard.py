@@ -141,3 +141,108 @@ def test_push_lock_still_enforced(conn, clock):
                         holder_handle="bob", project=ALPHA, ttl_seconds=600, note=None)
     reason = _bash(conn, "a", "git push origin main")
     assert reason is not None and "push:alpha" in reason
+
+
+# --------------------------------------------------------------------------- #
+# Unlocked push with live peers — routed to `land`
+# --------------------------------------------------------------------------- #
+def test_push_denied_when_peer_live_without_any_lock(conn, clock):
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    reason = _bash(conn, "a", "git push origin main")
+    assert reason is not None
+    assert "@bob" in reason
+    assert "land" in reason               # names the ordered path through
+
+
+def test_push_allowed_when_alone(conn, clock):
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    assert _bash(conn, "a", "git push origin main") is None
+
+
+def test_holding_the_push_lock_is_the_escape_hatch(conn, clock):
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    store.acquire_claim(conn, resource="push:alpha", holder_session="a",
+                        holder_handle="alice", project=ALPHA, ttl_seconds=600, note=None)
+    assert _bash(conn, "a", "git push origin main") is None      # alice may push
+    assert _bash(conn, "b", "git push origin main") is not None  # bob may not
+
+
+def test_push_denial_survives_an_expired_lease(conn, clock):
+    # The lease lapsing must not turn into a free-for-all: peers are still here.
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    store.acquire_claim(conn, resource="push:alpha", holder_session="a",
+                        holder_handle="alice", project=ALPHA, ttl_seconds=60, note=None)
+    clock["t"] += 61
+    assert _bash(conn, "a", "git push origin main") is not None
+
+
+# --------------------------------------------------------------------------- #
+# Blanket staging in a shared checkout
+# --------------------------------------------------------------------------- #
+BLANKET = [
+    "git add -A",
+    "git add --all",
+    "git add .",
+    "git add -u",
+    "git commit -a -m 'wip'",
+    "git commit -am 'wip'",
+    "git commit --all -m x",
+    "cd /repo/alpha && git add -A && git commit -m x",
+    "git -C /repo/alpha add -A",
+]
+
+TARGETED = [
+    "git add src/x.py",
+    "git add src/x.py tests/test_x.py",
+    "git commit -m 'x'",
+    "git commit --amend --no-edit",
+    "git commit -m 'add -A support to the parser'",   # a flag inside a message
+    "git status",
+    "git diff",
+]
+
+
+@pytest.mark.parametrize("command", BLANKET)
+def test_blanket_stage_denied_in_a_shared_tree(conn, clock, command):
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    reason = _bash(conn, "a", command)
+    assert reason is not None
+    assert "@bob" in reason
+
+
+@pytest.mark.parametrize("command", TARGETED)
+def test_targeted_staging_is_never_denied(conn, clock, command):
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    assert _bash(conn, "a", command) is None
+
+
+@pytest.mark.parametrize("command", BLANKET)
+def test_blanket_stage_allowed_when_alone(conn, clock, command):
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    assert _bash(conn, "a", command) is None
+
+
+def test_blanket_stage_allowed_in_your_own_worktree(conn, clock, tmp_path):
+    """The peer is on the same project but a different checkout: separate index,
+    no collision, no deny. This is the behaviour that makes `git worktree add`
+    an actual answer rather than advice."""
+    main = tmp_path / "repo"
+    (main / ".git").mkdir(parents=True)
+    wt = tmp_path / "wt-bob"
+    wt.mkdir()
+    (wt / ".git").write_text(f"gitdir: {main}/.git/worktrees/bob\n")
+
+    store.register_session(conn, "a", cwd=str(main), project=str(main),
+                           project_name="alpha", claude_pid=1000)
+    store.set_handle(conn, "a", "alice")
+    store.register_session(conn, "b", cwd=str(wt), project=str(main),
+                           project_name="alpha", claude_pid=1001)
+    store.set_handle(conn, "b", "bob")
+
+    assert _bash(conn, "a", "git add -A") is None
+    assert _bash(conn, "b", "git add -A") is None

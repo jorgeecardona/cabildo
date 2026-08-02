@@ -110,4 +110,17 @@ def session_banner(conn: sqlite3.Connection, session_id: str) -> str:
         "Coordinate with other agents via: send / inbox / read / list_agents / "
         "claim / release / claims. Messages are NOT auto-read — mark them with `read`."
     )
+    # Only when there is someone to collide with. Told at SessionStart because
+    # by the time an agent's `git push` is denied it has already committed, and
+    # an agent that learns the rule from a refusal spends its next move
+    # improvising a workaround instead of queueing.
+    if peers:
+        lines.append(
+            "⚠ Shared repo. Do NOT `git push` — it races them and the guard will "
+            "deny it. Commit, then queue "
+            '`request(action="land", params={"cwd": ..., "target": "main"})`: the '
+            "daemon rebases, gates, pushes and verifies one agent at a time. "
+            "Stage explicit paths — `git add -A` in a shared checkout commits "
+            "their unfinished work."
+        )
     return "\n".join(lines)

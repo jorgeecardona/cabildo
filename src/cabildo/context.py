@@ -237,3 +237,24 @@ def git_project(cwd: str | None = None) -> tuple[str, str]:
 
     override = (os.environ.get("CABILDO_PROJECT") or "").strip()
     return root, (override.lower() if override else name)
+
+
+def tree_root(cwd: str | None = None) -> str:
+    """The working tree *containing* `cwd`: a linked worktree's own root, not
+    the repo it belongs to.
+
+    This is the opposite question from git_project(), which deliberately
+    collapses worktrees onto their main repo so agents on one codebase share a
+    channel. Here the collapse would be wrong: two agents in separate worktrees
+    have separate indexes and stage only their own files, while two agents in
+    one checkout stage each other's half-written work. Only the second is a
+    collision, and only this function can tell them apart.
+    """
+    start = Path(cwd or os.getcwd()).resolve()
+    origin = scratchpad_origin(start)
+    if origin is not None:
+        start = origin
+    for d in (start, *start.parents):
+        if (d / ".git").exists():
+            return str(d)
+    return str(start)

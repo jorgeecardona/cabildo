@@ -102,10 +102,24 @@ def test_push_after_separator_is_caught(conn):
     assert reason is not None
 
 
-def test_expired_lock_does_not_block(conn):
+def test_expired_lock_stops_being_the_reason(conn):
+    """An expired lease no longer names its holder. The push is still refused
+    while that holder is live on the project — but as a race with a peer, routed
+    to `land`, not as somebody's lock."""
     make_session(conn, "a" * 8)
     make_session(conn, "b" * 8)
     _claim(conn, "a" * 8, "push:alpha", ttl=-1)
+    reason = guard.deny_reason(conn, "b" * 8, "Bash", {"command": "git push"})
+    assert reason is not None
+    assert "push:alpha" not in reason.split("must push by hand")[0]
+    assert "land" in reason
+
+
+def test_expired_lock_does_not_block_a_lone_agent(conn):
+    make_session(conn, "a" * 8)
+    make_session(conn, "b" * 8)
+    _claim(conn, "a" * 8, "push:alpha", ttl=-1)
+    store.end_session(conn, "a" * 8)          # holder gone, lease gone, nobody left
     assert guard.deny_reason(conn, "b" * 8, "Bash",
                              {"command": "git push"}) is None
 

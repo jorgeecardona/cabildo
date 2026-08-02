@@ -118,16 +118,37 @@ is the thing that blows up a session's token budget. Two guards:
 
 ### Coordinating a push
 
+**While another agent is live on the project, `git push` is denied.** Not because
+pushing is dangerous, but because two agents that fetched the same tip both
+believe they are fast-forwarding — and the loser's recovery (rebase, revert,
+force-push) is what actually eats commits. So commit, then queue it:
+
+```
+request(action="land", params={"cwd": "<your tree>", "target": "main"})
+```
+
+The daemon runs one intent at a time: fetch → rebase → gate → push → verify
+against the remote, then DMs you the result. That single-worker queue *is* the
+lock, and it's the one nobody has to remember to release.
+
+Blanket staging (`git add -A`, `git add .`, `git commit -a`) is denied too, but
+only when another agent shares your **exact checkout** — it would sweep their
+half-written files into your commit. Agents in their own `git worktree` have
+their own index and are never blocked. Stage explicit paths, or isolate first.
+
+The escape hatch is deliberate and explicit:
+
 ```
 claims()                                  # anyone holding it?
 claim("push:myrepo", note="rebase+push")  # ok:false tells you who holds it
-#   ... do the commit & push ...
+#   ... commit & push by hand: peers are now denied, the rebase is yours ...
 release("push:myrepo")
 ```
 
 Locks are **advisory** (agents cooperate by convention) and auto-expire via TTL,
 so a crashed agent never deadlocks the bus. `SessionEnd` also drops a session's
-locks.
+locks. A lapsed lease doesn't reopen the free-for-all: with peers still live the
+push is refused again, just as a race rather than as somebody's lock.
 
 ### What the daemon will and won't land
 
@@ -160,7 +181,7 @@ reached until its next tool call or turn boundary. cabildo uses six events:
 | `SessionStart` | register on the bus, bind `session_id ⇄ claude_pid`, inject a banner (who you are, peers, locks, unread) |
 | `UserPromptSubmit` | refresh liveness, inject a one-line `📬 N unread …` notice (silent when nothing) |
 | `PostToolUse` (`*`) | **mid-turn delivery**: inject unread URGENT mail at the next tool-call boundary. Each message injects once (tracked in `deliveries`; delivery ≠ read). Ordinary mail never interrupts a turn. Also keeps `last_seen` fresh during long autonomous turns. |
-| `PreToolUse` (`Bash\|Edit\|Write\|NotebookEdit`) | **claims enforcement, with teeth**: (a) deny `git push` while another session holds `push:<project>`; (b) **auto-claim on edit** — an allowed Edit/Write silently takes a short lease (`file:<path>`, 10-min TTL, refreshed per edit) so the *next* agent to touch that file is denied, without anyone remembering to `claim`; (c) deny tree-destroying git (`reset --hard`, discarding `checkout`/`restore`, `clean -f`, `stash`) while any other agent is active on the project, since those wipe the whole shared tree's uncommitted work. Deny reasons name the holder/peers so the agent negotiates on the bus. Logic in `src/cabildo/guard.py`. |
+| `PreToolUse` (`Bash\|Edit\|Write\|NotebookEdit`) | **claims enforcement, with teeth**: (a) **auto-claim on edit** — an allowed Edit/Write silently takes a short lease (`file:<path>`, 10-min TTL, refreshed per edit) so the *next* agent to touch that file is denied, without anyone remembering to `claim`; (b) deny `git push` while another session holds `push:<project>` **or** while any other agent is simply live on the project, pointing at `request land` (a lease you hold yourself is the escape hatch); (c) deny blanket staging (`add -A`, `add .`, `commit -a`) when another agent shares the same *checkout* — worktrees have their own index and are exempt; (d) deny tree-destroying git (`reset --hard`, discarding `checkout`/`restore`, `clean -f`, `stash`) while any other agent is active on the project, since those wipe the whole shared tree's uncommitted work. Deny reasons name the holder/peers so the agent negotiates on the bus. Logic in `src/cabildo/guard.py`. |
 | `Stop` | refuse to go idle with unread URGENT mail — delivery is pull-based, so an idle agent is unreachable; the hook stops the stopping instead |
 | `SessionEnd` | deregister, drop the session's locks |
 
