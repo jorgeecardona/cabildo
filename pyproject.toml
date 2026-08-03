@@ -24,7 +24,12 @@ classifiers = [
     "Topic :: Communications :: Chat",
 ]
 dependencies = [
-    "mcp>=1.2",
+    # Upper-bounded on purpose. Both servers import `mcp.server.fastmcp.FastMCP`, and mcp 2.0 moved
+    # that to `mcp.server.mcpserver.MCPServer` — an unbounded declaration means a fresh install
+    # resolves to a version where our own import does not exist, and the failure shows up as a
+    # session whose MCP tools silently never appear. Relax this in the same commit that migrates
+    # the imports, not before.
+    "mcp>=1.2,<2",
 ]
 
 [project.urls]
