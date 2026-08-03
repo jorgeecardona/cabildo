@@ -98,9 +98,9 @@ DESTRUCTIVE = [
     "cd /repo && git reset --hard",
 ]
 
+# Branch switching moved OUT of SAFE on 2026-08-03: it is safe alone and in your own worktree,
+# and specifically unsafe in a checkout somebody else is standing in. See the tests at the bottom.
 SAFE = [
-    "git checkout -b feature",
-    "git checkout main",
     "git status",
     "git stash list",
     "git stash pop",
@@ -246,3 +246,48 @@ def test_blanket_stage_allowed_in_your_own_worktree(conn, clock, tmp_path):
 
     assert _bash(conn, "a", "git add -A") is None
     assert _bash(conn, "b", "git add -A") is None
+
+
+# --------------------------------------------------------------------------- #
+# Branch switching in a shared checkout — the hole that bit three repos
+# --------------------------------------------------------------------------- #
+def test_branch_switch_denied_when_another_agent_shares_the_checkout(conn):
+    """A checkout has one HEAD. Switching it moves everyone standing in that directory, silently,
+    and the next of them commits onto a branch it never chose. Happened three times on 2026-08-03;
+    in crm an agent landed three commits of unrelated work onto somebody else's feature branch."""
+    make_session(conn, "a", handle="mine", project="/repo/x", project_name="x")
+    make_session(conn, "b", handle="other", project="/repo/x", project_name="x")
+
+    for cmd in ("git checkout -b adopt-cabildo-issues",
+                "git checkout main",
+                "git switch -c feature",
+                "git branch -f main HEAD"):
+        reason = guard.deny_reason(conn, "a", "Bash", {"command": cmd})
+        assert reason and "other agent" in reason, cmd
+        assert "worktree add" in reason        # name the way out, not just the refusal
+
+
+def test_branch_switch_is_fine_when_alone(conn):
+    make_session(conn, "solo", handle="solo", project="/repo/solo", project_name="solo")
+    assert guard.deny_reason(conn, "solo", "Bash", {"command": "git checkout -b anything"}) is None
+
+
+def test_branch_switch_is_fine_from_your_own_worktree(conn):
+    """A worktree has its own HEAD, so switching it moves nobody. That is also the escape hatch the
+    denial points at, so it had better actually be allowed."""
+    make_session(conn, "a", handle="mine", project="/repo/y", project_name="y")
+    make_session(conn, "wt", handle="peer", project="/repo/y", project_name="y")
+    conn.execute("UPDATE sessions SET cwd=? WHERE session_id=?", ("/repo/y", "a"))
+    conn.execute("UPDATE sessions SET cwd=? WHERE session_id=?", ("/repo/y-wt", "wt"))
+    conn.commit()
+    assert guard.deny_reason(conn, "a", "Bash", {"command": "git checkout -b x"}) is None
+
+
+def test_reading_and_restoring_are_not_branch_switches(conn):
+    """`git checkout -- file` is a discard with its own denial and its own reason; bare `checkout`
+    prints. Neither should be reported as moving the branch."""
+    make_session(conn, "a", handle="mine", project="/repo/x", project_name="x")
+    make_session(conn, "b", handle="other", project="/repo/x", project_name="x")
+    for cmd in ("git status", "git branch", "git checkout", "git log --oneline"):
+        r = guard.deny_reason(conn, "a", "Bash", {"command": cmd})
+        assert r is None or "moves the branch" not in r, cmd

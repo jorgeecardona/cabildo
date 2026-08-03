@@ -251,6 +251,70 @@ def _deny_blanket_stage(
     )
 
 
+def _switches_branch(argv: list[str]) -> str | None:
+    """The label for a command that moves *this checkout's* HEAD, or None.
+
+    `checkout`/`switch` with a path restriction is a discard, not a switch — that is a different
+    denial with a different reason, and it is already handled above. `git branch -f/-M` is included
+    because moving a branch label that somebody else has checked out is the same accident wearing
+    different clothes.
+    """
+    sub, args = _git_subcommand(argv)
+    if sub in ("checkout", "switch"):
+        if "--" in args:
+            return None                     # `git checkout <tree-ish> -- <path>`: a restore
+        if any(a in ("-b", "-B", "-c", "-C") for a in args):
+            return f"git {sub} -b"
+        positional = [a for a in args if not a.startswith("-")]
+        if not positional:
+            return None                     # bare `git checkout`: prints, changes nothing
+        if sub == "checkout" and any(os.sep in a or os.path.exists(a) for a in positional):
+            return None                     # looks like a path, not a ref
+        return f"git {sub}"
+    if sub == "branch" and any(a in ("-f", "--force", "-M", "-m") for a in args):
+        return "git branch -f"
+    return None
+
+
+def _deny_branch_switch(
+    conn: sqlite3.Connection, me: sqlite3.Row, command: str
+) -> str | None:
+    """Deny changing the branch while another agent shares this exact working tree.
+
+    A checkout has ONE HEAD. Switching it moves every agent standing in that directory, and none of
+    them are told — so the next one commits onto a branch it never chose, believing it is still on
+    the one it started from. That is not hypothetical: it happened three times in this repo's own
+    fleet on 2026-08-03, and in one case an agent landed three commits of unrelated work onto
+    somebody else's feature branch before anyone noticed.
+
+    Worktrees have their own HEAD and are never affected, which is also the escape hatch: the answer
+    to "I need a branch" in a shared tree is a worktree, not a switch.
+    """
+    label = None
+    for argv in _argvs(command):
+        label = _switches_branch(argv)
+        if label:
+            break
+    if label is None or not me["cwd"]:
+        return None
+    mine = tree_root(me["cwd"])
+    sharers = [
+        p for p in store.active_sessions(conn, project=me["project"],
+                                         exclude=me["session_id"])
+        if p["cwd"] and tree_root(p["cwd"]) == mine
+    ]
+    if not sharers:
+        return None
+    who = ", ".join(store.display_name(p) for p in sharers[:5])
+    return (
+        f"cabildo: `{label}` moves the branch under {len(sharers)} other agent(s) "
+        f"({who}) standing in this same checkout — they are not told, and the next "
+        f"one commits onto a branch it never chose. Work in your own tree instead: "
+        f"`git worktree add ../wt-<name> -b <name>`. If you genuinely need this "
+        f"checkout switched, say so on the bus first and let them move."
+    )
+
+
 def _deny_file(conn: sqlite3.Connection, me: sqlite3.Row, path: str) -> str | None:
     abspath = PurePosixPath(path)
     rel: str | None = None
@@ -311,6 +375,7 @@ def deny_reason(
         return (
             _deny_push(conn, me, command)
             or _deny_blanket_stage(conn, me, command)
+            or _deny_branch_switch(conn, me, command)
             or _deny_destructive_git(conn, me, command)
         )
     key = _FILE_TOOLS.get(tool_name)
