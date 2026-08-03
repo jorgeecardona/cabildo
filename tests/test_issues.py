@@ -6,6 +6,8 @@ real folder on disk, and none of them touch the cabildo DB.
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from cabildo import issues, mcp_config
@@ -377,6 +379,43 @@ def test_find_folder_searches_upward_but_stops_at_the_repo(tmp_path):
     outside = tmp_path / "elsewhere"
     (outside / ".git").mkdir(parents=True)
     assert issues.find_folder(outside) is None
+
+
+def test_find_folder_never_adopts_an_ancestor_repos_register(tmp_path):
+    """One real project sits inside a journal repo that has its own everything. Filing this repo's
+    work into that queue would be worse than finding nothing."""
+    outer = tmp_path / "journal"
+    (outer / ".git").mkdir(parents=True)
+    (outer / "docs" / "issues").mkdir(parents=True)
+    inner = outer / "projects" / "thing"
+    (inner / ".git").mkdir(parents=True)
+    assert issues.find_folder(inner) is None
+
+
+def test_find_folder_accepts_the_other_conventional_layouts(tmp_path):
+    """A small library often has no docs/ at all, and one project keeps docs/ out of git wholesale.
+    Neither is a reason to be unable to keep a register."""
+    for n, parts in enumerate((("issues",), (".issues",))):
+        repo = tmp_path / f"repo{n}"
+        (repo / ".git").mkdir(parents=True)
+        (repo / pathlib.Path(*parts)).mkdir(parents=True)
+        assert issues.find_folder(repo) == repo / pathlib.Path(*parts)
+
+
+def test_issues_dir_env_var_wins(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "docs" / "issues").mkdir(parents=True)
+    (repo / "ops" / "followups").mkdir(parents=True)
+
+    monkeypatch.setenv("CABILDO_ISSUES_DIR", "ops/followups")
+    assert issues.find_folder(repo) == repo / "ops" / "followups"
+
+    monkeypatch.setenv("CABILDO_ISSUES_DIR", str(repo / "docs" / "issues"))
+    assert issues.find_folder(repo) == repo / "docs" / "issues"
+
+    monkeypatch.setenv("CABILDO_ISSUES_DIR", str(tmp_path / "nope"))
+    assert issues.find_folder(repo) is None
 
 
 # --------------------------------------------------------------------------- #

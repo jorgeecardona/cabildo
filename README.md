@@ -247,6 +247,28 @@ the back-link lets an issue cite an entry nobody wrote. `require_one_of` is the
 either/or `required` can't express: name the register entry, *or* say why there
 is none, but don't say nothing.
 
+### Open source, commercial, or neither
+
+Nothing here needs cabildo to be readable. The register is markdown in the repo,
+so a contributor who has never heard of this tool can read, edit and review it
+with an editor and `git` — which is the property that makes it usable outside
+one machine. Concretely:
+
+- **The gate skips rather than fails when cabildo is absent.** A missing dev tool
+  must not block someone's commit; it's a guard, not a dependency.
+- **`.mcp.json` is yours to track or ignore.** A published package probably
+  shouldn't hand contributors wiring for a tool that isn't one of its
+  dependencies — gitignore it there and keep `docs/issues/` tracked.
+- **The folder doesn't have to be `docs/issues`.** It's looked for at
+  `docs/issues`, `issues`, then `.issues`, and `CABILDO_ISSUES_DIR` overrides all
+  three. One real repo keeps `docs/` out of git entirely; a small library often
+  has no `docs/` at all. Neither is a reason to be unable to keep a register.
+- **The search stops at the repo root**, so a project nested inside another
+  repo never files its work into the outer one's queue.
+- **Nothing leaves the machine.** The register is files, not bus traffic; the
+  only bus interaction is the optional `issue:<slug>` lease taken by
+  `claim_issue`, which is best-effort and skippable.
+
 Statuses are `open → in-progress → done`, with `blocked` off to the side.
 **Closing keeps the file** and requires `fixed_in` — the sha that landed on the
 mainline, not one from a worktree that will be pruned — so the folder is a record

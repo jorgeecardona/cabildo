@@ -55,12 +55,18 @@ from __future__ import annotations
 import dataclasses
 import datetime as _dt
 import enum
+import os
 import pathlib
 import re
 import tomllib
 from collections.abc import Iterable, Mapping
 
-FOLDER_PARTS = ("docs", "issues")
+#: Where a register may live, in the order it is looked for. `docs/issues` is the convention and
+#: stays first; the others exist because a repo does not always get to choose. One project keeps
+#: `docs/` out of git wholesale, and a small library often has no `docs/` at all — neither is a
+#: reason to be unable to keep a register. `CABILDO_ISSUES_DIR` overrides all of it.
+FOLDER_CANDIDATES = (("docs", "issues"), ("issues",), (".issues",))
+FOLDER_PARTS = FOLDER_CANDIDATES[0]
 CONFIG_NAME = "config.toml"
 README_NAME = "README.md"
 
@@ -1000,13 +1006,32 @@ def infer_config(folder: pathlib.Path) -> str:
 
 
 def find_folder(start: pathlib.Path) -> pathlib.Path | None:
-    """This project's `docs/issues/`, searching upward from `start` — so the server works from any
-    subdirectory of the repo, which is where sessions actually run."""
+    """This project's register, searching upward from `start` — so the server works from any
+    subdirectory of the repo, which is where sessions actually run.
+
+    `CABILDO_ISSUES_DIR` wins outright when set (absolute, or relative to each level searched):
+    a project whose layout the conventions don't fit should be able to say so once, rather than be
+    told its register is in the wrong place.
+
+    The walk stops at the repo root. A register belongs to a project, and silently adopting an
+    ancestor's — a monorepo's, or in one real case a journal repo that a project happens to sit
+    inside — would file this repo's work in somebody else's queue.
+    """
+    override = os.environ.get("CABILDO_ISSUES_DIR", "").strip()
+    if override:
+        direct = pathlib.Path(override).expanduser()
+        if direct.is_absolute():
+            return direct if direct.is_dir() else None
+        candidates: tuple[tuple[str, ...], ...] = (tuple(direct.parts),)
+    else:
+        candidates = FOLDER_CANDIDATES
+
     here = start.resolve()
     for base in (here, *here.parents):
-        candidate = base.joinpath(*FOLDER_PARTS)
-        if candidate.is_dir():
-            return candidate
+        for parts in candidates:
+            found = base.joinpath(*parts)
+            if found.is_dir():
+                return found
         if (base / ".git").exists():
             break
     return None
