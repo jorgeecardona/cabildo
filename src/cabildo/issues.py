@@ -203,6 +203,37 @@ class Config:
     #: Group the open work by a list field (tags, usually) under the table. Two issues that share a
     #: tag are usually one afternoon's work; the flat table cannot show that.
     index_group_by: str = ""
+    #: The field whose declared `values` order ranks the board. Defaults to `priority` when a
+    #: field of that name declares values, which is what these folders already called it.
+    rank_by: str = ""
+
+    @property
+    def ranking(self) -> Field | None:
+        """The field that decides what comes first.
+
+        `rank_by` names it; with nothing named, a field literally called `priority` that declares
+        its values is used, because that is what every one of these folders called it without being
+        asked. Declaration order IS the ranking — `values = ["P0", "P1", "P2"]` says P0 first — so
+        there is no second place to keep the order in and no way for the two to disagree.
+        """
+        name = self.rank_by or "priority"
+        field = self.fields.get(name)
+        return field if field is not None and field.values else None
+
+    def rank_key(self, issue: "Issue") -> tuple:
+        """Sort order for the board: priority first, then the folder's own area order, then age.
+
+        Priority dominates on purpose. A P0 in the area someone happened to list last is still the
+        most important thing in the repo, and a board that buries it is worse than no board.
+        """
+        areas = {a: n for n, a in enumerate(self.areas)}
+        field = self.ranking
+        rank = len(field.values) if field else 0
+        if field is not None:
+            value = issue.extra.get(field.name)
+            if isinstance(value, str) and value in field.values:
+                rank = field.values.index(value)
+        return (rank, areas.get(issue.area, len(areas)), issue.filed)
 
     @property
     def filename_re(self) -> re.Pattern[str]:
@@ -270,6 +301,7 @@ def load_config(folder: pathlib.Path) -> Config:
         check_body_shas=bool(raw.get("check_body_shas", False)),
         index_done=bool(raw.get("index_done", False)),
         index_group_by=str(raw.get("index_group_by", "") or ""),
+        rank_by=str(raw.get("rank_by", "") or ""),
     )
 
 
@@ -560,8 +592,7 @@ def board(folder: pathlib.Path, config: Config | None = None, *, owner: str | No
         else:
             ready.append(issue)
 
-    order = {a: n for n, a in enumerate(config.areas)}
-    ready.sort(key=lambda i: (order.get(i.area, len(order)), i.filed))
+    ready.sort(key=config.rank_key)
     return Board(
         ready=tuple(ready),
         waiting=tuple(waiting),

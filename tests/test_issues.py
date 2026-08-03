@@ -708,3 +708,47 @@ def test_apply_is_idempotent_and_remove_leaves_other_servers_alone(tmp_path):
     _, what = mcp_config.remove(root)
     assert what == "removed"
     assert set(mcp_config.load(root)["mcpServers"]) == {"theirs"}
+
+
+# --------------------------------------------------------------------------- #
+# The cue — measured behaviour, not a hope
+# --------------------------------------------------------------------------- #
+def test_the_session_cue_is_silent_without_a_register(tmp_path):
+    """Most projects have no register. A banner line that says "0 issues" in all of them is the
+    kind of noise agents learn to skip, which costs the projects that DO have one."""
+    from cabildo import notify
+
+    (tmp_path / ".git").mkdir()
+    assert notify.register_line(str(tmp_path)) is None
+    assert notify.register_line(None) is None
+
+
+def test_the_session_cue_names_the_top_ranked_item(tmp_path):
+    """A count is an invitation; a title is a fact. `board` was described as "start here" and was
+    still the least-used tool, because a tool description is read once you are already choosing a
+    tool. This lands before that."""
+    from cabildo import notify
+
+    d = tmp_path / "docs" / "issues"
+    d.mkdir(parents=True)
+    (d / issues.CONFIG_NAME).write_text(
+        'areas = ["ci"]\nindex = false\n\n[fields.priority]\nvalues = ["P0", "P1"]\n'
+    )
+    write(d, "01-08-2026-small.md", "title: Small thing\nstatus: open\narea: ci\npriority: P1")
+    write(d, "02-08-2026-urgent.md", "title: Urgent thing\nstatus: open\narea: ci\npriority: P0")
+
+    line = notify.register_line(str(tmp_path))
+    assert line is not None
+    assert "2 ready" in line
+    assert "next: [P0] Urgent thing — urgent" in line     # ranked, not just first by date
+    assert "`board`" in line and "`file_issue`" in line
+
+
+def test_the_cue_survives_a_broken_register(tmp_path):
+    """A malformed config must never cost somebody a session."""
+    from cabildo import notify
+
+    d = tmp_path / "docs" / "issues"
+    d.mkdir(parents=True)
+    (d / issues.CONFIG_NAME).write_text("this is not valid toml {{{")
+    assert notify.register_line(str(tmp_path)) is None

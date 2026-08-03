@@ -3,6 +3,7 @@ these land in the model's context every turn, so brevity matters."""
 
 from __future__ import annotations
 
+import pathlib
 import sqlite3
 
 from . import store
@@ -73,6 +74,110 @@ def urgent_block_reason(conn: sqlite3.Connection, session_id: str) -> str | None
     return "\n".join(lines)
 
 
+_CONDITION_MARK = {"critical": "🚨", "warn": "⚠", "info": "ℹ"}
+
+
+def condition_text(
+    conn: sqlite3.Connection, session_id: str, *, mark: bool = True
+) -> str | None:
+    """Machine-wide conditions this session hasn't been told about yet.
+
+    This is the nudge channel for things no agent can see from inside its own
+    turn: the box is out of RAM, dead agents left processes running, CI is down.
+    Injected once per episode — a condition that merely persists says nothing on
+    the next tool call, which is what makes it affordable to check every time.
+
+    The `by_session` payload is what stops this being ambient anxiety. Every
+    agent reads the same headline, but the one actually holding the memory is
+    told so, in the second line, and only it is being asked to act."""
+    rows = store.undelivered_conditions(conn, session_id)
+    if not rows:
+        return None
+
+    lines: list[str] = []
+    for c in rows:
+        if c["state"] == "cleared":
+            lines.append(f"✅ cabildo · {c['key']} cleared: {c['headline']}")
+            continue
+        lines.append(
+            f"{_CONDITION_MARK.get(c['level'], '⚠')} cabildo alert · "
+            f"{c['key']} [{c['level']}]: {c['headline']}"
+        )
+        mine = (c["data"].get("by_session") or {}).get(session_id)
+        if mine:
+            what = ", ".join(f"{p['what']} ({p['rss_mb']}M)" for p in mine.get("procs", []))
+            lines.append(
+                f"   YOU are holding {mine['rss_mb'] / 1024:.1f}G in "
+                f"{mine['count']} process(es){': ' + what if what else ''}"
+            )
+        for p in (c["data"].get("procs") or [])[:4]:
+            lines.append(f"   · pid {p['pid']} {p['what']} ({p['rss_mb']}M, "
+                         f"{p['age']} old, from {p['who']})")
+        if c["advice"]:
+            lines.append(f"   → {c['advice']}")
+
+    if mark:
+        store.mark_conditions_delivered(conn, session_id, rows)
+    return "\n".join(lines)
+
+
+def _join(*parts: str | None) -> str | None:
+    """Stitch several injections into one additionalContext blob, dropping the
+    silent ones. Hooks emit at most one string, so anything with something to
+    say has to share the slot."""
+    kept = [p for p in parts if p]
+    return "\n".join(kept) if kept else None
+
+
+def register_line(cwd: str | None, handle: str | None = None) -> str | None:
+    """One line about this project's issue register, or None when it has none.
+
+    Measured, not guessed: over the first five hours across three repos, agents called `file_issue`
+    thirteen times and `board` four. They use the register to record and almost never to plan —
+    reasonably, since each arrives already told what to do. Naming the tool "start here" in its own
+    description did not change that, because a tool description is read when you are already
+    choosing a tool.
+
+    So the cue goes where an agent looks before it has chosen anything, states the count so the
+    board is a fact rather than an invitation, and names the top-ranked item so "there is ordered
+    work here" is concrete. Silent when there is no register, which is most projects.
+    """
+    if not cwd:
+        return None
+    try:
+        from . import issues
+
+        folder = issues.find_folder(pathlib.Path(cwd))
+        if folder is None:
+            return None
+        config = issues.load_config(folder)
+        board = issues.board(folder, config, owner=handle)
+    except Exception:
+        return None                      # a broken register must never cost anyone a session
+    if not (board.ready or board.mine or board.waiting):
+        return None
+
+    bits = [f"{len(board.ready)} ready"]
+    if board.waiting:
+        bits.append(f"{len(board.waiting)} waiting")
+    if board.mine:
+        bits.append(f"{len(board.mine)} yours")
+    line = f"📋 register: {', '.join(bits)} — `board` to plan, `file_issue` for what you "
+    line += "find and won't fix now."
+    if board.ready:
+        top = board.ready[0]
+        rank = config.ranking
+        mark = ""
+        if rank is not None:
+            value = top.extra.get(rank.name)
+            if isinstance(value, str):
+                mark = f"[{value}] "
+        # The top item by name, because a count is an invitation and a title is a fact. The slug is
+        # what `show_issue`/`claim_issue` take, so this line can be acted on without a lookup.
+        line += f"\n   next: {mark}{top.title[:64]} — {top.slug}"
+    return line
+
+
 def session_banner(conn: sqlite3.Connection, session_id: str) -> str:
     """Fuller status for SessionStart: who you are, who else is online on this
     project, active locks, unread count."""
@@ -106,6 +211,10 @@ def session_banner(conn: sqlite3.Connection, session_id: str) -> str:
     if s["count"]:
         lines.append(f"📬 {s['count']} unread message(s) — call `inbox`.")
 
+    reg = register_line(me["cwd"] if me else None, me["handle"] if me else None)
+    if reg:
+        lines.append(reg)
+
     lines.append(
         "Coordinate with other agents via: send / inbox / read / list_agents / "
         "claim / release / claims. Messages are NOT auto-read — mark them with `read`."
@@ -123,4 +232,10 @@ def session_banner(conn: sqlite3.Connection, session_id: str) -> str:
             "Stage explicit paths — `git add -A` in a shared checkout commits "
             "their unfinished work."
         )
+    # Last, and marked delivered here: a session starting onto a machine that is
+    # already out of RAM should learn it before its first tool call, not after
+    # the build it was about to launch.
+    conditions = condition_text(conn, session_id)
+    if conditions:
+        lines.append(conditions)
     return "\n".join(lines)
