@@ -58,6 +58,8 @@ import enum
 import os
 import pathlib
 import re
+import shutil
+import subprocess
 import tomllib
 from collections.abc import Iterable, Mapping
 
@@ -92,6 +94,15 @@ CORE_ORDER = ("title", "status", "area", "owner", "filed", "blocked_by", "fixed_
 # --------------------------------------------------------------------------- #
 # What a folder requires of its issues
 # --------------------------------------------------------------------------- #
+#: Named patterns, so a config says what it means instead of carrying a regex. Anything not named
+#: here is used as a regex directly.
+PATTERNS = {
+    "kebab": r"^[a-z0-9]+(-[a-z0-9]+)*$",
+    "sha": r"^[0-9a-f]{7,40}$",
+    "slug": r"^[a-z0-9]+(-[a-z0-9]+)*$",
+}
+
+
 @dataclasses.dataclass(frozen=True)
 class Field:
     """One project-declared front-matter field beyond the core."""
@@ -104,6 +115,16 @@ class Field:
     #: link back to the issue. One direction is not enough: a register that names a gap but does
     #: not point at the task is how the same gap gets found four times and fixed zero.
     crossref: str = ""
+    #: `kebab`, `sha`, `slug`, or a regex. For fields whose shape matters but whose values cannot be
+    #: enumerated — a tag vocabulary grows, but `Roast Detect` and `roast-detect` must not both
+    #: exist, because then neither groups with the other.
+    pattern: str = ""
+
+    @property
+    def regex(self) -> re.Pattern[str] | None:
+        if not self.pattern:
+            return None
+        return re.compile(PATTERNS.get(self.pattern, self.pattern))
 
     def problems(self, value) -> list[str]:
         if value is None or value == ():
@@ -111,12 +132,19 @@ class Field:
         got = value if isinstance(value, tuple) else (value,)
         if isinstance(value, tuple) and not self.is_list:
             return [f"`{self.name}` is a list, but this folder declares it a scalar"]
-        if not self.values:
-            return []
-        return [
-            f"unknown {self.name} {v!r} — one of {', '.join(self.values)}"
-            for v in got if v not in self.values
-        ]
+        out = []
+        if self.values:
+            out += [
+                f"unknown {self.name} {v!r} — one of {', '.join(self.values)}"
+                for v in got if v not in self.values
+            ]
+        rx = self.regex
+        if rx is not None:
+            out += [
+                f"{self.name} {v!r} does not match {self.pattern}"
+                for v in got if not rx.match(v)
+            ]
+        return out
 
 
 @dataclasses.dataclass(frozen=True)
@@ -139,6 +167,36 @@ class Config:
     #: is worth scanning is exactly what the folder chose to track — scope and verify in one repo,
     #: priority in another. Core columns are always there.
     index_fields: tuple[str, ...] = ()
+    #: The front matter, in the order it must appear. When set it does three jobs at once: `check`
+    #: enforces the order, `render` writes exactly these keys (so a field the folder does not want —
+    #: `filed`, say, which the filename already carries — is never added behind its back), and with
+    #: `strict_fields` it is the allowed set. Front matter is then a schema rather than a bag.
+    field_order: tuple[str, ...] = ()
+    #: Reject any front-matter key not in `field_order`. Off by default: preserving a key you do not
+    #: recognise is the safer failure. On, when a folder wants its schema closed.
+    strict_fields: bool = False
+    #: `fixed_in` must name a commit reachable from this branch. The sha that matters is the one
+    #: that LANDED — a worktree sha resolves until that worktree is pruned, and then the register
+    #: points at nothing.
+    fixed_in_on_branch: str = ""
+    #: Headings (regexes, matched at the start of a `## ` heading) every issue body must carry.
+    #: "Define done" is a rule every one of these folders states; this is the version that is
+    #: enforced instead of hoped for.
+    require_sections: tuple[str, ...] = ()
+    #: The one field/value pair exempt from `require_sections` — a hand-off records tree state and
+    #: resume order for work already in flight, so it carries no acceptance criteria of its own.
+    sections_exempt_field: str = ""
+    sections_exempt_values: tuple[str, ...] = ()
+    #: Check that short shas cited in issue bodies are still reachable from some branch. An issue
+    #: whose evidence is a commit that no longer exists is worse than one with no evidence: it reads
+    #: as verified.
+    check_body_shas: bool = False
+    #: Add a table of finished work to the index, with the sha that fixed each. Closing keeps the
+    #: file, so this is the payoff: "was this fixed, and by what?" answered by looking.
+    index_done: bool = False
+    #: Group the open work by a list field (tags, usually) under the table. Two issues that share a
+    #: tag are usually one afternoon's work; the flat table cannot show that.
+    index_group_by: str = ""
 
     @property
     def filename_re(self) -> re.Pattern[str]:
@@ -175,6 +233,7 @@ def load_config(folder: pathlib.Path) -> Config:
             values=tuple(spec.get("values", ()) or ()),
             is_list=bool(spec.get("list", False)),
             crossref=str(spec.get("crossref", "") or ""),
+            pattern=str(spec.get("pattern", "") or ""),
         )
     style = str(raw.get("date_style", "DMY")).upper()
     if style not in ("DMY", "YMD"):
@@ -182,6 +241,14 @@ def load_config(folder: pathlib.Path) -> Config:
     groups = tuple(
         tuple(g) for g in (raw.get("require_one_of", ()) or ()) if g
     )
+    order = tuple(raw.get("field_order", ()) or ())
+    missing = [k for k in ("title", "status", "area") if order and k not in order]
+    if missing:
+        raise IssueFormatError(
+            f"{path}: field_order omits {', '.join(missing)} — those are core and every issue "
+            f"must carry them, so leaving them out would make every file invalid"
+        )
+    sections = raw.get("sections") or {}
     return Config(
         areas=tuple(raw.get("areas", ()) or ()),
         fields=fields,
@@ -189,6 +256,15 @@ def load_config(folder: pathlib.Path) -> Config:
         date_style=style,
         require_one_of=groups,
         index_fields=tuple(raw.get("index_fields", ()) or ()),
+        field_order=order,
+        strict_fields=bool(raw.get("strict_fields", False)),
+        fixed_in_on_branch=str(raw.get("fixed_in_on_branch", "") or ""),
+        require_sections=tuple(sections.get("require", ()) or ()),
+        sections_exempt_field=str(sections.get("exempt_field", "") or ""),
+        sections_exempt_values=tuple(sections.get("exempt_values", ()) or ()),
+        check_body_shas=bool(raw.get("check_body_shas", False)),
+        index_done=bool(raw.get("index_done", False)),
+        index_group_by=str(raw.get("index_group_by", "") or ""),
     )
 
 
@@ -208,6 +284,9 @@ class Issue:
     #: everything this folder declares beyond the core, in file order. Preserved verbatim on write.
     extra: Mapping[str, str | tuple[str, ...]] = dataclasses.field(default_factory=dict)
     body: str = ""
+    #: the front-matter keys as they actually appeared, so `check` can grade the order. Set on read;
+    #: empty for an issue built in memory, which has no file order to be wrong about yet.
+    order: tuple[str, ...] = ()
 
     @property
     def slug(self) -> str:
@@ -335,6 +414,7 @@ def parse(text: str, path: pathlib.Path, config: Config = DEFAULT_CONFIG) -> Iss
         fixed_in=fixed_in if isinstance(fixed_in, str) else None,
         extra=extra,
         body=body,
+        order=tuple(fields),
     )
 
 
@@ -344,22 +424,54 @@ def _render_value(key: str, value) -> list[str]:
     return [f"{key}: {_quote(value)}"]
 
 
-def render(issue: Issue) -> str:
-    lines = [
-        "---",
-        f"title: {_quote(issue.title)}",
-        f"status: {issue.status}",
-        f"area: {issue.area}",
-        f"owner: {issue.owner or 'null'}",
-        f"filed: {issue.filed}",
-    ]
-    if issue.blocked_by:
-        lines += _render_value("blocked_by", issue.blocked_by)
-    if issue.fixed_in:
-        lines.append(f"fixed_in: {issue.fixed_in}")
-    for key, value in issue.extra.items():
-        lines += _render_value(key, value)
-    lines.append("---")
+def _core_values(issue: Issue) -> dict[str, str | tuple[str, ...] | None]:
+    return {
+        "title": issue.title,
+        "status": str(issue.status),
+        "area": issue.area,
+        "owner": issue.owner,
+        "filed": issue.filed,
+        "blocked_by": issue.blocked_by or None,
+        "fixed_in": issue.fixed_in,
+    }
+
+
+def render(issue: Issue, config: Config = DEFAULT_CONFIG) -> str:
+    """Front matter plus body.
+
+    With `field_order` set, exactly those keys are written, in that order, and an empty one is
+    omitted rather than written as null. That is what lets a folder keep a closed schema: a tool
+    that adds `filed:` on every save — a key the filename already carries — would make every write
+    fail a strict check, and the agent would have no idea why.
+    """
+    if config.field_order:
+        values = dict(_core_values(issue)) | dict(issue.extra)
+        lines = ["---"]
+        for key in config.field_order:
+            value = values.get(key)
+            if value is None or value == ():
+                continue
+            lines += (
+                _render_value(key, value) if isinstance(value, tuple)
+                else [f"{key}: {_quote(str(value))}"]
+            )
+        lines.append("---")
+    else:
+        lines = [
+            "---",
+            f"title: {_quote(issue.title)}",
+            f"status: {issue.status}",
+            f"area: {issue.area}",
+            f"owner: {issue.owner or 'null'}",
+            f"filed: {issue.filed}",
+        ]
+        if issue.blocked_by:
+            lines += _render_value("blocked_by", issue.blocked_by)
+        if issue.fixed_in:
+            lines.append(f"fixed_in: {issue.fixed_in}")
+        for key, value in issue.extra.items():
+            lines += _render_value(key, value)
+        lines.append("---")
     body = issue.body if issue.body.startswith("\n") else "\n" + issue.body
     return "\n".join(lines) + body
 
@@ -368,8 +480,8 @@ def load(path: pathlib.Path, config: Config = DEFAULT_CONFIG) -> Issue:
     return parse(path.read_text(), path, config)
 
 
-def save(issue: Issue) -> None:
-    issue.path.write_text(render(issue))
+def save(issue: Issue, config: Config = DEFAULT_CONFIG) -> None:
+    issue.path.write_text(render(issue, config))
 
 
 def load_all(
@@ -454,6 +566,69 @@ def board(folder: pathlib.Path, config: Config | None = None, *, owner: str | No
 # The invariants
 # --------------------------------------------------------------------------- #
 _LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
+_BODY_SHA_RE = re.compile(r"`([0-9a-f]{8,40})`")
+
+
+# --------------------------------------------------------------------------- #
+# Asking git — the checks a file alone cannot make
+# --------------------------------------------------------------------------- #
+# A register's claims point outward: `fixed_in` names a commit, and bodies cite shas as evidence.
+# Neither can be graded by reading the folder, and both fail in the same quiet way — the sha is
+# there, it looks right, and it resolves to nothing. Every helper degrades to "no opinion" when git
+# is missing or the folder is not in a repo, because a guard that cannot run must not invent a
+# verdict.
+def _repo_root(folder: pathlib.Path) -> pathlib.Path | None:
+    for base in (folder.resolve(), *folder.resolve().parents):
+        if (base / ".git").exists():
+            return base
+    return None
+
+
+class _Git:
+    """Git questions about one repo, asked at most once each.
+
+    `check` runs in a pre-commit hook over every issue in the folder, and issue bodies cite the same
+    commits repeatedly — without the cache a 40-issue register would fork git a few hundred times on
+    every commit.
+    """
+
+    def __init__(self, root: pathlib.Path | None):
+        self.root = root
+        self._cache: dict[tuple[str, str], bool] = {}
+
+    @property
+    def usable(self) -> bool:
+        return self.root is not None and bool(shutil.which("git"))
+
+    def _run(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", *args], cwd=self.root, capture_output=True, text=True, timeout=10
+        )
+
+    def _ask(self, kind: str, sha: str, fn) -> bool:
+        key = (kind, sha)
+        if key not in self._cache:
+            try:
+                self._cache[key] = fn()
+            except (OSError, subprocess.SubprocessError):
+                self._cache[key] = True      # cannot tell → do not accuse
+        return self._cache[key]
+
+    def is_commit(self, sha: str) -> bool:
+        return self._ask("commit", sha,
+                         lambda: self._run("cat-file", "-t", sha).stdout.strip() == "commit")
+
+    def on_any_branch(self, sha: str) -> bool:
+        return self._ask("branch", sha,
+                         lambda: bool(self._run("branch", "--contains", sha).stdout.strip()))
+
+    def is_ancestor(self, sha: str, branch: str) -> bool:
+        return self._ask(f"anc:{branch}", sha,
+                         lambda: self._run("merge-base", "--is-ancestor", sha, branch).returncode == 0)
+
+    def has_ref(self, ref: str) -> bool:
+        return self._ask("ref", ref,
+                         lambda: self._run("rev-parse", "--verify", "--quiet", ref).returncode == 0)
 
 
 def check(folder: pathlib.Path, config: Config | None = None) -> list[Problem]:
@@ -468,6 +643,7 @@ def check(folder: pathlib.Path, config: Config | None = None) -> list[Problem]:
     slugs = {i.slug for i in issues}
     open_slugs = {i.slug for i in issues if i.open}
     seen: dict[str, pathlib.Path] = {}
+    git = _Git(_repo_root(folder))
 
     for issue in issues:
         p = issue.path
@@ -489,6 +665,24 @@ def check(folder: pathlib.Path, config: Config | None = None) -> list[Problem]:
                 Problem(p, "status is `done` with no `fixed_in` — name the sha that landed on the "
                            "mainline, or the folder stops being evidence of anything")
             )
+        if issue.status is not Status.DONE and issue.fixed_in:
+            problems.append(
+                Problem(p, f"`fixed_in: {issue.fixed_in}` on an issue that is `{issue.status}` — "
+                           f"either it landed and this is done, or the sha does not belong here")
+            )
+        problems.extend(_fixed_in_problems(issue, config, git))
+        problems.extend(_section_problems(issue, config))
+        problems.extend(_body_sha_problems(issue, config, git))
+        if config.field_order:
+            expected = [k for k in config.field_order if k in issue.order]
+            if list(issue.order) != expected and issue.order:
+                problems.append(Problem(
+                    p, f"front matter order {list(issue.order)} != {expected}",
+                ))
+            if config.strict_fields:
+                for key in issue.order:
+                    if key not in config.field_order:
+                        problems.append(Problem(p, f"unknown field {key!r}"))
         if issue.status is Status.IN_PROGRESS and not issue.owner:
             problems.append(Problem(p, "in-progress with no owner — say who is doing it"))
         if issue.status is Status.BLOCKED and not issue.owner and not issue.blocked_by:
@@ -556,6 +750,69 @@ def _crossrefs(
                     f"{target.name} does not link back to this file — without the back-link the "
                     f"task is invisible from the register that is supposed to track it",
                 ))
+    return out
+
+
+def _fixed_in_problems(issue: Issue, config: Config, git: _Git) -> list[Problem]:
+    """Grade the sha a closed issue points at.
+
+    `fixed_in` is the whole reason closing keeps the file: it is the answer to "was this fixed, and
+    by what?". A sha that does not resolve, or that only resolves inside the worktree it was written
+    in, answers that question wrongly and confidently — which is worse than not answering it.
+    """
+    branch = config.fixed_in_on_branch
+    if not issue.fixed_in or not branch or not git.usable:
+        return []
+    sha = issue.fixed_in
+    if not re.match(PATTERNS["sha"], sha):
+        return [Problem(issue.path, f"fixed_in {sha!r} is not a sha")]
+    if not git.is_commit(sha):
+        return [Problem(issue.path, f"fixed_in {sha} is not a commit in this repo")]
+    if not git.has_ref(branch):
+        return []          # no such branch here (a fresh clone, a fork) — no opinion
+    if not git.is_ancestor(sha, branch):
+        return [Problem(
+            issue.path,
+            f"fixed_in {sha} is not on {branch} — record the sha that LANDED, not the worktree "
+            f"one; the land path re-commits, and a worktree sha resolves only until it is pruned",
+        )]
+    return []
+
+
+def _section_problems(issue: Issue, config: Config) -> list[Problem]:
+    """"Define done" is a rule every one of these folders states. This is the enforced version.
+
+    The exemption is real work, not a loophole: a hand-off records tree state and resume order for
+    work already in flight, so it has no acceptance criteria of its own — it points at the issues
+    that do.
+    """
+    if not config.require_sections:
+        return []
+    exempt_value = issue.extra.get(config.sections_exempt_field) if config.sections_exempt_field else None
+    if isinstance(exempt_value, str) and exempt_value in config.sections_exempt_values:
+        return []
+    headings = re.findall(r"^##+\s*(.+)$", issue.body, re.M)
+    out = []
+    for wanted in config.require_sections:
+        rx = re.compile(wanted)
+        if not any(rx.match(h.strip()) for h in headings):
+            out.append(Problem(issue.path, f"no '## {wanted}' section — say how this gets closed"))
+    return out
+
+
+def _body_sha_problems(issue: Issue, config: Config, git: _Git) -> list[Problem]:
+    """A cited commit that is on no branch dies at the next gc, and the citation reads as evidence
+    right up until someone tries to follow it."""
+    if not config.check_body_shas or not git.usable:
+        return []
+    out = []
+    for sha in sorted(set(_BODY_SHA_RE.findall(issue.body))):
+        if git.is_commit(sha) and not git.on_any_branch(sha):
+            out.append(Problem(
+                issue.path,
+                f"cites {sha}, which is on no branch — it dies at the next gc, and until then it "
+                f"reads as evidence",
+            ))
     return out
 
 
@@ -641,14 +898,45 @@ def _index_table(issues: tuple[Issue, ...], config: Config = DEFAULT_CONFIG) -> 
                 f"{issue.status}{owner}", blockers,
             ]) + " |"
         )
+    done = [i for i in issues if not i.open]
+    if config.index_group_by:
+        grouped = _index_groups(live, config.index_group_by)
+        if grouped:
+            rows += ["", f"**By {config.index_group_by}**", "", grouped]
+    if config.index_done and done:
+        rows += ["", "**Done**", "", "| Issue | Area | Fixed in |", "|---|---|---|"]
+        rows += [
+            f"| [{i.title}]({i.path.name}) | {i.area} | `{i.fixed_in or '?'}` |"
+            for i in sorted(done, key=lambda i: (i.area, i.path.name))
+        ]
+
     counts = ", ".join(
         f"{sum(1 for i in live if i.status is s)} {s}"
         for s in Status if any(i.status is s for i in live)
     )
-    closed = len(issues) - len(live)
-    tail = f"{len(live)} open — {counts}" + (f"; {closed} done" if closed else "")
+    tail = f"{len(live)} open — {counts}" + (f"; {len(done)} done" if done else "")
     rows += ["", f"_{tail}. Generated; edit the files, then `cabildo issues reindex`._"]
     return "\n".join(rows)
+
+
+def _index_groups(live: list[Issue], key: str) -> str:
+    """Open work grouped by a list field. Only groups of two or more: a "group" of one is the flat
+    table again with extra steps, and it buries the clusters that are the point."""
+    index: dict[str, list[Issue]] = {}
+    for issue in live:
+        value = issue.extra.get(key)
+        for item in (value if isinstance(value, tuple) else (value,) if value else ()):
+            index.setdefault(str(item), []).append(issue)
+    shared = {k: v for k, v in index.items() if len(v) > 1}
+    lines = [
+        f"- **`{k}`** ({len(shared[k])}) — "
+        + ", ".join(f"[{i.slug}]({i.path.name})" for i in sorted(shared[k], key=lambda i: i.path.name))
+        for k in sorted(shared, key=lambda k: (-len(shared[k]), k))
+    ]
+    singles = sorted(k for k in index if len(index[k]) == 1)
+    if singles:
+        lines += ["", "Single-use: " + ", ".join(f"`{s}`" for s in singles) + "."]
+    return "\n".join(lines)
 
 
 def render_index(folder: pathlib.Path, config: Config | None = None) -> str:
@@ -740,7 +1028,7 @@ def file_issue(
     ]
     if missing:
         raise IssueFormatError("; ".join(missing))
-    save(issue)
+    save(issue, config)
     _touch_index(folder, config)
     return path
 
@@ -754,7 +1042,7 @@ def update(
     issue = load(resolve(folder, name), config)
     extra = dict(issue.extra) | dict(changes.pop("extra", None) or {})
     updated = dataclasses.replace(issue, extra=extra, **changes)
-    save(updated)
+    save(updated, config)
     _touch_index(folder, config)
     return updated
 
@@ -773,7 +1061,7 @@ def claim(
         )
     status = Status.IN_PROGRESS if issue.status is Status.OPEN else issue.status
     updated = dataclasses.replace(issue, owner=owner, status=status)
-    save(updated)
+    save(updated, config)
     _touch_index(folder, config)
     return updated
 
@@ -785,7 +1073,7 @@ def release(folder: pathlib.Path, name: str, config: Config | None = None) -> Is
     issue = load(resolve(folder, name), config)
     status = Status.OPEN if issue.status is Status.IN_PROGRESS else issue.status
     updated = dataclasses.replace(issue, owner=None, status=status)
-    save(updated)
+    save(updated, config)
     _touch_index(folder, config)
     return updated
 
@@ -801,7 +1089,7 @@ def close(
         raise IssueFormatError("fixed_in is required — name the commit that landed the fix")
     issue = load(resolve(folder, name), config)
     updated = dataclasses.replace(issue, status=Status.DONE, fixed_in=fixed_in.strip())
-    save(updated)
+    save(updated, config)
     _touch_index(folder, config)
     return updated
 

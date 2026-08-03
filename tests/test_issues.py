@@ -7,6 +7,7 @@ real folder on disk, and none of them touch the cabildo DB.
 from __future__ import annotations
 
 import pathlib
+import subprocess
 
 import pytest
 
@@ -263,6 +264,25 @@ def test_index_can_carry_the_folders_own_fields_as_columns(tmp_path):
     assert "| M | probe |" in table
 
 
+def test_index_can_carry_done_work_and_tag_groups(tmp_path):
+    d = tmp_path / "docs" / "issues"
+    d.mkdir(parents=True)
+    (d / issues.CONFIG_NAME).write_text(
+        'areas = ["ci"]\nindex_done = true\nindex_group_by = "tags"\n\n'
+        "[fields.tags]\nlist = true\n"
+    )
+    write(d, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\ntags:\n  - marks\n  - solo")
+    write(d, "03-08-2026-b.md", "title: B\nstatus: open\narea: ci\ntags:\n  - marks")
+    write(d, "03-08-2026-c.md", "title: C\nstatus: done\narea: ci\nfixed_in: abc1234")
+    table = issues.render_index(d)
+
+    assert "**`marks`** (2)" in table          # shared tags group...
+    assert "**`solo`**" not in table           # ...a group of one is the flat table again
+    assert "Single-use: `solo`." in table
+    assert "| [C](03-08-2026-c.md) | ci | `abc1234` |" in table   # done, with what fixed it
+    assert "1 done" in table
+
+
 def test_index_shows_open_work_and_counts_the_done(folder):
     write(folder, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\nscope: S")
     write(folder, "03-08-2026-b.md",
@@ -318,6 +338,185 @@ def test_crossref_at_a_missing_path_is_the_configs_problem(tmp_path):
     problems = issues.check(d)
     assert any("does not exist" in p.message and p.path.name == issues.CONFIG_NAME
                for p in problems)
+
+
+# --------------------------------------------------------------------------- #
+# The stricter invariants, learned from crm's scripts/issue_index.py
+# --------------------------------------------------------------------------- #
+ORDERED = """
+areas = ["ci"]
+index = false
+field_order = ["title", "type", "area", "status", "fixed_in", "owner"]
+strict_fields = true
+
+[fields.type]
+required = true
+values = ["issue", "handoff"]
+"""
+
+
+@pytest.fixture()
+def ordered(tmp_path):
+    d = tmp_path / "docs" / "issues"
+    d.mkdir(parents=True)
+    (d / issues.CONFIG_NAME).write_text(ORDERED)
+    return d
+
+
+def test_field_order_is_enforced(ordered):
+    write(ordered, "03-08-2026-a.md", "title: A\narea: ci\ntype: issue\nstatus: open")
+    assert any("front matter order" in p.message for p in issues.check(ordered))
+    write(ordered, "03-08-2026-a.md", "title: A\ntype: issue\narea: ci\nstatus: open")
+    assert issues.check(ordered) == []
+
+
+def test_strict_fields_rejects_a_key_the_folder_never_declared(ordered):
+    write(ordered, "03-08-2026-a.md",
+          "title: A\ntype: issue\narea: ci\nstatus: open\nwhatever: hm")
+    assert any("unknown field 'whatever'" in p.message for p in issues.check(ordered))
+
+
+def test_writes_stay_inside_the_declared_schema(ordered):
+    """The blocker that stopped crm adopting: a tool that adds `filed:` on every save makes every
+    write fail a strict check, and the agent has no idea why."""
+    write(ordered, "03-08-2026-a.md", "title: A\ntype: issue\narea: ci\nstatus: open")
+    issues.claim(ordered, "a", owner="qa")
+    text = (ordered / "03-08-2026-a.md").read_text()
+    assert "filed:" not in text          # not in field_order → never written
+    assert "owner: qa" in text
+    assert issues.check(ordered) == []   # ...and the folder is still clean afterwards
+
+    issues.close(ordered, "a", fixed_in="deadbee")
+    assert issues.check(ordered) == []
+
+
+def test_field_order_must_carry_the_core(tmp_path):
+    d = tmp_path / "docs" / "issues"
+    d.mkdir(parents=True)
+    (d / issues.CONFIG_NAME).write_text('areas = ["ci"]\nfield_order = ["title", "area"]\n')
+    with pytest.raises(issues.IssueFormatError, match="field_order omits status"):
+        issues.load_config(d)
+
+
+def test_pattern_catches_a_tag_that_will_not_group(tmp_path):
+    d = tmp_path / "docs" / "issues"
+    d.mkdir(parents=True)
+    (d / issues.CONFIG_NAME).write_text(
+        'areas = ["ci"]\nindex = false\n\n[fields.tags]\nlist = true\npattern = "kebab"\n'
+    )
+    write(d, "03-08-2026-a.md",
+          "title: A\nstatus: open\narea: ci\ntags:\n  - roast-detect\n  - Roast Detect")
+    problems = issues.check(d)
+    assert any("'Roast Detect' does not match kebab" in p.message for p in problems)
+    assert not any("roast-detect'" in p.message for p in problems)
+
+
+def test_fixed_in_is_forbidden_on_an_unfinished_issue(folder):
+    write(folder, "03-08-2026-a.md",
+          "title: A\nstatus: open\narea: ci\nscope: S\nfixed_in: abc1234")
+    assert any("on an issue that is `open`" in p.message for p in issues.check(folder))
+
+
+def test_fixed_in_must_be_a_real_commit_on_the_named_branch(tmp_path):
+    """A worktree sha resolves until that worktree is pruned, and then the register points at
+    nothing — while still looking like evidence."""
+    repo = tmp_path / "repo"
+    d = repo / "docs" / "issues"
+    d.mkdir(parents=True)
+    (d / issues.CONFIG_NAME).write_text(
+        'areas = ["ci"]\nindex = false\nfixed_in_on_branch = "main"\n'
+    )
+    run = lambda *a: subprocess.run(a, cwd=repo, capture_output=True, check=True)
+    run("git", "init", "-q", "-b", "main")
+    run("git", "config", "user.email", "t@t"); run("git", "config", "user.name", "t")
+    run("git", "add", "-A"); run("git", "commit", "-qm", "one")
+    landed = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo,
+                            capture_output=True, text=True).stdout.strip()
+
+    # a commit on a side branch — real, resolvable, and NOT on main
+    run("git", "checkout", "-qb", "side")
+    (repo / "x.txt").write_text("x")
+    run("git", "add", "-A"); run("git", "commit", "-qm", "two")
+    stray = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo,
+                           capture_output=True, text=True).stdout.strip()
+    run("git", "checkout", "-q", "main")
+
+    write(d, "03-08-2026-a.md", f"title: A\nstatus: done\narea: ci\nfixed_in: {stray}")
+    assert any("is not on main" in p.message for p in issues.check(d))
+
+    write(d, "03-08-2026-a.md", "title: A\nstatus: done\narea: ci\nfixed_in: 0000000")
+    assert any("is not a commit" in p.message for p in issues.check(d))
+
+    write(d, "03-08-2026-a.md", f"title: A\nstatus: done\narea: ci\nfixed_in: {landed}")
+    assert issues.check(d) == []
+
+
+def test_required_sections_with_a_per_type_exemption(tmp_path):
+    d = tmp_path / "docs" / "issues"
+    d.mkdir(parents=True)
+    (d / issues.CONFIG_NAME).write_text("""
+areas = ["ci"]
+index = false
+
+[fields.type]
+values = ["issue", "handoff"]
+
+[sections]
+require = ["Acceptance criteria", "Tests?\\\\b|The test"]
+exempt_field = "type"
+exempt_values = ["handoff"]
+""")
+    write(d, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\ntype: issue",
+          body="\njust prose.\n")
+    msgs = " ".join(p.message for p in issues.check(d))
+    assert "Acceptance criteria" in msgs and "The test" in msgs
+
+    # a hand-off carries no acceptance criteria of its own — it points at the issues that do
+    write(d, "03-08-2026-b.md", "title: B\nstatus: open\narea: ci\ntype: handoff",
+          body="\nresume order.\n")
+    assert not any(p.path.name == "03-08-2026-b.md" for p in issues.check(d))
+
+    write(d, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\ntype: issue",
+          body="\n## Acceptance criteria\n\nx\n\n## Test\n\ny\n")
+    assert issues.check(d) == []
+
+
+def test_a_cited_sha_on_no_branch_is_flagged(tmp_path):
+    repo = tmp_path / "repo"
+    d = repo / "docs" / "issues"
+    d.mkdir(parents=True)
+    (d / issues.CONFIG_NAME).write_text(
+        'areas = ["ci"]\nindex = false\ncheck_body_shas = true\n'
+    )
+    run = lambda *a: subprocess.run(a, cwd=repo, capture_output=True, check=True)
+    run("git", "init", "-q", "-b", "main")
+    run("git", "config", "user.email", "t@t"); run("git", "config", "user.name", "t")
+    run("git", "add", "-A"); run("git", "commit", "-qm", "one")
+    run("git", "checkout", "-qb", "doomed")
+    (repo / "x.txt").write_text("x")
+    run("git", "add", "-A"); run("git", "commit", "-qm", "two")
+    orphan = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
+                            capture_output=True, text=True).stdout.strip()[:8]
+    run("git", "checkout", "-q", "main")
+
+    write(d, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci",
+          body=f"\nproved by `{orphan}`.\n")
+    assert issues.check(d) == []              # still on `doomed`, so still reachable
+
+    run("git", "branch", "-qD", "doomed")
+    assert any("on no branch" in p.message for p in issues.check(d))
+
+
+def test_git_checks_stay_silent_outside_a_repo(tmp_path):
+    """A guard that cannot run must not invent a verdict."""
+    d = tmp_path / "docs" / "issues"
+    d.mkdir(parents=True)
+    (d / issues.CONFIG_NAME).write_text(
+        'areas = ["ci"]\nindex = false\nfixed_in_on_branch = "main"\ncheck_body_shas = true\n'
+    )
+    write(d, "03-08-2026-a.md", "title: A\nstatus: done\narea: ci\nfixed_in: abc1234",
+          body="\ncites `deadbeef`.\n")
+    assert issues.check(d) == []
 
 
 # --------------------------------------------------------------------------- #

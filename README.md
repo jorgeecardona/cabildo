@@ -247,6 +247,42 @@ the back-link lets an issue cite an entry nobody wrote. `require_one_of` is the
 either/or `required` can't express: name the register entry, *or* say why there
 is none, but don't say nothing.
 
+### Front matter as a schema, not a bag
+
+A folder that wants its shape closed says so, and then `check` grades it and
+`render` obeys it:
+
+```toml
+field_order = ["title", "type", "priority", "area", "tags",
+               "source", "status", "fixed_in", "owner", "blocked_by"]
+strict_fields = true               # anything not listed is an error
+fixed_in_on_branch = "main"        # the sha must be one that LANDED
+check_body_shas = true             # a cited sha on no branch dies at the next gc
+
+[fields.tags]
+list = true
+pattern = "kebab"                  # `roast-detect` and `Roast Detect` must not both exist
+
+[sections]
+require = ["Acceptance criteria", "Tests?\\b|The test"]
+exempt_field = "type"              # a hand-off points at the issues that define done
+exempt_values = ["handoff"]
+```
+
+`field_order` does three jobs at once, and the third is the one that matters:
+`render` writes **exactly** those keys. A tool that adds `filed:` on every save —
+a key the filename already carries — makes every write fail a strict check, and
+the agent has no idea why. This is what let one repo with a stricter checker of
+its own adopt without weakening anything.
+
+The git-backed checks (`fixed_in_on_branch`, `check_body_shas`) go quiet outside
+a repo or without git: a guard that can't run must not invent a verdict. Results
+are cached per sha, since `check` runs in a pre-commit hook.
+
+`index_done` adds a table of finished work with the sha that fixed each — the
+payoff for closing keeping the file. `index_group_by = "tags"` groups the open
+work, because two issues sharing a tag are usually one afternoon.
+
 ### Open source, commercial, or neither
 
 Nothing here needs cabildo to be readable. The register is markdown in the repo,
