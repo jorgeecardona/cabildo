@@ -64,6 +64,24 @@ register: G12
     assert "register: G12" in p.read_text()
 
 
+def test_a_write_changes_only_what_you_changed(folder):
+    """render(parse(text)) == text. Otherwise a status change is a one-line diff plus a silently
+    eaten blank line, and every save produces noise nobody asked for."""
+    path = folder / "03-08-2026-a.md"
+    original = (
+        "---\ntitle: A\nstatus: open\narea: ci\nowner: null\nfiled: 2026-08-03\nscope: S\n---\n"
+        "\n# A\n\nbody text.\n"
+    )
+    path.write_text(original)
+    config = issues.load_config(folder)
+    assert issues.render(issues.load(path, config), config) == original
+
+    issues.update(folder, "a", status=issues.Status.BLOCKED, owner="jorge")
+    after = path.read_text()
+    assert "\n---\n\n# A\n\nbody text.\n" in after
+    assert after.count("\n\n# A") == 1
+
+
 def test_parses_block_lists(folder):
     """crm's `tags:` is a YAML block list. A parser that only does flat scalars declares 41 real
     issues malformed, which is how a tool gets abandoned on day one."""

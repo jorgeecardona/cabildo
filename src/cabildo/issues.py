@@ -472,8 +472,11 @@ def render(issue: Issue, config: Config = DEFAULT_CONFIG) -> str:
         for key, value in issue.extra.items():
             lines += _render_value(key, value)
         lines.append("---")
-    body = issue.body if issue.body.startswith("\n") else "\n" + issue.body
-    return "\n".join(lines) + body
+    # The newline after the closing `---` is that line's terminator, not part of the body; the
+    # split that produced `body` already consumed it. Adding it back here is what makes
+    # render(parse(text)) == text, so a status change is a one-line diff and not a one-line diff
+    # plus a silently eaten blank line.
+    return "\n".join(lines) + "\n" + issue.body
 
 
 def load(path: pathlib.Path, config: Config = DEFAULT_CONFIG) -> Issue:
@@ -1021,7 +1024,7 @@ def file_issue(
         owner=owner,
         blocked_by=tuple(blocked_by),
         extra=dict(extra or {}),
-        body=body,
+        body=body if body.startswith("\n") else "\n" + body,
     )
     missing = [
         m for f in config.fields.values() for m in f.problems(issue.extra.get(f.name))
