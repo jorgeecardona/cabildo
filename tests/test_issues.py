@@ -654,6 +654,22 @@ def test_mcp_json_wires_issues_only_where_there_is_a_register(tmp_path):
     assert "env" not in servers["issues"]
 
 
+def test_the_written_command_is_one_the_consumer_can_actually_run(tmp_path, monkeypatch):
+    """The bare name is only written when a LOGIN SHELL resolves it, not when this process does.
+
+    `cabildo add` may run inside a venv that Claude Code's own environment never sees. Then
+    `shutil.which` says yes, the bare name gets written, and every session opened in that folder
+    dies with "Executable not found in $PATH" — a failure that surfaces nowhere near its cause.
+    """
+    monkeypatch.setattr(mcp_config, "_on_login_path", lambda script: False)
+    entry = mcp_config.issues_entry()
+    assert pathlib.Path(entry["command"]).is_absolute(), \
+        "a name the consumer cannot resolve must never be written"
+
+    monkeypatch.setattr(mcp_config, "_on_login_path", lambda script: True)
+    assert mcp_config.issues_entry()["command"] == "cabildo-issues-mcp"
+
+
 def test_apply_is_idempotent_and_remove_leaves_other_servers_alone(tmp_path):
     root = tmp_path / "r"
     (root / "docs" / "issues").mkdir(parents=True)

@@ -17,10 +17,14 @@ session, so wiring them costs two lines of JSON and no running process.
 
 Three decisions worth stating:
 
-  * The command is written as the bare `cabildo-mcp` when that name resolves on
-    PATH. `.mcp.json` is a checked-in file; baking /home/you/.venv/bin/... into
-    it hands your teammates a path that doesn't exist on their machines. Only
-    when the name isn't resolvable do we fall back to this interpreter.
+  * The command is written as the bare `cabildo-mcp` when a **login shell** can
+    resolve that name. `.mcp.json` is a checked-in file; baking
+    /home/you/.venv/bin/... into it hands your teammates a path that doesn't
+    exist on their machines. But the test has to be the login shell and not this
+    process: `cabildo add` may well run inside a venv that Claude Code's own
+    environment never sees, and then the bare name looks fine here and fails in
+    every session opened there. An absolute path costs a teammate; a name that
+    resolves nowhere costs everyone, so when in doubt we write the path.
   * `CABILDO_PROJECT` is written into the entry's env. The local registry
     (~/.cabildo/cloud.json) already pins folder → name for this machine, but the
     env var travels with the repo, so a fresh clone gets the right project name
@@ -37,7 +41,9 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -47,13 +53,38 @@ OUR_KEYS = (SERVER_KEY, ISSUES_KEY)
 FILENAME = ".mcp.json"
 
 
+def _on_login_path(script: str) -> bool:
+    """Can a *fresh login shell* resolve this name?
+
+    `shutil.which` answers for the process writing the file, and that is the wrong process. Claude
+    Code spawns MCP servers from its own environment, which on this machine does not inherit the
+    venv that `cabildo add` happened to run inside. The bare name looked resolvable, got written,
+    and every session in that folder failed with "Executable not found in $PATH" — a failure that
+    surfaces nowhere near the command that caused it.
+
+    So ask the shell the consumer looks most like. A false negative just means we write an absolute
+    path, which always works; a false positive is what breaks a folder.
+    """
+    try:
+        return subprocess.run(
+            ["bash", "-lc", f"command -v {shlex.quote(script)}"],
+            capture_output=True, timeout=10,
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return bool(shutil.which(script))      # no bash to ask — fall back to the weaker test
+
+
 def _command(script: str, module: str) -> list[str]:
-    """How to launch one of our stdio servers, portably if possible."""
-    if shutil.which(script):
+    """How to launch one of our stdio servers: portably when that genuinely works, absolutely when
+    it does not. A path that only resolves on this machine is a cost to teammates; a name that
+    resolves nowhere is a cost to everyone, including you."""
+    if _on_login_path(script):
         return [script]
     sibling = Path(sys.executable).parent / script
     if sibling.exists():
         return [str(sibling)]
+    if shutil.which(script):
+        return [script]
     return [sys.executable, "-m", module]
 
 
