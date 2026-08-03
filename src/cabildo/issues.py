@@ -803,6 +803,142 @@ def close(
 # --------------------------------------------------------------------------- #
 # Adoption: describe the folder that already exists
 # --------------------------------------------------------------------------- #
+STARTER_README = """\
+# docs/issues — follow-ups with an owner-shaped edge
+
+One file per follow-up, self-contained, with YAML front matter. This folder is for work that is
+**known, scoped, and not being done right now** — the residue a session leaves behind when it lands
+its main change. Without a home, that residue lives in a chat log nobody re-reads, and "we should
+fix X" decays into nobody having ever owned X.
+
+**The files are the store.** No database, no second copy — an issue is markdown in git, readable and
+editable by hand. Everything derived (the index below above all) is *generated from* the files and
+is never authoritative. A duplicate store is a fault dimension; the way to avoid one is not to
+create it.
+
+## The rules that make one worth writing
+
+1. **Answerable cold.** Assume the reader has none of the author's context and no access to the
+   session that found it. Concrete instances, file:line, the actual commands.
+2. **Say what is MEASURED and what is INFERRED.** Separately, and in those words. An issue that
+   states an inference as a finding sends the next person to fix the wrong thing, and they will
+   believe you because you wrote it down.
+3. **Define done.** Not "improve X" — the specific observation that will be true afterwards, and
+   how to make it. `verify:` says which kind of evidence closes it, because they are different
+   claims: `test` (a red-then-green test is enough), `probe` (only sensing the real thing counts),
+   `inspect` (the artifact itself is the evidence).
+4. **Name what you deliberately did NOT do,** with the reason. Silence reads as an oversight and
+   gets re-litigated.
+5. **Close by marking it done,** with `fixed_in:` naming the sha that landed the fix. A register
+   that cannot say what fixed something has stopped being evidence.
+
+## The format
+
+```yaml
+---
+title: One line — the finding, not the fix
+status: open          # open | in-progress (name an owner) | blocked | done (needs fixed_in)
+scope: M              # XS | S | M | L | ?
+owner: null           # a handle, or null when unowned
+filed: {today}     # when it was filed; it never changes
+area: {area}
+verify: probe         # test | probe | inspect — see rule 3
+blocked_by: null      # slug(s) of issues that must close first
+fixed_in: null        # the sha on the mainline; required once status is done
+---
+```
+
+**`blocked_by` is what makes the board honest.** `status: blocked` names a *person* who can unblock
+something; `blocked_by` names the *work* it waits on. Only the second can be computed, which is why
+"what can I pick up cold right now" is answerable at all.
+
+**Naming:** `DD-MM-YYYY-short-kebab-summary.md` — the date it was filed, then a slug.
+
+## Tooling — the folder checks itself
+
+Managed by `cabildo issues`. The CLI, the `issues` MCP server, and any pre-commit gate are one
+module, so the tool an agent calls and the gate that grades it cannot disagree.
+`docs/issues/config.toml` holds this folder's specifics.
+
+```bash
+cabildo issues                # what's ready, what's yours, what everything else waits on
+cabildo issues check          # the invariants; non-zero on problems
+cabildo issues reindex        # regenerate the index below
+cabildo issues show <slug>
+```
+
+## Open now
+
+{begin}
+_No open follow-ups._
+{end}
+"""
+
+
+def starter_config(areas: Iterable[str] = ()) -> str:
+    """A config for a folder with nothing in it yet.
+
+    `areas` is asked for rather than defaulted. It is the one vocabulary that cannot be guessed from
+    outside a repo, and a folder that accepts any area silently accepts every typo as a new one.
+    """
+    names = tuple(areas)
+    listed = (
+        "areas = [" + ", ".join(f'"{a}"' for a in names) + "]" if names
+        else '# areas = ["backend", "frontend", "ci"]   # REQUIRED — until set, any area is accepted'
+    )
+    return f"""\
+# docs/issues/config.toml — what this folder's issues must say.
+#
+# Read by `cabildo issues`: the CLI, the `issues` MCP server, and any pre-commit gate are one
+# module, so the tool an agent calls and the gate that grades it cannot disagree.
+
+date_style = "DMY"          # 03-08-2026-short-kebab-summary.md
+index = true                # the generated table in README.md
+index_fields = ["scope", "verify"]
+
+# The one vocabulary that cannot be guessed from outside this repo.
+{listed}
+
+[fields.scope]
+required = true
+values = ["XS", "S", "M", "L", "?"]
+
+# How "done" gets checked. The distinction is load-bearing: a green test is not the same claim as a
+# sensed fact, and an issue that blurs them sends the next person to the wrong evidence.
+[fields.verify]
+required = true
+values = ["test", "probe", "inspect"]
+"""
+
+
+def scaffold(
+    folder: pathlib.Path, areas: Iterable[str] = (), today: str | None = None
+) -> list[pathlib.Path]:
+    """Start a register in an empty folder: a config and a README with an index region.
+
+    Writes only what is missing. A folder that already has a README keeps it — the marker can be
+    pasted in by hand, and silently rewriting somebody's documentation to install a tool is not a
+    trade anyone agreed to.
+    """
+    folder.mkdir(parents=True, exist_ok=True)
+    written = []
+    config = folder / CONFIG_NAME
+    if not config.exists():
+        config.write_text(starter_config(areas))
+        written.append(config)
+    readme = folder / README_NAME
+    if not readme.exists():
+        names = tuple(areas)
+        readme.write_text(STARTER_README.format(
+            today=today or _dt.date.today().isoformat(),
+            area=names[0] if names else "<one of the areas above>",
+            begin=INDEX_BEGIN,
+            end=INDEX_END,
+        ))
+        written.append(readme)
+    return written
+
+
 def infer_config(folder: pathlib.Path) -> str:
     """The config.toml that makes this folder valid as it stands, as TOML text.
 

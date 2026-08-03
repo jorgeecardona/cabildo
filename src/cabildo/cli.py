@@ -739,16 +739,29 @@ def cmd_issues(args) -> int:
 
     if args.action == "init":
         folder = folder or start / "docs" / "issues"
-        folder.mkdir(parents=True, exist_ok=True)
         cfg = folder / reg.CONFIG_NAME
         if cfg.exists() and not args.force:
             print(f"{C.YELLOW}exists{C.OFF} {cfg} {C.DIM}(--force to rewrite){C.OFF}")
             return 1
-        cfg.write_text(reg.infer_config(folder))
-        found, _ = reg.load_all(folder)
-        print(f"{C.GREEN}wrote{C.OFF} {cfg}")
-        print(f"  {C.DIM}inferred from {len(found)} issue(s) already here, so `check` passes "
-              f"today. Tighten it deliberately.{C.OFF}")
+        found, _ = (reg.load_all(folder) if folder.is_dir() else ((), ()))
+        if found:
+            # Adoption: describe the folder as it stands, so `check` passes before anything is
+            # edited. Tightening afterwards is then a decision, not a migration forced by a tool.
+            folder.mkdir(parents=True, exist_ok=True)
+            cfg.write_text(reg.infer_config(folder))
+            print(f"{C.GREEN}wrote{C.OFF} {cfg}")
+            print(f"  {C.DIM}inferred from {len(found)} issue(s) already here, so `check` passes "
+                  f"today. Tighten it deliberately.{C.OFF}")
+            return 0
+        written = reg.scaffold(folder, areas=args.area or ())
+        for p in written:
+            print(f"{C.GREEN}wrote{C.OFF} {p}")
+        if not written:
+            print(f"{C.DIM}nothing to write — {folder} already has both{C.OFF}")
+        if not args.area:
+            print(f"  {C.YELLOW}no areas declared{C.OFF} {C.DIM}— until you set `areas` in "
+                  f"config.toml, any area is accepted and every typo becomes a new one. "
+                  f"Re-run with --area <name> --area <name>.{C.OFF}")
         return 0
 
     if folder is None:
@@ -786,7 +799,7 @@ def cmd_issues(args) -> int:
                 continue
             if not args.status and not i.open:
                 continue
-            if args.area and i.area != args.area:
+            if args.area and i.area not in args.area:
                 continue
             if args.owner and (i.owner or "none") != args.owner:
                 continue
@@ -1098,8 +1111,9 @@ def main(argv: list[str] | None = None) -> int:
     iss.add_argument("-C", "--folder", metavar="DIR", default=".",
                      help="where to look for docs/issues (default: cwd, searching upward)")
     iss.add_argument("--status", help="filter: open | in-progress | blocked | done")
-    iss.add_argument("--area", help="filter: one of the folder's declared areas")
     iss.add_argument("--owner", help="filter: a handle, or `none` for unowned")
+    iss.add_argument("--area", action="append", metavar="NAME",
+                     help="filter by area; on `init` for a new folder, declare one (repeatable)")
     iss.add_argument("--force", action="store_true",
                      help="for `init`: overwrite an existing config.toml")
     iss.set_defaults(fn=cmd_issues)

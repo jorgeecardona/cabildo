@@ -338,6 +338,34 @@ def test_init_infers_a_config_that_makes_the_folder_valid(tmp_path):
     assert issues.check(d) == []
 
 
+def test_scaffold_starts_a_usable_register_from_nothing(tmp_path):
+    d = tmp_path / "docs" / "issues"
+    written = issues.scaffold(d, areas=("asr", "cli"), today="2026-08-03")
+    assert {p.name for p in written} == {issues.CONFIG_NAME, issues.README_NAME}
+
+    config = issues.load_config(d)
+    assert config.areas == ("asr", "cli")
+    assert config.index is True
+    assert issues.check(d) == []          # an empty register is a valid register
+
+    path = issues.file_issue(d, title="A Thing", area="asr", body="x",
+                             extra={"scope": "S", "verify": "test"}, today="2026-08-03")
+    assert path.name == "03-08-2026-a-thing.md"
+    issues.reindex(d)
+    assert "[A Thing](03-08-2026-a-thing.md)" in (d / issues.README_NAME).read_text()
+    assert issues.check(d) == []
+
+
+def test_scaffold_never_overwrites_an_existing_readme(tmp_path):
+    """Silently rewriting somebody's documentation to install a tool is not a trade anyone made."""
+    d = tmp_path / "docs" / "issues"
+    d.mkdir(parents=True)
+    (d / issues.README_NAME).write_text("# mine\n")
+    written = issues.scaffold(d, areas=("ci",))
+    assert [p.name for p in written] == [issues.CONFIG_NAME]
+    assert (d / issues.README_NAME).read_text() == "# mine\n"
+
+
 def test_find_folder_searches_upward_but_stops_at_the_repo(tmp_path):
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
