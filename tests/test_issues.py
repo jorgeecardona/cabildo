@@ -250,6 +250,17 @@ def test_check_catches_a_stale_index(folder):
     assert "| [A](03-08-2026-a.md) |" in readme.read_text()
 
 
+def test_index_can_carry_the_folders_own_fields_as_columns(tmp_path):
+    """The index is for scanning, and what is worth scanning is what the folder chose to track."""
+    d = tmp_path / "docs" / "issues"
+    d.mkdir(parents=True)
+    (d / issues.CONFIG_NAME).write_text('areas = ["ci"]\nindex_fields = ["scope", "verify"]\n')
+    write(d, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\nscope: M\nverify: probe")
+    table = issues.render_index(d)
+    assert "| Issue | Area | Scope | Verify | Status | Waiting on |" in table
+    assert "| M | probe |" in table
+
+
 def test_index_shows_open_work_and_counts_the_done(folder):
     write(folder, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\nscope: S")
     write(folder, "03-08-2026-b.md",

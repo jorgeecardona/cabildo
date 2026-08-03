@@ -129,6 +129,10 @@ class Config:
     #: there is none" — an either/or that `required` cannot express, and where the point is that
     #: silence is not an allowed answer.
     require_one_of: tuple[tuple[str, ...], ...] = ()
+    #: project fields to add as columns in the generated index. The index is for scanning, and what
+    #: is worth scanning is exactly what the folder chose to track — scope and verify in one repo,
+    #: priority in another. Core columns are always there.
+    index_fields: tuple[str, ...] = ()
 
     @property
     def filename_re(self) -> re.Pattern[str]:
@@ -178,6 +182,7 @@ def load_config(folder: pathlib.Path) -> Config:
         index=bool(raw.get("index", True)),
         date_style=style,
         require_one_of=groups,
+        index_fields=tuple(raw.get("index_fields", ()) or ()),
     )
 
 
@@ -595,7 +600,7 @@ def _index_problems(
     text = readme.read_text()
     if INDEX_BEGIN not in text or INDEX_END not in text:
         return [Problem(readme, f"README has no generated-index region ({INDEX_BEGIN})")]
-    if _replace_region(text, _index_table(issues)) != text:
+    if _replace_region(text, _index_table(issues, config)) != text:
         return [
             Problem(readme, "the generated index is stale — run `cabildo issues reindex`. A "
                             "follow-up nobody can see is what this folder exists to prevent")
@@ -606,18 +611,29 @@ def _index_problems(
 # --------------------------------------------------------------------------- #
 # The generated index
 # --------------------------------------------------------------------------- #
-def _index_table(issues: tuple[Issue, ...]) -> str:
+def _cell(value) -> str:
+    if value is None:
+        return "—"
+    return ", ".join(value) if isinstance(value, tuple) else str(value)
+
+
+def _index_table(issues: tuple[Issue, ...], config: Config = DEFAULT_CONFIG) -> str:
     live = [i for i in issues if i.open]
     if not live:
         return "_No open follow-ups._"
-    rows = ["| Issue | Area | Status | Waiting on |", "|---|---|---|---|"]
+    heads = ["Issue", "Area", *(f.capitalize() for f in config.index_fields),
+             "Status", "Waiting on"]
+    rows = ["| " + " | ".join(heads) + " |", "|" + "---|" * len(heads)]
     open_slugs = {i.slug for i in live}
     for issue in sorted(live, key=lambda i: (i.area, i.path.name)):
         owner = f" · @{issue.owner}" if issue.owner else ""
         blockers = ", ".join(s for s in issue.blocked_by if s in open_slugs) or "—"
+        extras = [_cell(issue.extra.get(f)) for f in config.index_fields]
         rows.append(
-            f"| [{issue.title}]({issue.path.name}) | {issue.area} "
-            f"| {issue.status}{owner} | {blockers} |"
+            "| " + " | ".join([
+                f"[{issue.title}]({issue.path.name})", issue.area, *extras,
+                f"{issue.status}{owner}", blockers,
+            ]) + " |"
         )
     counts = ", ".join(
         f"{sum(1 for i in live if i.status is s)} {s}"
@@ -630,8 +646,9 @@ def _index_table(issues: tuple[Issue, ...]) -> str:
 
 
 def render_index(folder: pathlib.Path, config: Config | None = None) -> str:
+    config = load_config(folder) if config is None else config
     issues, _ = load_all(folder, config)
-    return _index_table(issues)
+    return _index_table(issues, config)
 
 
 def _replace_region(text: str, table: str) -> str:
