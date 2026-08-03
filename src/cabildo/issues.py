@@ -99,7 +99,6 @@ CORE_ORDER = ("title", "status", "area", "owner", "filed", "blocked_by", "fixed_
 PATTERNS = {
     "kebab": r"^[a-z0-9]+(-[a-z0-9]+)*$",
     "sha": r"^[0-9a-f]{7,40}$",
-    "slug": r"^[a-z0-9]+(-[a-z0-9]+)*$",
 }
 
 
@@ -183,10 +182,10 @@ class Config:
     #: "Define done" is a rule every one of these folders states; this is the version that is
     #: enforced instead of hoped for.
     require_sections: tuple[str, ...] = ()
-    #: The one field/value pair exempt from `require_sections` — a hand-off records tree state and
-    #: resume order for work already in flight, so it carries no acceptance criteria of its own.
-    sections_exempt_field: str = ""
-    sections_exempt_values: tuple[str, ...] = ()
+    #: What is exempt from `require_sections`, as "field=value" (e.g. "type=handoff"). A hand-off
+    #: records tree state and resume order for work already in flight, so it carries no acceptance
+    #: criteria of its own — it points at the issues that do.
+    sections_exempt: str = ""
     #: Check that short shas cited in issue bodies are still reachable from some branch. An issue
     #: whose evidence is a commit that no longer exists is worse than one with no evidence: it reads
     #: as verified.
@@ -260,8 +259,7 @@ def load_config(folder: pathlib.Path) -> Config:
         strict_fields=bool(raw.get("strict_fields", False)),
         fixed_in_on_branch=str(raw.get("fixed_in_on_branch", "") or ""),
         require_sections=tuple(sections.get("require", ()) or ()),
-        sections_exempt_field=str(sections.get("exempt_field", "") or ""),
-        sections_exempt_values=tuple(sections.get("exempt_values", ()) or ()),
+        sections_exempt=str(sections.get("exempt", "") or ""),
         check_body_shas=bool(raw.get("check_body_shas", False)),
         index_done=bool(raw.get("index_done", False)),
         index_group_by=str(raw.get("index_group_by", "") or ""),
@@ -791,9 +789,10 @@ def _section_problems(issue: Issue, config: Config) -> list[Problem]:
     """
     if not config.require_sections:
         return []
-    exempt_value = issue.extra.get(config.sections_exempt_field) if config.sections_exempt_field else None
-    if isinstance(exempt_value, str) and exempt_value in config.sections_exempt_values:
-        return []
+    if "=" in config.sections_exempt:
+        key, _, value = config.sections_exempt.partition("=")
+        if issue.extra.get(key.strip()) == value.strip():
+            return []
     headings = re.findall(r"^##+\s*(.+)$", issue.body, re.M)
     out = []
     for wanted in config.require_sections:

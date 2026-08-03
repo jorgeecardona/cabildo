@@ -114,70 +114,57 @@ def _line(issue: issues.Issue) -> str:
 # Tools
 # --------------------------------------------------------------------------- #
 @mcp.tool()
-def board(limit: int = 10) -> str:
-    """**Start here.** What is actually pickup-able in this project right now, and what everything
-    else is waiting on.
+def board(status: str = "", area: str = "", owner: str = "", limit: int = 10) -> str:
+    """**Start here** — what is pickup-able in this project now, and what everything else waits on.
 
-    `ready` is work with no open blockers that nobody has taken — you can start any of it cold.
-    `waiting` says what each of the others is stuck behind, so you can go unstick one on purpose
-    instead of guessing. `yours` is what you already claimed and have not closed.
+    Ready = no open blockers, nobody has taken it; start any of it cold. Waiting says what each of
+    the rest is stuck behind, so you can unstick one on purpose. Yours = what you claimed.
 
-    This answers "what should I be working on"; it does not decide for you."""
+    Any filter (status open/in-progress/blocked/done, area, owner — `none` for unowned) switches it
+    to a flat filtered list instead. Done issues keep their file, so they only show when asked for.
+    """
     folder = _folder()
     handle, _ = _identity()
+
+    if status or area or owner:
+        found, broken = issues.load_all(folder)
+        rows = [
+            i for i in found
+            if (status == "done" or i.open)
+            and (not status or i.status == status)
+            and (not area or i.area == area)
+            and (not owner or (i.owner or "none") == owner)
+        ]
+        out = "\n".join(_line(i) for i in rows) or "(nothing matches)"
+        if broken:
+            out += "\n\nUNPARSEABLE: " + ", ".join(p.path.name for p in broken)
+        return out
+
     b = issues.board(folder, owner=handle)
-    out: list[str] = []
-
+    out_lines: list[str] = []
     if b.ready:
-        out.append(f"READY — nothing blocks these, nobody owns them ({len(b.ready)}):")
-        out += [_line(i) for i in b.ready[:limit]]
+        out_lines.append(f"READY — nothing blocks these, nobody owns them ({len(b.ready)}):")
+        out_lines += [_line(i) for i in b.ready[:limit]]
         if len(b.ready) > limit:
-            out.append(f"  … and {len(b.ready) - limit} more; `list_issues` for the rest")
+            out_lines.append(f"  … and {len(b.ready) - limit} more; filter by area for the rest")
     else:
-        out.append("READY — nothing. Every open issue is owned or blocked (see below).")
-
+        out_lines.append("READY — nothing. Every open issue is owned or blocked (see below).")
     if b.mine:
-        out.append(f"\nYOURS — claimed by @{handle} and not closed ({len(b.mine)}):")
-        out += [_line(i) for i in b.mine]
-
+        out_lines.append(f"\nYOURS — claimed by @{handle} and not closed ({len(b.mine)}):")
+        out_lines += [_line(i) for i in b.mine]
     if b.waiting:
-        out.append(f"\nWAITING ({len(b.waiting)}):")
-        out += [f"  {w.issue.slug} — {w.reason}" for w in b.waiting[:limit]]
+        out_lines.append(f"\nWAITING ({len(b.waiting)}):")
+        out_lines += [f"  {w.issue.slug} — {w.reason}" for w in b.waiting[:limit]]
         if len(b.waiting) > limit:
-            out.append(f"  … and {len(b.waiting) - limit} more")
-
+            out_lines.append(f"  … and {len(b.waiting) - limit} more")
     if b.done:
-        out.append(f"\n{b.done} done (kept, with the sha that fixed them).")
-    return "\n".join(out)
-
-
-@mcp.tool()
-def list_issues(status: str = "", area: str = "", owner: str = "", include_done: bool = False) -> str:
-    """The register, filtered. `status` is open/in-progress/blocked/done, `owner` is a handle or
-    `none` for unowned. Done issues are excluded unless you ask for them — they keep their file, so
-    the folder only grows.
-
-    For deciding what to do next, prefer `board`: this is the flat list, which is the thing that
-    made the question hard in the first place."""
-    folder = _folder()
-    found, broken = issues.load_all(folder)
-    rows = [
-        i for i in found
-        if (include_done or status == "done" or i.open)
-        and (not status or i.status == status)
-        and (not area or i.area == area)
-        and (not owner or (i.owner or "none") == owner)
-    ]
-    out = "\n".join(_line(i) for i in rows) or "(no matching follow-ups)"
-    if broken:
-        out += "\n\nUNPARSEABLE: " + ", ".join(p.path.name for p in broken)
-    return out
+        out_lines.append(f"\n{b.done} done (kept, with the sha that fixed them).")
+    return "\n".join(out_lines)
 
 
 @mcp.tool()
 def show_issue(name: str) -> str:
-    """One follow-up in full — front matter and body. `name` is a filename or any unambiguous part
-    of its slug."""
+    """One follow-up in full. `name` is a filename or any unambiguous part of its slug."""
     return issues.resolve(_folder(), name).read_text()
 
 
@@ -189,19 +176,14 @@ def file_issue(
     blocked_by: list[str] | None = None,
     fields: dict[str, str] | None = None,
 ) -> str:
-    """File a follow-up: work that is KNOWN, SCOPED and NOT BEING DONE — the residue a session
-    leaves behind when it lands its main change, not a vague idea and not something you are about
-    to do anyway.
+    """File a follow-up: work that is KNOWN, SCOPED and NOT BEING DONE — not a vague idea, not
+    something you are about to do anyway.
 
-    Write the body so it is **answerable cold**: assume the reader has none of your context and no
-    access to this session. Concrete instances, file:line, the actual commands. Say what is MEASURED
-    and what is INFERRED, in those words — an issue that states an inference as a finding sends the
-    next person to fix the wrong thing, and they will believe you because you wrote it down. Define
-    done as the specific observation that will be true afterwards.
+    Body must be answerable cold: concrete instances, file:line, what is MEASURED vs INFERRED in
+    those words, and done stated as an observation. The folder's README has the full rules.
 
-    `blocked_by` takes the slugs of issues that must close first; that is what keeps `board` honest.
-    `fields` carries whatever else this folder's config.toml requires (scope, priority, verify …) —
-    `check_issues` will tell you if you missed one."""
+    `blocked_by` = slugs that must close first. `fields` = whatever config.toml requires (scope,
+    verify, priority …); `check_issues` names what you missed."""
     folder = _folder()
     path = issues.file_issue(
         folder,
@@ -223,11 +205,9 @@ def update_issue(
     blocked_by: list[str] | None = None,
     fields: dict[str, str] | None = None,
 ) -> str:
-    """Change an issue's front matter. Only what you pass is touched; `fields` merges rather than
-    replaces, so setting one project field cannot silently drop the others.
-
-    Use `blocked_by` when you discover a real ordering — it is what moves work off `ready` and onto
-    `waiting` for everyone, including whoever reads this next week."""
+    """Change an issue's front matter. Only what you pass is touched; `fields` merges, so setting
+    one project field cannot drop the others. Set `blocked_by` when you find a real ordering — it
+    is what moves work off `ready` for everyone, not just you."""
     folder = _folder()
     changes: dict = {}
     if title:
@@ -249,37 +229,30 @@ def update_issue(
 
 
 @mcp.tool()
-def claim_issue(name: str, force: bool = False) -> str:
-    """Take a follow-up: writes you as its owner, moves it to in-progress, and takes a bus lease on
-    `issue:<slug>` so another agent on this repo cannot start the same work.
+def claim_issue(name: str, release: bool = False, force: bool = False) -> str:
+    """Take a follow-up — writes you as owner, moves it to in-progress, and takes an `issue:<slug>`
+    bus lease so another agent here cannot start the same work.
 
-    Refuses to steal from a named owner unless you pass force — an owner that changes hands quietly
-    is how two windows end up doing the same thing."""
+    `release=True` hands it back: the honest move when you stop, so it stops looking taken. Refuses
+    to steal a named owner unless you pass force."""
     folder = _folder()
+    if release:
+        updated = issues.release(folder, name)
+        _lease(updated.slug, take=False)
+        return f"released {updated.path.name} — back on the board"
     handle, _ = _identity()
     if not handle:
-        return ("cannot tell who you are — the cabildo bus is not reachable from here, so there is "
-                "no handle to write. Set one with `update_issue(name, fields={'owner': ...})`.")
+        return ("cannot tell who you are — the cabildo bus is not reachable, so there is no handle "
+                "to write. Use `update_issue(name, fields={'owner': ...})`.")
     updated = issues.claim(folder, name, owner=handle, force=force)
     return f"claimed {updated.path.name} as @{handle}" + _lease(updated.slug, take=True)
 
 
 @mcp.tool()
-def release_issue(name: str) -> str:
-    """Drop a follow-up you claimed: clears the owner, returns it to open, releases the bus lease.
-    The honest move when you stop, so it goes back on the board instead of looking taken forever."""
-    updated = issues.release(_folder(), name)
-    _lease(updated.slug, take=False)
-    return f"released {updated.path.name} — back on the board"
-
-
-@mcp.tool()
 def close_issue(name: str, fixed_in: str) -> str:
-    """Mark a follow-up done. The file stays, carrying `fixed_in` — the sha that landed the fix, so
-    the folder is a record of what was actually fixed by what.
-
-    `fixed_in` must be the sha **on the mainline**, not the one from your worktree: the land path
-    re-commits, and a worktree sha resolves only until that worktree is pruned."""
+    """Mark a follow-up done. The file stays, carrying `fixed_in`, so the folder records what was
+    fixed by what. Use the sha on the MAINLINE — the land path re-commits, and a worktree sha
+    resolves only until that worktree is pruned."""
     folder = _folder()
     updated = issues.close(folder, name, fixed_in=fixed_in)
     _lease(updated.slug, take=False)
@@ -289,12 +262,10 @@ def close_issue(name: str, fixed_in: str) -> str:
 
 @mcp.tool()
 def check_issues() -> str:
-    """Grade the folder against its own config.toml: front matter, filename convention, unknown
-    areas, `done` without a sha, `blocked` with nothing named, blocked_by pointing at nothing,
-    blocked_by cycles, broken links, and a README index that has drifted from the files.
-
-    Run it after editing issues by hand. Same code path as `cabildo issues check`, so a green here
-    is a green there."""
+    """Grade the folder against its own config.toml — front matter, filenames, `done` without a
+    sha, blocked_by cycles, broken links, a stale index, and whatever else that config demands.
+    Run it after editing issues by hand. Same module as `cabildo issues check` and the repo's gate,
+    so a green here is a green there."""
     folder = _folder()
     problems = issues.check(folder)
     if not problems:

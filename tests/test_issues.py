@@ -481,8 +481,7 @@ values = ["issue", "handoff"]
 
 [sections]
 require = ["Acceptance criteria", "Tests?\\\\b|The test"]
-exempt_field = "type"
-exempt_values = ["handoff"]
+exempt = "type=handoff"
 """)
     write(d, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\ntype: issue",
           body="\njust prose.\n")

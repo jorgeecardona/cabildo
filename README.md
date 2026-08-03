@@ -265,8 +265,7 @@ pattern = "kebab"                  # `roast-detect` and `Roast Detect` must not 
 
 [sections]
 require = ["Acceptance criteria", "Tests?\\b|The test"]
-exempt_field = "type"              # a hand-off points at the issues that define done
-exempt_values = ["handoff"]
+exempt = "type=handoff"            # a hand-off points at the issues that define done
 ```
 
 `field_order` does three jobs at once, and the third is the one that matters:
@@ -310,13 +309,20 @@ Statuses are `open → in-progress → done`, with `blocked` off to the side.
 mainline, not one from a worktree that will be pruned — so the folder is a record
 of what was fixed by what.
 
+Seven tools, ~520 tokens of schema per session. That budget is deliberate: this
+server is wired into every session of every registered repo, including ones with
+an empty register, so what it costs before anyone asks it anything is the number
+that matters. `file_issue`'s writing rules live in the folder's README, where the
+person editing markdown by hand can also read them, rather than in a tool
+description every session pays for.
+
 | tool | job |
 |---|---|
-| `board` | what's ready, what's yours, what everything else waits on |
-| `list_issues` / `show_issue` | the flat register, and one issue in full |
+| `board` | what's ready, what's yours, what everything else waits on — or pass a filter (`status`/`area`/`owner`) for the flat list |
+| `show_issue` | one issue in full |
 | `file_issue` | file one — answerable cold, MEASURED vs INFERRED, define done |
 | `update_issue` | edit front matter; `blocked_by` is what moves the board |
-| `claim_issue` / `release_issue` | take it, and take a real bus lease with it |
+| `claim_issue` | take it (and a real bus lease with it); `release=True` hands it back |
 | `close_issue` | mark done + `fixed_in`; the file stays |
 | `check_issues` | grade the folder against its own config |
 
