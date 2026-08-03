@@ -206,6 +206,32 @@ def test_resolve_refuses_to_guess_between_two_matches(folder):
     assert issues.resolve(folder, "alpha-one").name == "03-08-2026-alpha-one.md"
 
 
+def test_a_list_field_says_it_wants_a_list(folder):
+    """Taken from a real transcript. crm's agent had a list-valued `tags` and a tool signature that
+    could only carry strings, so it tried ", " then "," then " " as separators, was told each time
+    only that the value "does not match kebab", and gave up — filing with one tag instead of four.
+
+    The message has to name the actual problem, because no separator was ever going to work.
+    """
+    write(folder, "03-08-2026-a.md",
+          "title: A\nstatus: open\narea: ci\nscope: S\ntags: one, two, three")
+    messages = " ".join(p.message for p in issues.check(folder))
+    assert "`tags` is a list — pass a list of values" in messages
+    assert "one, two, three" in messages       # quote what they sent, so it is recognisable
+
+
+def test_mcp_fields_carry_lists_end_to_end(folder):
+    """The fix at the layer that broke: MCP hands us JSON lists; the store keeps tuples."""
+    from cabildo import issues_mcp
+
+    assert issues_mcp._fields({"tags": ["a", "b"], "scope": "S"}) == {"tags": ("a", "b"), "scope": "S"}
+    path = issues.file_issue(folder, title="Tagged Thing", area="ci", body="x",
+                             extra=issues_mcp._fields({"scope": "S", "tags": ["one", "two"]}),
+                             today="2026-08-03")
+    assert "tags:\n  - one\n  - two" in path.read_text()
+    assert issues.check(folder) == []
+
+
 def test_file_issue_rejects_an_undeclared_area(folder):
     with pytest.raises(issues.IssueFormatError, match="unknown area"):
         issues.file_issue(folder, title="T", area="nowhere", body="x", extra={"scope": "S"})

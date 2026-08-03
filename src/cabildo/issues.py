@@ -131,6 +131,13 @@ class Field:
         got = value if isinstance(value, tuple) else (value,)
         if isinstance(value, tuple) and not self.is_list:
             return [f"`{self.name}` is a list, but this folder declares it a scalar"]
+        if self.is_list and not isinstance(value, tuple):
+            # Say what is actually wrong. An agent given only "does not match kebab" here spent
+            # four attempts trying comma, comma-space and space as separators, then gave up and
+            # filed with one tag instead of the four it meant — because nothing told it that a
+            # delimited string was never going to be the answer.
+            return [f"`{self.name}` is a list — pass a list of values, not the delimited "
+                    f"string {value!r}"]
         out = []
         if self.values:
             out += [

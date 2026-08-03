@@ -110,6 +110,19 @@ def _line(issue: issues.Issue) -> str:
     return f"  {issue.slug}\n    {issue.title}\n    {issue.area} · {' · '.join(bits)}"
 
 
+def _fields(given: dict | None) -> dict[str, str | tuple[str, ...]]:
+    """MCP hands us JSON, so a list arrives as a list; the store keeps tuples.
+
+    Converting here rather than asking callers to is the whole point: the previous signature could
+    only carry strings, so an agent facing a list-valued field had no correct move and tried four
+    separators before giving up and losing three of its four tags.
+    """
+    out: dict[str, str | tuple[str, ...]] = {}
+    for k, v in (given or {}).items():
+        out[k] = tuple(str(x) for x in v) if isinstance(v, (list, tuple)) else v
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Tools
 # --------------------------------------------------------------------------- #
@@ -174,7 +187,7 @@ def file_issue(
     area: str,
     body: str,
     blocked_by: list[str] | None = None,
-    fields: dict[str, str] | None = None,
+    fields: dict[str, str | list[str]] | None = None,
 ) -> str:
     """File a follow-up: work that is KNOWN, SCOPED and NOT BEING DONE — not a vague idea, not
     something you are about to do anyway.
@@ -183,7 +196,8 @@ def file_issue(
     those words, and done stated as an observation. The folder's README has the full rules.
 
     `blocked_by` = slugs that must close first. `fields` = whatever config.toml requires (scope,
-    verify, priority …); `check_issues` names what you missed."""
+    verify, priority …); a list-valued field like `tags` takes a real list, never a delimited
+    string. `check_issues` names what you missed."""
     folder = _folder()
     path = issues.file_issue(
         folder,
@@ -191,7 +205,7 @@ def file_issue(
         area=area,
         body=body,
         blocked_by=tuple(blocked_by or ()),
-        extra=dict(fields or {}),
+        extra=_fields(fields),
     )
     return f"filed {path.name}"
 
@@ -203,7 +217,7 @@ def update_issue(
     status: str = "",
     area: str = "",
     blocked_by: list[str] | None = None,
-    fields: dict[str, str] | None = None,
+    fields: dict[str, str | list[str]] | None = None,
 ) -> str:
     """Change an issue's front matter. Only what you pass is touched; `fields` merges, so setting
     one project field cannot drop the others. Set `blocked_by` when you find a real ordering — it
@@ -221,7 +235,7 @@ def update_issue(
     if blocked_by is not None:
         changes["blocked_by"] = tuple(blocked_by)
     if fields:
-        changes["extra"] = dict(fields)
+        changes["extra"] = _fields(fields)
     if not changes:
         return "nothing to change"
     updated = issues.update(folder, name, **changes)
