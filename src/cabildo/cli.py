@@ -700,9 +700,14 @@ def cmd_add(args) -> int:
         except (ValueError, OSError) as e:
             print(f"  {C.RED}could not write .mcp.json: {e}{C.OFF}", file=sys.stderr)
             return 1
-        cmd = " ".join(mcp_config.mcp_command())
+        wired = ["cabildo " + C.DIM + "(the bus)" + C.OFF]
+        if mcp_config.has_issues(root):
+            wired.append("issues " + C.DIM + "(this repo's docs/issues)" + C.OFF)
         color = C.DIM if what == "unchanged" else C.GREEN
-        print(f"  {color}{what}{C.OFF} {p} {C.DIM}({cmd}){C.OFF}")
+        print(f"  {color}{what}{C.OFF} {p} {C.DIM}—{C.OFF} {', '.join(wired)}")
+        if not mcp_config.has_issues(root):
+            print(f"  {C.DIM}no docs/issues/ here, so no issue register was wired. "
+                  f"`cabildo issues init {root}` starts one.{C.OFF}")
         print(f"  {C.DIM}Claude Code asks once to approve a project MCP server; "
               f".mcp.json is meant to be committed — gitignore it if this wiring "
               f"is yours alone.{C.OFF}")
@@ -718,6 +723,97 @@ def cmd_add(args) -> int:
               f"sessions here will have the tools but won't auto-join, be listed, "
               f"or have claims enforced. Run {C.BOLD}python scripts/install.py{C.OFF} once.")
     print(f"\n{C.DIM}restart Claude Code in that folder to pick it up.{C.OFF}")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# The project register
+# --------------------------------------------------------------------------- #
+def cmd_issues(args) -> int:
+    """The human's seat at a project's `docs/issues/` — same module the `issues`
+    MCP server calls, so what you see here is what an agent sees."""
+    from . import issues as reg
+
+    start = Path(os.path.expanduser(args.folder)).resolve()
+    folder = reg.find_folder(start)
+
+    if args.action == "init":
+        folder = folder or start / "docs" / "issues"
+        folder.mkdir(parents=True, exist_ok=True)
+        cfg = folder / reg.CONFIG_NAME
+        if cfg.exists() and not args.force:
+            print(f"{C.YELLOW}exists{C.OFF} {cfg} {C.DIM}(--force to rewrite){C.OFF}")
+            return 1
+        cfg.write_text(reg.infer_config(folder))
+        found, _ = reg.load_all(folder)
+        print(f"{C.GREEN}wrote{C.OFF} {cfg}")
+        print(f"  {C.DIM}inferred from {len(found)} issue(s) already here, so `check` passes "
+              f"today. Tighten it deliberately.{C.OFF}")
+        return 0
+
+    if folder is None:
+        print(f"{C.RED}no docs/issues/{C.OFF} at or above {start}\n"
+              f"  {C.DIM}`cabildo issues init -C {start}` starts one{C.OFF}", file=sys.stderr)
+        return 2
+
+    if args.action == "check":
+        problems = reg.check(folder)
+        for problem in problems:
+            print(f"{C.RED}✗{C.OFF} {problem}", file=sys.stderr)
+        if problems:
+            print(f"\n{len(problems)} problem(s) in {folder}", file=sys.stderr)
+            return 1
+        found, _ = reg.load_all(folder)
+        print(f"{C.GREEN}clean{C.OFF} {folder} {C.DIM}({len(found)} follow-ups){C.OFF}")
+        return 0
+
+    if args.action == "reindex":
+        reg.reindex(folder)
+        print(f"reindexed {folder / reg.README_NAME}")
+        return 0
+
+    if args.action == "show":
+        if not args.name:
+            print("show needs a name", file=sys.stderr)
+            return 2
+        print(reg.resolve(folder, args.name).read_text())
+        return 0
+
+    if args.action == "list":
+        found, broken = reg.load_all(folder)
+        for i in found:
+            if args.status and i.status != args.status:
+                continue
+            if not args.status and not i.open:
+                continue
+            if args.area and i.area != args.area:
+                continue
+            if args.owner and (i.owner or "none") != args.owner:
+                continue
+            owner = f" {C.CYAN}@{i.owner}{C.OFF}" if i.owner else ""
+            print(f"{C.BOLD}{i.slug}{C.OFF}{owner}\n  {C.DIM}[{i.status}] {i.area}{C.OFF} — {i.title}")
+        for p in broken:
+            print(f"{C.RED}unparseable{C.OFF} {p}", file=sys.stderr)
+        return 0
+
+    # ready — the default, and the question worth asking
+    b = reg.board(folder, owner=args.owner)
+    if b.ready:
+        print(f"{C.GREEN}READY{C.OFF} {C.DIM}— nothing blocks these, nobody owns them{C.OFF}")
+        for i in b.ready:
+            print(f"  {C.BOLD}{i.slug}{C.OFF}\n    {i.title}\n    {C.DIM}{i.area}{C.OFF}")
+    else:
+        print(f"{C.YELLOW}nothing ready{C.OFF} {C.DIM}— every open issue is owned or blocked{C.OFF}")
+    if b.mine:
+        print(f"\n{C.CYAN}YOURS{C.OFF}")
+        for i in b.mine:
+            print(f"  {C.BOLD}{i.slug}{C.OFF} {C.DIM}[{i.status}]{C.OFF} — {i.title}")
+    if b.waiting:
+        print(f"\n{C.DIM}WAITING ({len(b.waiting)}){C.OFF}")
+        for w in b.waiting:
+            print(f"  {C.DIM}{w.issue.slug} — {w.reason}{C.OFF}")
+    if b.done:
+        print(f"\n{C.DIM}{b.done} done.{C.OFF}")
     return 0
 
 
@@ -991,6 +1087,22 @@ def main(argv: list[str] | None = None) -> int:
     ad.add_argument("--print", dest="print_only", action="store_true",
                     help="show what would be written, change nothing")
     ad.set_defaults(fn=cmd_add)
+
+    iss = sub.add_parser(
+        "issues",
+        help="this project's docs/issues register: what's ready, what's blocked")
+    iss.add_argument("action", nargs="?", default="ready",
+                     choices=["ready", "list", "show", "check", "reindex", "init"],
+                     help="default: ready — what is unblocked and unowned")
+    iss.add_argument("name", nargs="?", help="for `show`: a filename or slug fragment")
+    iss.add_argument("-C", "--folder", metavar="DIR", default=".",
+                     help="where to look for docs/issues (default: cwd, searching upward)")
+    iss.add_argument("--status", help="filter: open | in-progress | blocked | done")
+    iss.add_argument("--area", help="filter: one of the folder's declared areas")
+    iss.add_argument("--owner", help="filter: a handle, or `none` for unowned")
+    iss.add_argument("--force", action="store_true",
+                     help="for `init`: overwrite an existing config.toml")
+    iss.set_defaults(fn=cmd_issues)
 
     sv = sub.add_parser(
         "service",

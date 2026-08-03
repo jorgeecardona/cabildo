@@ -170,6 +170,91 @@ push is refused again, just as a race rather than as somebody's lock.
 - **A push it can't verify is never reported as landed** — and a push it can't
   *see* is never reported as failed either. See `tests/test_land_verification.py`.
 
+## The second server: `issues`
+
+There are two MCP servers, and they are deliberately different in scope. `cabildo`
+is about **other agents**. `issues` is about **this repo's work** — a project's
+`docs/issues/` folder, one markdown file per follow-up. A register is a property
+of a folder, which is why it is wired in `.mcp.json` rather than at user scope.
+Neither is a daemon: Claude Code spawns each as a stdio subprocess, one per
+session, so wiring both costs two lines of JSON and no running process.
+
+**The files are the store.** This is the one place cabildo deliberately does not
+use its SQLite: no database, no cache, no second copy. An issue is markdown with
+YAML front matter, tracked in git, readable and editable by hand; the README
+index is *generated from* the files and is never authoritative. If the server is
+down, `git` and an editor still work.
+
+### What it answers
+
+The point isn't the list — a list of everything is what made the question hard.
+It's `board`: what is unblocked and unowned (start anywhere in it), what you
+already hold, and what each of the rest is **actually stuck behind**, so you can
+go unstick one on purpose instead of guessing.
+
+```
+$ cabildo issues ready
+READY — nothing blocks these, nobody owns them
+  free-port-toctou-survives-in-two-more-files
+    The _free_port() race was fixed in one file; the pattern lives in two more
+    ci
+YOURS
+  gap-ids-collide-with-no-guard [in-progress] — Two gaps both landed as G33
+WAITING (4)
+  attachments-are-console-only — blocked by No attachment has ever reached real R2
+  ci-runner-memory-headroom — blocked on a decision — @jorge can unblock it
+```
+
+That dependency edge (`blocked_by`) is lifted from **Beads**, which is the
+sharpest prior art for issue tracking aimed at agents; "what can I pick up cold
+right now" is not answerable without it. Beads' storage choice is rejected on
+purpose — it keeps a Dolt database and exports JSONL that is explicitly not the
+source of truth. Backlog.md and ditz got file-per-issue right and are the shape
+here. git-bug stores issues as git objects, unreadable without the tool.
+
+### Core plus per-project config
+
+Real repos disagree about front matter, and pretending otherwise just means the
+tool is wrong somewhere. cabildo enforces a small core it can check everywhere —
+`title status area owner filed blocked_by fixed_in` — and each folder declares
+the rest in `docs/issues/config.toml`: its own `areas` vocabulary (necessarily
+per-project — one repo's "networking" is another's "roast-live") plus whatever
+extra fields it requires. Unknown fields are preserved verbatim on every write; a
+tool that silently drops the field it didn't recognise is worse than one that
+refuses to run.
+
+`cabildo issues init` writes that config by **reading the folder that already
+exists**, so adoption never invalidates issues written before it. Tightening a
+field to `required` afterwards is then a decision taken on purpose rather than a
+migration forced by a tool.
+
+Statuses are `open → in-progress → done`, with `blocked` off to the side.
+**Closing keeps the file** and requires `fixed_in` — the sha that landed on the
+mainline, not one from a worktree that will be pruned — so the folder is a record
+of what was fixed by what.
+
+| tool | job |
+|---|---|
+| `board` | what's ready, what's yours, what everything else waits on |
+| `list_issues` / `show_issue` | the flat register, and one issue in full |
+| `file_issue` | file one — answerable cold, MEASURED vs INFERRED, define done |
+| `update_issue` | edit front matter; `blocked_by` is what moves the board |
+| `claim_issue` / `release_issue` | take it, and take a real bus lease with it |
+| `close_issue` | mark done + `fixed_in`; the file stays |
+| `check_issues` | grade the folder against its own config |
+
+`claim_issue` is the one place the two servers touch: it takes an `issue:<slug>`
+advisory lease on the bus, so two agents on the same repo can't quietly start the
+same work — the failure a folder of markdown cannot prevent by itself. It is
+best-effort. A repo with no cabildo DB gets the register and loses only the lease.
+
+Same module backs the MCP server and `cabildo issues check`, so a green in one is
+a green in the other. `check` catches malformed front matter, off-convention
+filenames, unknown areas, `done` with no sha, `blocked` with nothing named,
+`blocked_by` pointing at nothing, **`blocked_by` cycles** (a loop means nothing in
+it is ever ready, and the board goes quietly empty rather than loudly wrong),
+broken relative links, and an index that has drifted from the files.
+
 ## Hook surface
 
 Hooks are the only way into a running session's context, and the tool-call
@@ -214,6 +299,8 @@ cabildo spawn qa "re-run the flaky suite" --target main
 cabildo fleet                 # spawn ledger: who begat whom, and their fate
 cabildo cost -d 7 --rate 3    # what running cabildo cost you over 7 days
 cabildo add --project paas .  # put this folder on the bus (see below)
+cabildo issues                # this repo's register: what's ready, what's blocked
+cabildo issues check          # grade docs/issues against its own config
 cabildo service install       # run the daemon in the background (see below)
 ```
 
@@ -257,6 +344,13 @@ Two things happen, and only these two:
    nothing on a teammate's machine. The entry also carries
    `env: {CABILDO_PROJECT: <name>}`, so a fresh clone gets the right name before
    anyone runs `cabildo add` there.
+
+   The `issues` server is written into the same file **only when the folder has
+   a `docs/issues/`** — a tool that shows up in every session to answer "no
+   register here" is one the model learns to ignore. `cabildo issues init`
+   starts one; `cabildo add` says so when there isn't one. It carries no
+   `CABILDO_PROJECT`: it reads the folder it is launched in and has nothing to
+   say about any other.
 
 The hooks stay user-scope (`scripts/install.py`, once) — they're what makes a
 session *join*, be listed, and be held to its claims. `cabildo add` says so if

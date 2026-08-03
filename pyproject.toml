@@ -38,6 +38,7 @@ dev = ["pytest>=8.0"]
 [project.scripts]
 cabildo = "cabildo.cli:main"
 cabildo-mcp = "cabildo.mcp_server:main"
+cabildo-issues-mcp = "cabildo.issues_mcp:main"
 cabildo-hook = "cabildo.hooks.cli:main"
 
 [tool.pytest.ini_options]
