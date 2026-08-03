@@ -260,6 +260,53 @@ def test_index_shows_open_work_and_counts_the_done(folder):
     assert "1 done" in table            # ...but is still counted
 
 
+def test_crossref_demands_the_link_in_both_directions(tmp_path):
+    """One direction is not enough: a register that names a gap but does not point at the task is
+    how the same gap gets found four times and fixed zero."""
+    d = tmp_path / "docs" / "issues"
+    d.mkdir(parents=True)
+    (d / issues.CONFIG_NAME).write_text(
+        'areas = ["ci"]\nindex = false\n\n[fields.register]\ncrossref = "../roadmap/gaps.md"\n'
+    )
+    gaps = tmp_path / "docs" / "roadmap" / "gaps.md"
+    gaps.parent.mkdir(parents=True)
+    write(d, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\nregister: G12")
+
+    gaps.write_text("# gaps\n\nnothing here\n")
+    assert any("G12 does not exist" in p.message for p in issues.check(d))
+
+    gaps.write_text("# gaps\n\n## G12 — something\n")
+    assert any("does not link back" in p.message for p in issues.check(d))
+
+    gaps.write_text("# gaps\n\n## G12 — [see](../issues/03-08-2026-a.md)\n")
+    assert issues.check(d) == []
+
+
+def test_require_one_of_rejects_silence_but_accepts_either(tmp_path):
+    d = tmp_path / "docs" / "issues"
+    d.mkdir(parents=True)
+    (d / issues.CONFIG_NAME).write_text(
+        'areas = ["ci"]\nindex = false\nrequire_one_of = [["register", "register_note"]]\n'
+    )
+    p = write(d, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci")
+    assert any("none of `register`, `register_note`" in x.message for x in issues.check(d))
+
+    p.write_text(p.read_text().replace("area: ci", "area: ci\nregister_note: no gap, a CI defect"))
+    assert issues.check(d) == []
+
+
+def test_crossref_at_a_missing_path_is_the_configs_problem(tmp_path):
+    d = tmp_path / "docs" / "issues"
+    d.mkdir(parents=True)
+    (d / issues.CONFIG_NAME).write_text(
+        'areas = ["ci"]\nindex = false\n\n[fields.register]\ncrossref = "../nope.md"\n'
+    )
+    write(d, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\nregister: G1")
+    problems = issues.check(d)
+    assert any("does not exist" in p.message and p.path.name == issues.CONFIG_NAME
+               for p in problems)
+
+
 # --------------------------------------------------------------------------- #
 # Adoption
 # --------------------------------------------------------------------------- #

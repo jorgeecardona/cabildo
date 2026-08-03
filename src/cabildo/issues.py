@@ -94,6 +94,10 @@ class Field:
     required: bool = False
     values: tuple[str, ...] = ()      # empty means free text
     is_list: bool = False             # a YAML block list rather than a scalar
+    #: a file, relative to the issue folder, this field's value must appear in — and which must
+    #: link back to the issue. One direction is not enough: a register that names a gap but does
+    #: not point at the task is how the same gap gets found four times and fixed zero.
+    crossref: str = ""
 
     def problems(self, value) -> list[str]:
         if value is None or value == ():
@@ -121,6 +125,10 @@ class Config:
     fields: Mapping[str, Field] = dataclasses.field(default_factory=dict)
     index: bool = True
     date_style: str = "DMY"          # DMY → 03-08-2026-slug.md; YMD → 2026-08-03-slug.md
+    #: groups where at least one member must be present. For "name the register entry, or say why
+    #: there is none" — an either/or that `required` cannot express, and where the point is that
+    #: silence is not an allowed answer.
+    require_one_of: tuple[tuple[str, ...], ...] = ()
 
     @property
     def filename_re(self) -> re.Pattern[str]:
@@ -156,15 +164,20 @@ def load_config(folder: pathlib.Path) -> Config:
             required=bool(spec.get("required", False)),
             values=tuple(spec.get("values", ()) or ()),
             is_list=bool(spec.get("list", False)),
+            crossref=str(spec.get("crossref", "") or ""),
         )
     style = str(raw.get("date_style", "DMY")).upper()
     if style not in ("DMY", "YMD"):
         raise IssueFormatError(f"{path}: date_style must be DMY or YMD, not {style!r}")
+    groups = tuple(
+        tuple(g) for g in (raw.get("require_one_of", ()) or ()) if g
+    )
     return Config(
         areas=tuple(raw.get("areas", ()) or ()),
         fields=fields,
         index=bool(raw.get("index", True)),
         date_style=style,
+        require_one_of=groups,
     )
 
 
@@ -482,11 +495,57 @@ def check(folder: pathlib.Path, config: Config | None = None) -> list[Problem]:
         for field in config.fields.values():
             for message in field.problems(issue.extra.get(field.name)):
                 problems.append(Problem(p, message))
+        for group in config.require_one_of:
+            if not any(issue.extra.get(k) for k in group):
+                problems.append(Problem(
+                    p, f"none of {', '.join('`' + k + '`' for k in group)} is set — say which one "
+                       f"applies, or why none does. Silence reads as an oversight and gets "
+                       f"re-litigated",
+                ))
         problems.extend(_broken_links(issue, folder))
 
     problems.extend(_cycles(issues))
+    problems.extend(_crossrefs(folder, issues, config))
     problems.extend(_index_problems(folder, issues, config))
     return problems
+
+
+def _crossrefs(
+    folder: pathlib.Path, issues: tuple[Issue, ...], config: Config
+) -> list[Problem]:
+    """Enforce a field's two-way link with another document.
+
+    Some registers are the record of *what is wrong*, and the issue folder holds one entry broken
+    out into a task. Checking only that the issue names the register lets the register go silently
+    stale; checking only the back-link lets an issue cite an entry that was never written.
+    """
+    out: list[Problem] = []
+    for field in config.fields.values():
+        if not field.crossref:
+            continue
+        target = (folder / field.crossref).resolve()
+        if not target.exists():
+            out.append(Problem(
+                folder / CONFIG_NAME,
+                f"fields.{field.name}.crossref points at {field.crossref}, which does not exist",
+            ))
+            continue
+        text = target.read_text()
+        for issue in issues:
+            value = issue.extra.get(field.name)
+            if not isinstance(value, str) or not value:
+                continue
+            if not re.search(rf"\b{re.escape(value)}\b", text):
+                out.append(Problem(
+                    issue.path, f"{field.name} {value} does not exist in {target.name}"
+                ))
+            elif issue.path.name not in text:
+                out.append(Problem(
+                    issue.path,
+                    f"{target.name} does not link back to this file — without the back-link the "
+                    f"task is invisible from the register that is supposed to track it",
+                ))
+    return out
 
 
 def _cycles(issues: Iterable[Issue]) -> list[Problem]:

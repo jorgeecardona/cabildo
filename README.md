@@ -228,6 +228,25 @@ exists**, so adoption never invalidates issues written before it. Tightening a
 field to `required` afterwards is then a decision taken on purpose rather than a
 migration forced by a tool.
 
+```toml
+areas = ["agent", "console", "control-plane", "ci", "tooling"]
+require_one_of = [["register", "register_note"]]   # silence is not an answer
+
+[fields.verify]
+required = true
+values = ["test", "probe", "inspect"]
+
+[fields.register]
+crossref = "../roadmap/gaps.md"    # must appear there, and it must link back here
+```
+
+`crossref` is the two-way link: an issue naming `G12` must find `G12` in the
+register, and that entry must point at the issue file. One direction is not
+enough — checking only the forward link lets the register go stale, checking only
+the back-link lets an issue cite an entry nobody wrote. `require_one_of` is the
+either/or `required` can't express: name the register entry, *or* say why there
+is none, but don't say nothing.
+
 Statuses are `open → in-progress → done`, with `blocked` off to the side.
 **Closing keeps the file** and requires `fixed_in` — the sha that landed on the
 mainline, not one from a worktree that will be pruned — so the folder is a record
