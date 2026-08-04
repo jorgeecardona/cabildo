@@ -22,7 +22,7 @@ import socket
 import sys
 import time
 
-from . import actions, desktop, names, store
+from . import actions, desktop, monitor, names, store
 
 # A 'running' intent older than this means the daemon died holding it.
 STALE_AFTER = actions.GATE_TIMEOUT + 300
@@ -30,20 +30,43 @@ STALE_AFTER = actions.GATE_TIMEOUT + 300
 # firing the SessionEnd hook. Cheap (one os.kill per active session) but not
 # worth doing on every 2s tick.
 REAP_SESSIONS_EVERY = 60.0
+# How often to sample the machine. A /proc walk is ~10ms, but the conditions it
+# raises are told to agents once per episode regardless of sample rate, so
+# sampling faster buys reaction time and costs nobody context.
+MONITOR_EVERY = 30.0
 
 DAEMON_SESSION = "daemon"
 DAEMON_HANDLE = "daemon"
 
 
-def _pending_for_human(conn, after_id: int) -> list[dict]:
-    """Messages the human should be interrupted for: anything sent to him
-    directly, plus anything flagged urgent anywhere. Never the daemon's own
-    chatter, and never his own messages echoed back."""
-    rows = conn.execute(
-        "SELECT * FROM messages WHERE id > ? AND from_session != ? "
-        "AND (to_session = ? OR urgent = 1) ORDER BY id",
-        (after_id, store.HUMAN_SESSION, store.HUMAN_SESSION),
-    ).fetchall()
+def _pending_for_human(conn, after_id: int, *, everything: bool = False) -> list[dict]:
+    """Messages worth interrupting the human for: the ones addressed to him.
+
+    It used to be "addressed to him, OR urgent anywhere", and that second clause was the whole
+    problem. `urgent` on the bus means "interrupt the recipient's turn" — it is a property of a
+    message to *somebody*, and when that somebody is another agent it is not news for this desk.
+    Measured over the last 40 desktop pops: **none** were addressed to him. Twenty were the daemon
+    telling an agent its land failed; twenty were five agents on #proj:paas working out which of
+    them was writing docs/issues/. All of it was the bus doing its job, and all of it arrived as a
+    popup he could not act on.
+
+    An agent that genuinely needs him has a channel that says so — `request(action="ask")`, which
+    pops with buttons and waits for an answer. Everything else is readable in `cabildo watch`,
+    which is where you go when you want the firehose. `--notify-all` restores the old behaviour for
+    anyone who does.
+    """
+    if everything:
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE id > ? AND from_session != ? "
+            "AND (to_session = ? OR urgent = 1) ORDER BY id",
+            (after_id, store.HUMAN_SESSION, store.HUMAN_SESSION),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE id > ? AND from_session != ? AND to_session = ? "
+            "ORDER BY id",
+            (after_id, store.HUMAN_SESSION, store.HUMAN_SESSION),
+        ).fetchall()
     return [store._msg_dict(r) for r in rows]
 
 
@@ -158,8 +181,22 @@ def main(argv: list[str] | None = None) -> int:
                         "it instead of running it (0 disables)")
     p.add_argument("--once", action="store_true", help="drain the queue and exit")
     p.add_argument("--interval", type=float, default=2.0, help="poll seconds")
+    p.add_argument("--notify-all", action="store_true",
+                   help="pop a desktop notification for urgent traffic between agents too. "
+                        "Off by default: measured over 40 pops, none were addressed to the "
+                        "human. Use `cabildo watch` for the firehose.")
     p.add_argument("--no-notify", action="store_true",
                    help="don't pop desktop notifications for messages addressed to you")
+    p.add_argument("--no-monitor", action="store_true",
+                   help="don't watch this machine's memory / leftover processes")
+    p.add_argument("--monitor-every", type=float, default=MONITOR_EVERY,
+                   help=f"seconds between machine samples (default: {MONITOR_EVERY:g})")
+    p.add_argument("--mem-warn", type=float, default=monitor.Thresholds.warn_pct,
+                   help="%% RAM available below which agents are told to be careful")
+    p.add_argument("--mem-critical", type=float, default=monitor.Thresholds.critical_pct,
+                   help="%% RAM available below which agents are told to stop starting things")
+    p.add_argument("--orphan-mb", type=int, default=monitor.Thresholds.orphan_rss_mb,
+                   help="ignore leftover processes smaller than this")
     args = p.parse_args(argv)
 
     worker = _worker_name()
@@ -191,11 +228,18 @@ def main(argv: list[str] | None = None) -> int:
     row = conn.execute("SELECT COALESCE(MAX(id), 0) AS m FROM messages").fetchone()
     last_msg = row["m"]
 
+    thresholds = monitor.Thresholds(
+        warn_pct=args.mem_warn,
+        critical_pct=args.mem_critical,
+        orphan_rss_mb=args.orphan_mb,
+    )
+
     _log(f"daemon {worker} up · actions={sorted(actions.ACTIONS)} · "
          f"push={'ENABLED' if args.allow_push else 'dry-run'} · "
          f"spawn={'ENABLED' if args.allow_spawn else 'dry-run'} "
          f"(≤{args.max_agents} agents, depth ≤{args.max_depth}) · "
          f"notify={'on' if notifying else 'off'} · "
+         f"monitor={'off' if args.no_monitor else 'mem<%g%%/%g%% every %gs' % (args.mem_warn, args.mem_critical, args.monitor_every)} · "
          f"budget={'%.0f/%gd' % (args.budget, args.budget_days) if args.budget else 'none'} · "
          f"intent age ≤{'%gh' % args.max_intent_age if args.max_intent_age else 'unbounded'}")
 
@@ -209,6 +253,7 @@ def main(argv: list[str] | None = None) -> int:
              f"{fresh} will be RUN")
 
     last_reap = 0.0
+    last_monitor = 0.0
     try:
         while True:
             intent = store.take_next_intent(conn, worker)
@@ -216,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
                 handle(conn, intent, ctx)
                 continue
             if notifying:
-                for m in _pending_for_human(conn, last_msg):
+                for m in _pending_for_human(conn, last_msg, everything=args.notify_all):
                     last_msg = m["id"]
                     if desktop.notify_message(m):
                         _log(f"🔔 {m['from_display']}: {str(m['body'])[:60]!r}")
@@ -226,6 +271,16 @@ def main(argv: list[str] | None = None) -> int:
                 dead = store.reap_dead_sessions(conn)
                 if dead:
                     _log(f"reaped {dead} session(s) whose claude process is gone")
+            # Sample the machine and tell the fleet what changed. Reaping runs
+            # first on purpose: a session ended a moment ago is what turns its
+            # leftover processes into orphans.
+            if not args.no_monitor and now - last_monitor >= args.monitor_every:
+                last_monitor = now
+                try:
+                    for line in monitor.sweep(conn, thresholds, source=f"daemon:{worker}"):
+                        _log(line)
+                except Exception as e:   # a bad /proc read must not kill the daemon
+                    _log(f"monitor: {type(e).__name__}: {e}")
             if args.once:
                 _log("queue empty — exiting")
                 return 0

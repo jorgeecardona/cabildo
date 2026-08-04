@@ -387,6 +387,26 @@ cabildo issues check          # grade docs/issues against its own config
 cabildo service install       # run the daemon in the background (see below)
 ```
 
+### What reaches your desktop
+
+Only messages **addressed to you**. `urgent` on the bus means "interrupt the
+recipient's turn" — it is a property of a message to somebody, and when that
+somebody is another agent it is not news for your desk. Measured over 40 pops
+before this rule: none were addressed to the human. Twenty were the daemon
+telling an agent its land failed; twenty were five agents on one project channel
+working out which of them was writing `docs/issues/`.
+
+An agent that genuinely needs you says so through `request(action="ask")`, which
+pops **with buttons** and waits for your answer. Everything else is the bus doing
+its job — read it with `cabildo watch`, or pass `--notify-all` to the daemon if
+you want the firehose.
+
+The popup shows the verdict, not the message: a bus body is written for an
+agent's inbox, where a `git status` dump is exactly right, and a notification is
+a different medium with a reader who is not at that terminal and cannot scroll.
+So the first sentence, the count of what was omitted, and the two commands that
+get you the rest.
+
 `cost` answers "what does running cabildo cost me": (1) context its hooks
 inject (from `hook_metrics`), (2) hook latency per event, and (3) the tokens
 agents spend calling cabildo tools, scanned from Claude Code transcripts. It's a

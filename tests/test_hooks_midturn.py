@@ -151,3 +151,50 @@ def test_file_claim_from_another_project_does_not_block(conn):
     _claim(conn, "a" * 8, "file:src/core.py", project="/repo/beta")
     assert guard.deny_reason(conn, "b" * 8, "Edit",
                              {"file_path": "/repo/alpha/src/core.py"}) is None
+
+
+# --------------------------------------------------------------------------- #
+# Desktop notifications: whose message is it, and what does it say
+# --------------------------------------------------------------------------- #
+def test_only_messages_addressed_to_the_human_pop_a_notification(conn):
+    """Measured, not assumed: of the last 40 desktop pops, ZERO were addressed to him. Twenty were
+    the daemon telling an agent its land failed; twenty were agents coordinating on a project
+    channel. `urgent` means "interrupt the recipient" — and when the recipient is another agent,
+    this desk is not the recipient."""
+    from cabildo import daemon
+
+    make_session(conn, "agent-a", handle="alice", project="/repo/x", project_name="x")
+    make_session(conn, "agent-b", handle="bob", project="/repo/x", project_name="x")
+    store.post_message(conn, from_session="agent-a", from_handle="alice",
+                       body="urgent, for bob", to_session="agent-b", urgent=True)
+    store.post_message(conn, from_session="agent-a", from_handle="alice",
+                       body="urgent, to a channel", topic="proj:x", urgent=True)
+    assert daemon._pending_for_human(conn, 0) == []
+    assert len(daemon._pending_for_human(conn, 0, everything=True)) == 2   # --notify-all
+
+    store.post_message(conn, from_session="agent-a", from_handle="alice",
+                       body="this one is for you", to_session=store.HUMAN_SESSION)
+    got = daemon._pending_for_human(conn, 0)
+    assert [m["body"] for m in got] == ["this one is for you"]
+
+
+def test_a_notification_shows_the_verdict_not_the_git_status(monkeypatch):
+    """The body is written for an agent's inbox, where a file list is right. A popup is a different
+    medium: he is not at that terminal and cannot scroll."""
+    from cabildo import desktop
+
+    sent = {}
+    monkeypatch.setattr(desktop, "notify",
+                        lambda s, b, **k: sent.update(summary=s, body=b, **k) or True)
+    desktop.notify_message({
+        "from_display": "@daemon", "project_name": "crm", "urgent": True,
+        "body": "❌ intent #28 `land` → failed working tree has uncommitted tracked changes — "
+                "commit or stash first. The daemon lands commits, it does not decide what:\n"
+                "M apps/api/src/crm/config.py\nM apps/web/vite.config.ts\nM docker-compose.yml",
+    })
+    assert sent["summary"] == "❌ crm"
+    assert "commit or stash first." in sent["body"]
+    assert "vite.config.ts" not in sent["body"]      # the dump is counted, not shown
+    assert "3 file(s) listed" in sent["body"]
+    # the daemon reporting on work it was asked to do must not hold the screen
+    assert sent["urgent"] is False
