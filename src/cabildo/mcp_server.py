@@ -539,6 +539,39 @@ def claims(all_projects: bool = False) -> list[dict[str, Any]]:
         ]
 
 
+@mcp.tool()
+def conditions() -> dict[str, Any]:
+    """What is currently true about this machine: memory pressure, processes
+    left behind by agents that ended, anything the human raised by hand.
+
+    You are told about these automatically when they change, so call this only
+    when you want the current state on purpose — before starting a build, a test
+    suite, or a batch of parallel work, or after being told memory is tight and
+    wanting to know whether it still is. `mine` is your own share: if it is
+    large, the memory the alert is about is yours to release.
+
+    Read-only. Conditions are raised by the daemon, which measures, and by the
+    human, who knows things it cannot — not by agents. Anything you want to tell
+    the fleet yourself is a `send`."""
+    with store.connect() as conn:
+        sid = _me(conn)
+        out = []
+        for c in store.active_conditions(conn):
+            mine = (c["data"].get("by_session") or {}).get(sid)
+            out.append({
+                "key": c["key"],
+                "level": c["level"],
+                "headline": c["headline"],
+                "advice": c["advice"],
+                "mine": mine,
+                "raised_ago": round(c["age"]),
+                "source": c["source"],
+                "details": {k: v for k, v in c["data"].items() if k != "by_session"},
+            })
+        return {"host": store.hostname(), "conditions": out,
+                "note": "nothing raised — the machine is fine" if not out else None}
+
+
 # --------------------------------------------------------------------------- #
 # Control plane
 # --------------------------------------------------------------------------- #

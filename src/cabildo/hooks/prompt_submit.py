@@ -31,7 +31,13 @@ def main() -> None:
             conn, session_id, cwd=cwd, project=root, project_name=name, claude_pid=pid,
             tag=os.environ.get("CABILDO_TAG"),
         )
-        line = notify.unread_line(conn, session_id)
+        # Conditions too: a turn that never makes a tool call would otherwise
+        # never reach PostToolUse, and "the machine is out of RAM" is exactly
+        # the kind of thing the user's next instruction depends on.
+        line = notify._join(
+            notify.unread_line(conn, session_id),
+            notify.condition_text(conn, session_id),
+        )
     finally:
         conn.close()
     emit_context("UserPromptSubmit", line)

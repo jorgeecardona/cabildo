@@ -77,7 +77,12 @@ def _exe_id(argv: list[str]) -> str:
     return argv[0].lower()
 
 
-def resolve_claude_pid(start_pid: int | None = None) -> int:
+def _is_claude(pid: int) -> bool:
+    exe = _exe_id(_argv(pid))
+    return "claude" in exe and "cabildo" not in exe
+
+
+def resolve_claude_pid(start_pid: int | None = None, *, include_self: bool = False) -> int:
     """Walk the ancestor chain from `start_pid` (default: this process) and
     return the PID of the nearest `claude` process. 0 if none found.
 
@@ -87,13 +92,20 @@ def resolve_claude_pid(start_pid: int | None = None) -> int:
     (that bug bound every such agent to an outer session and misattributed
     everything it sent), and a `bash -c '... cabildo ...'` wrapper must not
     qualify as one. cabildo's own binaries are excluded so a hook or MCP
-    process installed under a claude-ish path never matches itself."""
-    pid = _ppid(start_pid if start_pid is not None else os.getpid())
+    process installed under a claude-ish path never matches itself.
+
+    `include_self` starts the walk at `start_pid` itself. Hooks and the MCP
+    server want the default (they are never claude), but memory accounting walks
+    *arbitrary* pids up to their owning agent, and there claude's own resident
+    set belongs to claude."""
+    start = start_pid if start_pid is not None else os.getpid()
+    if include_self and start > 1 and _is_claude(start):
+        return start
+    pid = _ppid(start)
     seen: set[int] = set()
     while pid and pid > 1 and pid not in seen:
         seen.add(pid)
-        exe = _exe_id(_argv(pid))
-        if "claude" in exe and "cabildo" not in exe:
+        if _is_claude(pid):
             return pid
         pid = _ppid(pid)
     return 0
@@ -170,6 +182,22 @@ def scratchpad_origin(path: Path) -> Path | None:
         if _SCRATCH_ROOT.match(part) and k + 1 < len(parts):
             return _unmangle(parts[k + 1])
     return None
+
+
+# The session_id sits one level below the mangled cwd in the same path. It is
+# the only thing that still names a dead agent: once its `claude` exits, process
+# ancestry says nothing, but a venv or worktree it built under its scratchpad
+# carries the id in every child's argv forever.
+_SCRATCH_SESSION = re.compile(
+    r"claude-\d+/[^/\s]+/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+)
+
+
+def scratchpad_session(text: str) -> str | None:
+    """The session_id named by a scratchpad path appearing anywhere in `text`
+    (a path, or a whole command line), or None."""
+    m = _SCRATCH_SESSION.search(text or "")
+    return m.group(1) if m else None
 
 
 def _git_project(start: Path) -> tuple[str, str]:

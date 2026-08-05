@@ -18,6 +18,9 @@ is unaffected by whether any agent happens to be awake.
     python -m cabildo.cli log -n 30             # recent history, then exit
     python -m cabildo.cli spawn qa "audit the gate" -r ~/repo   # queue an agent
     python -m cabildo.cli fleet                 # spawn ledger: who begat whom
+    python -m cabildo.cli mem                   # RAM, attributed to the agents holding it
+    python -m cabildo.cli conditions            # what the fleet is being told right now
+    python -m cabildo.cli alert "CI is down"    # nudge every session on this machine
     python -m cabildo.cli cost -d 7 --rate 3    # what running cabildo cost you
     python -m cabildo.cli sync                   # push your sessions to the hosted dashboard
     python -m cabildo.cli add -p paas .          # put this folder on the bus (name + .mcp.json)
@@ -247,6 +250,146 @@ def cmd_agents(args) -> int:
         print(f"\n{C.BOLD}held scopes{C.OFF}")
         for c in claims:
             print(f"  {c['resource']:<28} {c['holder']:<12} {C.DIM}{c['note'] or ''}{C.OFF}")
+    return 0
+
+
+_LEVEL_COLOR = {"critical": C.RED, "warn": C.YELLOW, "info": C.CYAN}
+# Robot codenames run long (quantum-cortana-ba22c); one column width for all of
+# them beats every row wrapping differently.
+_W = 22
+
+
+def cmd_conditions(args) -> int:
+    """What the fleet is currently being told about this machine."""
+    conn = store.connect()
+    rows = store.active_conditions(conn, include_cleared=args.all)
+    if not rows:
+        print(f"{C.DIM}nothing raised on {store.hostname()}{C.OFF}")
+        return 0
+    now = time.time()
+    for c in rows:
+        col = _LEVEL_COLOR.get(c["level"], "")
+        state = "cleared" if c["state"] == "cleared" else c["level"]
+        print(f"{col}{C.BOLD}{c['key']:<10}{C.OFF} {col}{state:<9}{C.OFF} {c['headline']}")
+        for p in (c["data"].get("procs") or []):
+            print(f"    {C.DIM}pid {p['pid']:<8} {p['what']} "
+                  f"({p['rss_mb']}M, {p['age']}, from {p['who']}){C.OFF}")
+        for sid, mine in sorted((c["data"].get("by_session") or {}).items(),
+                                key=lambda kv: -kv[1]["rss_mb"])[:6]:
+            who = store.display_name(store.get_session(conn, sid), sid)
+            print(f"    {C.DIM}{who:<14} {mine['rss_mb'] / 1024:.1f}G in "
+                  f"{mine['count']} proc(s){C.OFF}")
+        seen = conn.execute(
+            "SELECT COUNT(*) n FROM condition_deliveries WHERE host=? AND key=? AND episode>=?",
+            (c["host"], c["key"], c["episode"]),
+        ).fetchone()["n"]
+        print(f"    {C.DIM}episode {c['episode']} · raised {_ago(now - c['raised_at'])} ago "
+              f"· told to {seen} session(s) · by {c['source'] or '?'}{C.OFF}")
+        if c["advice"]:
+            print(f"    {C.DIM}→ {c['advice']}{C.OFF}")
+    return 0
+
+
+def cmd_alert(args) -> int:
+    """Nudge every session on this machine by hand.
+
+    The daemon raises what it can measure; this is for what only you know —
+    "CI is down, nobody push", "I'm about to reboot". Same delivery as a
+    measured condition: once per session, at their next tool call, retractable."""
+    conn = store.connect()
+    if args.clear:
+        ok = store.clear_condition(conn, key=args.clear, source=f"@{HUMAN_HANDLE}",
+                                   headline=f"{args.clear}: stood down by @{HUMAN_HANDLE}")
+        print(f"cleared {args.clear}" if ok else f"{args.clear} was not raised")
+        return 0 if ok else 1
+    body = " ".join(args.text).strip()
+    if not body:
+        print("nothing to say", file=sys.stderr)
+        return 1
+    res = store.raise_condition(
+        conn, key=args.key, level=args.level, headline=body, advice=args.advice,
+        source=f"@{HUMAN_HANDLE}", ttl_seconds=args.ttl * 3600.0,
+    )
+    print(f"raised {C.BOLD}{args.key}{C.OFF} [{args.level}] for {args.ttl:g}h "
+          f"(episode {res['episode']}) — every session here hears it at its next tool call")
+    print(f"{C.DIM}stand it down with: cabildo alert --clear {args.key}{C.OFF}")
+    return 0
+
+
+def cmd_mem(args) -> int:
+    """This machine's memory, attributed to agents.
+
+    The point of the attribution is that `top` cannot do it: it shows you a
+    7 GB python and leaves you to work out whose it is and whether anyone is
+    still waiting for it."""
+    from . import monitor, procs
+
+    conn = store.connect()
+    live = store.active_sessions(conn)
+    pid_to_session = {r["claude_pid"]: r["session_id"] for r in live if r["claude_pid"]}
+    live_ids = {r["session_id"] for r in live}
+    snap = procs.snapshot(min_rss_mb=args.min_mb, pid_to_session=pid_to_session)
+    loose = [p for p in procs.loose(snap, live_ids) if not procs.is_self(p)]
+
+    def who_of(p) -> str:
+        """Plain text, no escapes: these get %-padded into columns, and ANSI
+        inside a padded field misaligns every row that uses it."""
+        if p.session_id:
+            return store.display_name(store.get_session(conn, p.session_id), p.session_id)
+        return f"claude {p.claude_pid}" if p.claude_pid else "—"
+
+    if not args.loose:
+        m = snap.memory
+        th = monitor.Thresholds()
+        level = monitor.level_for(snap, th)
+        col = _LEVEL_COLOR.get(level or "", C.GREEN)
+        print(f"{col}{C.BOLD}{m.avail_pct:.0f}% available{C.OFF} "
+              f"({m.available_kb / 1048576:.1f}G of {m.total_kb / 1048576:.1f}G)"
+              + (f" · swap {m.swap_used_pct:.0f}% of {m.swap_total_kb / 1048576:.0f}G"
+                 if m.swap_total_kb else "")
+              + (f" · stalled {snap.stall_pct:.1f}% of the last minute"
+                 if snap.pressure else f" {C.DIM}· no PSI{C.OFF}")
+              + (f" → {col}{level}{C.OFF}" if level else ""))
+
+        by_session = snap.by_session()
+        if by_session:
+            ranked = sorted(by_session.items(),
+                            key=lambda kv: -sum(p.rss_kb for p in kv[1]))
+            agents_kb = sum(p.rss_kb for p in snap.procs if p.session_id)
+            print(f"\n{C.BOLD}by agent{C.OFF} {C.DIM}— {len(ranked)} agent(s) holding "
+                  f"{agents_kb / 1048576:.1f}G of the {sum(p.rss_kb for p in snap.procs) / 1048576:.1f}G "
+                  f"in processes over {args.min_mb}M{C.OFF}")
+            for sid, plist in ranked[:args.top]:
+                total = sum(p.rss_kb for p in plist) / 1048576.0
+                row = store.get_session(conn, sid)
+                name = store.display_name(row, sid)
+                state = "" if row and row["status"] == "active" else f" {C.RED}(gone){C.OFF}"
+                print(f"  {_sender_color(name)}{name:<{_W}}{C.OFF} {total:5.1f}G  "
+                      f"{len(plist)} proc(s){state}")
+                for p in sorted(plist, key=lambda p: -p.rss_kb)[:3]:
+                    print(f"      {C.DIM}pid {p.pid:<8} {p.rss_mb:>5}M  {p.label(70)}{C.OFF}")
+            if len(ranked) > args.top:
+                rest = sum(p.rss_kb for _, pl in ranked[args.top:] for p in pl)
+                print(f"  {C.DIM}… and {len(ranked) - args.top} more, "
+                      f"{rest / 1048576:.1f}G between them{C.OFF}")
+
+        print(f"\n{C.BOLD}biggest processes{C.OFF}")
+        for p in snap.procs[:args.top]:
+            print(f"  {p.rss_mb:>6}M  {who_of(p):<{_W}} {C.DIM}{p.label(64)}{C.OFF}")
+
+    if loose:
+        total = sum(p.rss_kb for p in loose) / 1048576.0
+        print(f"\n{C.RED}{C.BOLD}left behind{C.OFF} — {len(loose)} process(es), "
+              f"{total:.1f}G, owned by agents that are gone")
+        now = time.time()
+        for p in sorted(loose, key=lambda p: -p.rss_kb):
+            age = _ago(now - p.started_at) if p.started_at else "?"
+            print(f"  {p.rss_mb:>6}M  pid {p.pid:<8} {C.DIM}{age:>4} old  "
+                  f"{who_of(p):<{_W}} {p.label(52)}{C.OFF}")
+        print(f"{C.DIM}nothing here is killed for you. `kill {loose[0].pid}` etc., "
+              f"once you recognize them.{C.OFF}")
+    elif args.loose:
+        print(f"{C.DIM}nothing left behind{C.OFF}")
     return 0
 
 
@@ -1039,6 +1182,32 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("-m", "--model", choices=["haiku", "sonnet", "opus"],
                     help="haiku/sonnet stretch the shared usage window")
     sp.set_defaults(fn=cmd_spawn)
+
+    cd = sub.add_parser("conditions",
+                        help="machine-wide state every session here is being told about")
+    cd.add_argument("-a", "--all", action="store_true",
+                    help="include recently cleared conditions")
+    cd.set_defaults(fn=cmd_conditions)
+
+    al = sub.add_parser("alert",
+                        help="nudge every session on this machine (e.g. 'CI is down')")
+    al.add_argument("text", nargs="*", help="the headline (quote it)")
+    al.add_argument("-k", "--key", default="notice",
+                    help="what this is about; re-alerting the same key updates it "
+                         "instead of piling up (default: notice)")
+    al.add_argument("-l", "--level", default="warn", choices=list(store.CONDITION_LEVELS))
+    al.add_argument("--advice", help="what agents should actually do about it")
+    al.add_argument("--ttl", type=float, default=2.0,
+                    help="hours before it fades on its own (default: 2)")
+    al.add_argument("--clear", metavar="KEY", help="stand a condition down")
+    al.set_defaults(fn=cmd_alert)
+
+    mm = sub.add_parser("mem", help="this machine's RAM, attributed to the agents holding it")
+    mm.add_argument("--loose", action="store_true",
+                    help="only what agents left behind")
+    mm.add_argument("--min-mb", type=int, default=100, help="ignore processes below this")
+    mm.add_argument("--top", type=int, default=12, help="how many processes to list")
+    mm.set_defaults(fn=cmd_mem)
 
     fl = sub.add_parser("fleet", help="spawn ledger: who begat whom, and their fate")
     fl.add_argument("-n", type=int, default=20)

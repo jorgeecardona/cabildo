@@ -3,11 +3,15 @@
 is the only interrupt point Claude Code gives us inside a turn — an agent that
 is thinking or writing text cannot be reached until its next tool call.
 
-Two jobs, both cheap:
+Three jobs, all cheap:
   * refresh liveness (a long autonomous turn otherwise looks stale on the bus);
   * inject unread URGENT messages that have not been surfaced yet. Each message
     is delivered once (see store.deliveries); non-urgent mail never interrupts
     a turn and waits for the UserPromptSubmit notice.
+  * inject machine-wide conditions (RAM pressure, orphaned processes). Same
+    once-per-episode discipline, and the same reason for being here: an agent
+    about to launch a build on a box that is out of memory has to hear about it
+    *before* the next tool call, and this is the only interrupt point there is.
 """
 
 from __future__ import annotations
@@ -27,7 +31,10 @@ def main() -> None:
     conn = store.connect()
     try:
         store.touch(conn, session_id)
-        text = notify.midturn_urgent_text(conn, session_id)
+        text = notify._join(
+            notify.midturn_urgent_text(conn, session_id),
+            notify.condition_text(conn, session_id),
+        )
     finally:
         conn.close()
     emit_context("PostToolUse", text)

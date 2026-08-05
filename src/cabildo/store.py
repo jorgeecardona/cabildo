@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sqlite3
 import time
 from pathlib import Path
@@ -198,6 +199,57 @@ CREATE TABLE IF NOT EXISTS hook_metrics (
 );
 CREATE INDEX IF NOT EXISTS idx_hook_metrics_at ON hook_metrics(at);
 CREATE INDEX IF NOT EXISTS idx_hook_metrics_session ON hook_metrics(session_id);
+
+-- Machine-wide conditions: "RAM is at 4%", "these processes are orphaned", "CI
+-- is down, nobody push". Deliberately NOT messages. A message is an event — it
+-- happened, and it stays happened. A condition is a STATE, and three things
+-- follow from that which the messages table cannot do:
+--
+--   * it reaches sessions that did not exist when it was raised. Channel unread
+--     starts at join, on purpose (a fresh agent must not inherit a backlog), so
+--     a message about memory pressure is invisible to exactly the session most
+--     likely to make it worse — the one about to start.
+--   * it is announced once per episode, not once per tool call, no matter how
+--     long it lasts.
+--   * it can be retracted. Injecting "RAM CRITICAL" into an agent an hour after
+--     the machine recovered is worse than having said nothing.
+--
+-- Keyed by (host, key): the bus is a shared filesystem, and one laptop's memory
+-- pressure is not news on another.
+CREATE TABLE IF NOT EXISTS conditions (
+    host        TEXT NOT NULL,
+    key         TEXT NOT NULL,          -- 'mem' | 'orphans' | whatever a producer names
+    state       TEXT NOT NULL DEFAULT 'raised',   -- raised | cleared
+    level       TEXT NOT NULL,          -- info | warn | critical
+    headline    TEXT NOT NULL,          -- one line, injected verbatim
+    advice      TEXT,                   -- what an agent should DO about it
+    -- JSON payload. A `by_session` map in here is rendered per-agent, which is
+    -- what turns ambient anxiety into "YOU are holding 8 GB": the producer does
+    -- the /proc work once for the whole fleet, and each hook pays one lookup.
+    data        TEXT,
+    source      TEXT,                   -- who raised it: daemon:<host>, @jorge
+    -- Bumped whenever the news changes (raised, escalated, de-escalated,
+    -- cleared) and never otherwise. Delivery is keyed off it: you hear each
+    -- episode once, and a condition that merely persists stays silent.
+    episode     INTEGER NOT NULL DEFAULT 1,
+    raised_at   REAL NOT NULL,          -- onset of the current episode
+    updated_at  REAL NOT NULL,
+    -- A producer that dies must not leave an alarm ringing forever, so a
+    -- condition fades unless something keeps refreshing it. Expiry is silent:
+    -- we stopped looking, which is not the same as the machine recovering, and
+    -- we will not tell agents it recovered.
+    expires_at  REAL NOT NULL,
+    PRIMARY KEY (host, key)
+);
+
+CREATE TABLE IF NOT EXISTS condition_deliveries (
+    host          TEXT NOT NULL,
+    key           TEXT NOT NULL,
+    session_id    TEXT NOT NULL,
+    episode       INTEGER NOT NULL,
+    delivered_at  REAL NOT NULL,
+    PRIMARY KEY (host, key, session_id)
+);
 """
 
 
@@ -1035,3 +1087,186 @@ def list_claims(
         d["expires_in"] = round(r["expires_at"] - now, 1)
         out.append(d)
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Conditions — machine-wide state every session on the host should know about
+# --------------------------------------------------------------------------- #
+CONDITION_LEVELS = ("info", "warn", "critical")
+# How long a raise stands without a refresh. Producers re-raise on their sweep;
+# four sweeps of silence is a dead producer, not a persistent condition.
+CONDITION_TTL = 300.0
+# How long a cleared condition lingers so the all-clear can reach the sessions
+# that heard the raise. They only collect it on their next tool call, and an
+# agent can easily spend half an hour on one.
+CLEARED_GRACE = 1800.0
+# An expired row refreshed at the same level is the same episode continuing —
+# unless it has been dark so long that we plainly stopped watching, in which
+# case what we know about the interval is nothing, and the honest move is to
+# announce it again.
+_LOST_AFTER = 60.0
+
+
+def hostname() -> str:
+    return socket.gethostname() or "localhost"
+
+
+def _level_rank(level: str) -> int:
+    try:
+        return CONDITION_LEVELS.index(level)
+    except ValueError:
+        return 0
+
+
+def _condition_dict(r: sqlite3.Row) -> dict[str, Any]:
+    d = dict(r)
+    try:
+        d["data"] = json.loads(r["data"]) if r["data"] else {}
+    except (TypeError, ValueError):
+        d["data"] = {}
+    d["age"] = round(_now() - r["raised_at"], 1)
+    return d
+
+
+def raise_condition(
+    conn: sqlite3.Connection,
+    *,
+    key: str,
+    level: str = "warn",
+    headline: str,
+    advice: str | None = None,
+    data: dict[str, Any] | None = None,
+    source: str | None = None,
+    host: str | None = None,
+    ttl_seconds: float = CONDITION_TTL,
+) -> dict[str, Any]:
+    """Raise or refresh a condition. Returns the row, with `announced` telling
+    the caller whether this is news (a new episode) or a heartbeat.
+
+    Refreshing an unchanged condition is deliberately silent — a producer
+    sampling every 30 seconds must not re-announce "RAM is low" 120 times an
+    hour. The level *changing* is the news, in either direction: an agent told
+    to stop starting builds is owed the update when it drops back to a warning."""
+    host = host or hostname()
+    now = _now()
+    row = conn.execute(
+        "SELECT * FROM conditions WHERE host=? AND key=?", (host, key)
+    ).fetchone()
+
+    lost = bool(row) and row["expires_at"] < now - _LOST_AFTER
+    fresh = row is None or row["state"] != "raised" or lost
+    announced = fresh or row["level"] != level
+    episode = (row["episode"] + 1) if (row and announced) else (row["episode"] if row else 1)
+    raised_at = now if fresh else row["raised_at"]
+
+    conn.execute(
+        "INSERT INTO conditions(host, key, state, level, headline, advice, data, "
+        "source, episode, raised_at, updated_at, expires_at) "
+        "VALUES (?,?,'raised',?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(host, key) DO UPDATE SET "
+        "state='raised', level=excluded.level, headline=excluded.headline, "
+        "advice=excluded.advice, data=excluded.data, source=excluded.source, "
+        "episode=excluded.episode, raised_at=excluded.raised_at, "
+        "updated_at=excluded.updated_at, expires_at=excluded.expires_at",
+        (host, key, level, headline, advice,
+         json.dumps(data) if data else None, source, episode,
+         raised_at, now, now + ttl_seconds),
+    )
+    conn.commit()
+    out = _condition_dict(conn.execute(
+        "SELECT * FROM conditions WHERE host=? AND key=?", (host, key)).fetchone())
+    out["announced"] = announced
+    return out
+
+
+def clear_condition(
+    conn: sqlite3.Connection,
+    *,
+    key: str,
+    headline: str | None = None,
+    host: str | None = None,
+    source: str | None = None,
+) -> bool:
+    """Retract a condition. False if it wasn't raised.
+
+    The row is kept, cleared, for CLEARED_GRACE — that is what lets the all-clear
+    be delivered. Only sessions that were told about the raise get told about the
+    recovery; announcing good news about a problem you never heard of is noise."""
+    host = host or hostname()
+    now = _now()
+    row = conn.execute(
+        "SELECT * FROM conditions WHERE host=? AND key=? AND state='raised'",
+        (host, key),
+    ).fetchone()
+    if row is None:
+        return False
+    conn.execute(
+        "UPDATE conditions SET state='cleared', level='info', headline=?, "
+        "advice=NULL, data=NULL, source=COALESCE(?, source), episode=episode+1, "
+        "updated_at=?, expires_at=? WHERE host=? AND key=?",
+        (headline or f"{key}: recovered", source, now, now + CLEARED_GRACE, host, key),
+    )
+    conn.commit()
+    return True
+
+
+def active_conditions(
+    conn: sqlite3.Connection, *, host: str | None = None, include_cleared: bool = False
+) -> list[dict[str, Any]]:
+    """Conditions currently in force on this host, worst first."""
+    host = host or hostname()
+    q = "SELECT * FROM conditions WHERE host=? AND expires_at>?"
+    if not include_cleared:
+        q += " AND state='raised'"
+    rows = [_condition_dict(r) for r in conn.execute(q, (host, _now()))]
+    rows.sort(key=lambda d: (-_level_rank(d["level"]), d["raised_at"]))
+    return rows
+
+
+def undelivered_conditions(
+    conn: sqlite3.Connection, session_id: str, *, host: str | None = None
+) -> list[dict[str, Any]]:
+    """Condition episodes this session has not been shown yet.
+
+    The `d.episode IS NOT NULL` guard on cleared rows is what keeps a fresh
+    session from being handed the tail end of a story it never heard: you are
+    only told a condition recovered if you were told it existed."""
+    host = host or hostname()
+    rows = conn.execute(
+        "SELECT c.* FROM conditions c "
+        "LEFT JOIN condition_deliveries d "
+        "  ON d.host=c.host AND d.key=c.key AND d.session_id=? "
+        "WHERE c.host=? AND c.expires_at>? "
+        "  AND (d.episode IS NULL OR d.episode < c.episode) "
+        "  AND (c.state='raised' OR d.episode IS NOT NULL)",
+        (session_id, host, _now()),
+    ).fetchall()
+    out = [_condition_dict(r) for r in rows]
+    out.sort(key=lambda d: (-_level_rank(d["level"]), d["raised_at"]))
+    return out
+
+
+def mark_conditions_delivered(
+    conn: sqlite3.Connection, session_id: str, conditions: Iterable[dict[str, Any]]
+) -> None:
+    now = _now()
+    conn.executemany(
+        "INSERT INTO condition_deliveries(host, key, session_id, episode, delivered_at) "
+        "VALUES (?,?,?,?,?) ON CONFLICT(host, key, session_id) DO UPDATE SET "
+        "episode=excluded.episode, delivered_at=excluded.delivered_at",
+        [(c["host"], c["key"], session_id, c["episode"], now) for c in conditions],
+    )
+    conn.commit()
+
+
+def prune_conditions(conn: sqlite3.Connection) -> int:
+    """Drop conditions past their expiry, and delivery receipts for conditions
+    that no longer exist. Called on the producer's sweep."""
+    cur = conn.execute("DELETE FROM conditions WHERE expires_at<?", (_now(),))
+    conn.execute(
+        "DELETE FROM condition_deliveries WHERE NOT EXISTS "
+        "(SELECT 1 FROM conditions c WHERE c.host=condition_deliveries.host "
+        " AND c.key=condition_deliveries.key)"
+    )
+    conn.commit()
+    return cur.rowcount
