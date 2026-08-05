@@ -232,6 +232,70 @@ def test_mcp_fields_carry_lists_end_to_end(folder):
     assert issues.check(folder) == []
 
 
+# --------------------------------------------------------------------------- #
+# What the tool list costs
+#
+# This server is wired into every registered repo, so its tool list sits in the system prompt of
+# every request there and is re-read from cache on each one. Weight here is charged constantly and
+# noticed never, which is why these are asserted rather than left to care.
+# --------------------------------------------------------------------------- #
+def _tools():
+    from cabildo import issues_mcp
+    return list(issues_mcp.mcp._tool_manager._tools.values())
+
+
+def test_no_tool_answers_twice():
+    """The expensive default. FastMCP reads `-> str` as a structured return, and then answers each
+    call with the text in `content` AND the same text again in `structuredContent`, wrapped as
+    `{"result": ...}` — a reply nothing here unpacks, for double the tokens. Measured on `board`
+    before the flag: 4,646 wire chars against 2,166 after.
+
+    Every tool on this server returns prose. If one ever returns something genuinely structured,
+    drop `structured_output=False` on that tool and leave the rest alone.
+    """
+    assert [t.name for t in _tools() if t.fn_metadata.output_schema is not None] == []
+
+
+def test_the_tool_schemas_carry_no_generated_titles():
+    """Pydantic titles every property — `blocked_by` earns `{"title": "Blocked By"}` — which only
+    restates the key it hangs off. `_slim` drops them; this pins that it stays dropped.
+    """
+    from cabildo import issues_mcp
+
+    def titles(node):
+        if isinstance(node, dict):
+            found = ["title"] if "title" in node and not isinstance(node["title"], dict) else []
+            for key, value in node.items():
+                if key == "properties":          # keys here are parameter names, not keywords
+                    for sub in value.values():
+                        found += titles(sub)
+                else:
+                    found += titles(value)
+            return found
+        if isinstance(node, list):
+            return [t for v in node for t in titles(v)]
+        return []
+
+    assert [t.name for t in _tools() if titles(t.parameters)] == []
+    # ...  and the parameter actually named `title` survived the stripping
+    assert "title" in issues_mcp.mcp._tool_manager._tools["file_issue"].parameters["properties"]
+
+
+def test_show_issue_bounds_a_runaway_file(folder, monkeypatch):
+    """One oversized issue should not be able to spend a session's context. The cap sits well above
+    p90 of the real folders, so a normal issue still comes back whole."""
+    from cabildo import issues_mcp
+
+    monkeypatch.setattr(issues_mcp, "_folder", lambda: folder)
+    write(folder, "03-08-2026-huge.md", "title: H\nstatus: open\narea: ci\nscope: S", "x" * 20_000)
+    out = issues_mcp.show_issue("huge")
+    assert len(out) < issues_mcp.SHOW_LIMIT + 200
+    assert "truncated at 12000 of" in out
+
+    write(folder, "03-08-2026-small.md", "title: S\nstatus: open\narea: ci\nscope: S", "body")
+    assert "truncated" not in issues_mcp.show_issue("small")
+
+
 def test_file_issue_rejects_an_undeclared_area(folder):
     with pytest.raises(issues.IssueFormatError, match="unknown area"):
         issues.file_issue(folder, title="T", area="nowhere", body="x", extra={"scope": "S"})

@@ -33,6 +33,7 @@ from . import issues
 mcp = FastMCP("issues")
 
 CLAIM_TTL = 3600.0          # an hour: long enough to hold a task, short enough that a crash frees it
+SHOW_LIMIT = 12_000         # chars. p90 of the issues in these repos is 7.4k, so this only bites runaways
 
 
 # --------------------------------------------------------------------------- #
@@ -125,8 +126,19 @@ def _fields(given: dict | None) -> dict[str, str | tuple[str, ...]]:
 
 # --------------------------------------------------------------------------- #
 # Tools
+#
+# Signatures below prefer `tuple[str, ...] = ()` and `dict = {}` over `| None = None`. Pydantic
+# renders an optional as an `anyOf` against `null`, which is a third of that parameter's schema
+# spent saying "or omit it" — something a default already says. The empty defaults are never
+# mutated, only read. Where `None` is load-bearing it stays, and says so.
+#
+# `structured_output=False` on every tool because every one of them returns prose. Left to
+# auto-detect, a `-> str` tool gets an output schema, and FastMCP then answers each call with the
+# text in `content` AND the same text again in `structuredContent` — the whole reply, twice, for a
+# `{"result": ...}` wrapper no caller here unpacks. Measured on `board`: 4,646 wire chars down to
+# 2,166. If a tool ever returns something genuinely structured, drop the flag on that one.
 # --------------------------------------------------------------------------- #
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def board(status: str = "", area: str = "", owner: str = "", limit: int = 10) -> str:
     """**Start here** — what is pickup-able in this project now, and what everything else waits on.
 
@@ -175,19 +187,26 @@ def board(status: str = "", area: str = "", owner: str = "", limit: int = 10) ->
     return "\n".join(out_lines)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def show_issue(name: str) -> str:
     """One follow-up in full. `name` is a filename or any unambiguous part of its slug."""
-    return issues.resolve(_folder(), name).read_text()
+    path = issues.resolve(_folder(), name)
+    text = path.read_text()
+    if len(text) <= SHOW_LIMIT:
+        return text
+    return (
+        f"{text[:SHOW_LIMIT]}\n\n… truncated at {SHOW_LIMIT} of {len(text)} chars. "
+        f"Read {path} directly for the rest."
+    )
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def file_issue(
     title: str,
     area: str,
     body: str,
-    blocked_by: list[str] | None = None,
-    fields: dict[str, str | list[str]] | None = None,
+    blocked_by: tuple[str, ...] = (),
+    fields: dict[str, str | list[str]] = {},
 ) -> str:
     """File a follow-up: work that is KNOWN, SCOPED and NOT BEING DONE — not a vague idea, not
     something you are about to do anyway.
@@ -204,20 +223,20 @@ def file_issue(
         title=title,
         area=area,
         body=body,
-        blocked_by=tuple(blocked_by or ()),
+        blocked_by=tuple(blocked_by),
         extra=_fields(fields),
     )
     return f"filed {path.name}"
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def update_issue(
     name: str,
     title: str = "",
     status: str = "",
     area: str = "",
-    blocked_by: list[str] | None = None,
-    fields: dict[str, str | list[str]] | None = None,
+    blocked_by: list[str] | None = None,   # stays optional: None leaves blockers alone, [] clears them
+    fields: dict[str, str | list[str]] = {},
 ) -> str:
     """Change an issue's front matter. Only what you pass is touched; `fields` merges, so setting
     one project field cannot drop the others. Set `blocked_by` when you find a real ordering — it
@@ -242,7 +261,7 @@ def update_issue(
     return f"updated {updated.path.name}\n{_line(updated)}"
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def claim_issue(name: str, release: bool = False, force: bool = False) -> str:
     """Take a follow-up — writes you as owner, moves it to in-progress, and takes an `issue:<slug>`
     bus lease so another agent here cannot start the same work.
@@ -262,7 +281,7 @@ def claim_issue(name: str, release: bool = False, force: bool = False) -> str:
     return f"claimed {updated.path.name} as @{handle}" + _lease(updated.slug, take=True)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def close_issue(name: str, fixed_in: str) -> str:
     """Mark a follow-up done. The file stays, carrying `fixed_in`, so the folder records what was
     fixed by what. Use the sha on the MAINLINE — the land path re-commits, and a worktree sha
@@ -274,7 +293,7 @@ def close_issue(name: str, fixed_in: str) -> str:
     return f"closed {updated.path.name} (fixed_in {updated.fixed_in}) — {left} ready now"
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def check_issues() -> str:
     """Grade the folder against its own config.toml — front matter, filenames, `done` without a
     sha, blocked_by cycles, broken links, a stale index, and whatever else that config demands.
@@ -286,6 +305,44 @@ def check_issues() -> str:
         found, _ = issues.load_all(folder)
         return f"{folder}: clean ({len(found)} follow-ups)"
     return "\n".join(str(p) for p in problems) + f"\n\n{len(problems)} problem(s)"
+
+
+# --------------------------------------------------------------------------- #
+# Schema slimming — the tool list is the part every session pays for, always
+# --------------------------------------------------------------------------- #
+def _slim(schema: dict) -> dict:
+    """Strip Pydantic's auto-generated `title` keys out of a generated JSON Schema, in place.
+
+    Every property gets one — `blocked_by` earns `{"title": "Blocked By"}` — and it only restates the
+    key it hangs off, so it informs nobody and costs on every call. This list ships in the system
+    prompt of every request in every registered repo and is re-read from cache each time, which makes
+    it the one part of this server worth counting bytes on.
+
+    Only the auto-generated weight goes. Descriptions are what keep these tools used correctly and
+    they stay whole.
+
+    Careful: `title` is a schema keyword *and* a parameter of `file_issue`. Under `properties` the
+    keys are parameter names, never keywords, so recursion there walks values only — popping blindly
+    would delete that parameter from the schema.
+    """
+    schema.pop("title", None)
+    for key, value in schema.items():
+        if key == "properties":
+            for sub in value.values():
+                _slim(sub)
+        elif key in ("items", "additionalProperties") and isinstance(value, dict):
+            _slim(value)
+        elif key in ("anyOf", "oneOf", "allOf"):
+            for sub in value:
+                _slim(sub)
+    return schema
+
+
+try:
+    for _t in mcp._tool_manager._tools.values():
+        _slim(_t.parameters)
+except Exception:       # private attribute: if a FastMCP bump moves it we just ship fatter schemas
+    pass
 
 
 def main() -> None:
