@@ -88,7 +88,10 @@ class Status(enum.StrEnum):
 
 
 #: Core front matter, in render order. Extras follow, in the order the file had them.
-CORE_ORDER = ("title", "status", "area", "owner", "filed", "blocked_by", "fixed_in")
+CORE_ORDER = (
+    "title", "status", "area", "owner", "filed", "blocked_by",
+    "sleep_until", "sleep_reason", "fixed_in",
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -317,6 +320,14 @@ class Issue:
     filed: str
     owner: str | None = None
     blocked_by: tuple[str, ...] = ()
+    #: ISO date this issue returns to the board on its own. Deliberately a DATE and not a
+    #: `sleeping` status: a status has to be flipped back by somebody, and nobody would — the issue
+    #: would sit off the board forever, which is the failure this register exists to prevent. A date
+    #: is compared at read time, so waking needs no daemon, no cron, and no second write to fail.
+    sleep_until: str | None = None
+    #: why it was slept. A snooze with no reason is indistinguishable from avoidance, and reads to
+    #: the next person as one — the same rule the folder already applies to `register_note`.
+    sleep_reason: str | None = None
     fixed_in: str | None = None
     #: everything this folder declares beyond the core, in file order. Preserved verbatim on write.
     extra: Mapping[str, str | tuple[str, ...]] = dataclasses.field(default_factory=dict)
@@ -333,6 +344,17 @@ class Issue:
     @property
     def open(self) -> bool:
         return self.status is not Status.DONE
+
+    def asleep(self, today: _dt.date | None = None) -> bool:
+        """Is this issue still parked as of `today`? Derived, never stored — an unparseable or past
+        date simply means awake, so a typo costs a wake-up, not a disappearance."""
+        if not self.sleep_until:
+            return False
+        try:
+            until = _dt.date.fromisoformat(self.sleep_until)
+        except ValueError:
+            return False
+        return (today or _dt.date.today()) < until
 
 
 @dataclasses.dataclass(frozen=True)
@@ -436,6 +458,8 @@ def parse(text: str, path: pathlib.Path, config: Config = DEFAULT_CONFIG) -> Iss
 
     fixed_in = fields.get("fixed_in")
     owner = fields.get("owner")
+    sleep_until = fields.get("sleep_until")
+    sleep_reason = fields.get("sleep_reason")
     extra = {
         k: v for k, v in fields.items()
         if k not in CORE_ORDER and v is not None
@@ -448,6 +472,8 @@ def parse(text: str, path: pathlib.Path, config: Config = DEFAULT_CONFIG) -> Iss
         filed=filed,
         owner=owner if isinstance(owner, str) else None,
         blocked_by=blocked_by,
+        sleep_until=sleep_until if isinstance(sleep_until, str) else None,
+        sleep_reason=sleep_reason if isinstance(sleep_reason, str) else None,
         fixed_in=fixed_in if isinstance(fixed_in, str) else None,
         extra=extra,
         body=body,
@@ -469,6 +495,8 @@ def _core_values(issue: Issue) -> dict[str, str | tuple[str, ...] | None]:
         "owner": issue.owner,
         "filed": issue.filed,
         "blocked_by": issue.blocked_by or None,
+        "sleep_until": issue.sleep_until,
+        "sleep_reason": issue.sleep_reason,
         "fixed_in": issue.fixed_in,
     }
 
@@ -504,6 +532,10 @@ def render(issue: Issue, config: Config = DEFAULT_CONFIG) -> str:
         ]
         if issue.blocked_by:
             lines += _render_value("blocked_by", issue.blocked_by)
+        if issue.sleep_until:
+            lines.append(f"sleep_until: {issue.sleep_until}")
+        if issue.sleep_reason:
+            lines.append(f"sleep_reason: {_quote(issue.sleep_reason)}")
         if issue.fixed_in:
             lines.append(f"fixed_in: {issue.fixed_in}")
         for key, value in issue.extra.items():
@@ -572,6 +604,7 @@ def board(folder: pathlib.Path, config: Config | None = None, *, owner: str | No
     issues, _ = load_all(folder, config)
     by_slug = {i.slug: i for i in issues}
     open_slugs = {i.slug for i in issues if i.open}
+    today = _dt.date.today()
 
     ready, waiting, mine = [], [], []
     for issue in issues:
@@ -582,8 +615,21 @@ def board(folder: pathlib.Path, config: Config | None = None, *, owner: str | No
             continue
         blockers = tuple(s for s in issue.blocked_by if s in open_slugs)
         if blockers:
+            # Checked BEFORE sleep on purpose: a slept issue is still open, so anything depending on
+            # it stays blocked by it. Sleeping is about the reader's attention, not about the work
+            # having gone away — reporting a dependent as merely "asleep" would invite starting it.
             titles = ", ".join(by_slug[s].title for s in blockers)
             waiting.append(Waiting(issue, blockers, f"blocked by {titles}"))
+        elif issue.asleep(today):
+            # Asleep is not gone. It moves off `ready` wearing its wake date, because the board's
+            # contract is that it says why NOT the rest — hiding it entirely would make sleeping a
+            # slower way of deleting.
+            left = (_dt.date.fromisoformat(issue.sleep_until or "") - today).days
+            when = f"{left} day{'' if left == 1 else 's'}"
+            because = f" — {issue.sleep_reason}" if issue.sleep_reason else ""
+            waiting.append(
+                Waiting(issue, (), f"asleep until {issue.sleep_until} ({when}){because}")
+            )
         elif issue.status is Status.BLOCKED:
             who = f"@{issue.owner}" if issue.owner else "nobody named"
             waiting.append(Waiting(issue, (), f"blocked on a decision — {who} can unblock it"))
@@ -1106,6 +1152,53 @@ def claim(
     return updated
 
 
+#: A week, because that is the unit people actually defer in ("not this sprint") and it is short
+#: enough that a wrong guess costs one wake-up rather than a quarter.
+SLEEP_DAYS = 7
+
+
+def sleep(
+    folder: pathlib.Path, name: str, *, days: int = SLEEP_DAYS, reason: str,
+    config: Config | None = None, today: _dt.date | None = None,
+) -> Issue:
+    """Park a follow-up until `days` from now — it leaves `ready` and returns on its own.
+
+    Stores a wake DATE rather than a `sleeping` status, and that is the whole design. A status has
+    to be flipped back by something, and in a folder of markdown files nothing would: the issue
+    would sit off the board forever, which is precisely the decay this register exists to stop. A
+    date is compared at read time, so waking is automatic, needs no daemon, and cannot half-happen.
+
+    `reason` is required. A snooze with no reason is indistinguishable from avoidance and reads to
+    the next person as one — and they will believe it, because it is written down.
+    """
+    if not reason.strip():
+        raise IssueFormatError(
+            "sleeping needs a reason — an unexplained snooze is indistinguishable from avoidance"
+        )
+    if days < 1:
+        raise IssueFormatError(f"sleep days must be >= 1, got {days} — to wake it, use wake()")
+    config = load_config(folder) if config is None else config
+    issue = load(resolve(folder, name), config)
+    until = (today or _dt.date.today()) + _dt.timedelta(days=days)
+    updated = dataclasses.replace(
+        issue, sleep_until=until.isoformat(), sleep_reason=reason.strip()
+    )
+    save(updated, config)
+    _touch_index(folder, config)
+    return updated
+
+
+def wake(folder: pathlib.Path, name: str, config: Config | None = None) -> Issue:
+    """Bring a slept follow-up back now, clearing the date and the reason. The early-wake path; the
+    ordinary one is the date simply passing, which needs nobody."""
+    config = load_config(folder) if config is None else config
+    issue = load(resolve(folder, name), config)
+    updated = dataclasses.replace(issue, sleep_until=None, sleep_reason=None)
+    save(updated, config)
+    _touch_index(folder, config)
+    return updated
+
+
 def release(folder: pathlib.Path, name: str, config: Config | None = None) -> Issue:
     """Drop the owner and put it back on the board — the honest move when you stop, so it does not
     look taken forever."""
@@ -1178,6 +1271,8 @@ filed: {today}     # when it was filed; it never changes
 area: {area}
 verify: probe         # test | probe | inspect — see rule 3
 blocked_by: null      # slug(s) of issues that must close first
+sleep_until: null     # ISO date it returns to the board on its own
+sleep_reason: null    # what it is waiting ON; required when sleep_until is set
 fixed_in: null        # the sha on the mainline; required once status is done
 ---
 ```
@@ -1185,6 +1280,20 @@ fixed_in: null        # the sha on the mainline; required once status is done
 **`blocked_by` is what makes the board honest.** `status: blocked` names a *person* who can unblock
 something; `blocked_by` names the *work* it waits on. Only the second can be computed, which is why
 "what can I pick up cold right now" is answerable at all.
+
+**Sleeping is for "real, but not now."** `cabildo issues sleep <name> --reason "..."` parks a
+follow-up for a week (`--days N` for longer); `wake` brings it back early. It leaves `ready` and
+shows in `waiting` with its wake date — asleep is not gone, because a board that hides things stops
+being the answer to "what should I work on".
+
+What it stores is a wake DATE, never a `sleeping` status, and the difference is the whole design: a
+status has to be flipped back by something, and in a folder of markdown files nothing would — the
+issue would sit off the board forever, which is exactly the decay this folder exists to stop. A date
+is compared when the board is read, so waking is automatic, needs no daemon, and cannot half-happen.
+
+The reason is required. An unexplained snooze is indistinguishable from avoidance, and the next
+reader will believe whatever the file says. Sleeping a blocker does **not** unblock what depends on
+it — sleeping is about your attention, not about the work having gone away.
 
 **Naming:** `DD-MM-YYYY-short-kebab-summary.md` — the date it was filed, then a slug.
 

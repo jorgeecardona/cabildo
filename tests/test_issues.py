@@ -179,6 +179,77 @@ def test_release_puts_it_back_on_the_board(folder):
     assert [i.slug for i in issues.board(folder).ready] == ["a"]
 
 
+# --------------------------------------------------------------------------- #
+# Sleeping — deferring work without losing it
+# --------------------------------------------------------------------------- #
+def test_a_sleeping_issue_leaves_ready_but_stays_visible(folder):
+    """Asleep is not gone. The board's whole contract is that it says why NOT the rest, so a slept
+    issue moves to `waiting` wearing its wake date — never off the board entirely, which would make
+    sleeping a slower way of deleting."""
+    write(folder, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\nscope: S")
+    issues.sleep(folder, "a", days=7, reason="waiting on the R2 credential rotation")
+
+    b = issues.board(folder)
+    assert [i.slug for i in b.ready] == []
+    reason = {w.issue.slug: w.reason for w in b.waiting}["a"]
+    assert "asleep until" in reason and "7 days" in reason
+    assert "R2 credential rotation" in reason
+
+
+def test_a_slept_issue_wakes_itself_with_no_write(folder):
+    """The reason this is a DATE and not a `sleeping` status.
+
+    A status has to be flipped back by somebody, and nobody would — the issue would sit off the
+    board forever, which is the exact failure mode this register exists to prevent. A date is
+    compared at read time, so waking needs no daemon, no cron and no second write that could fail.
+    Asserted by leaving the file untouched and watching it return on its own.
+    """
+    path = write(folder, "03-08-2026-a.md",
+                 "title: A\nstatus: open\narea: ci\nscope: S\n"
+                 "sleep_until: 2020-01-01\nsleep_reason: long past")
+    before = path.read_text()
+
+    ready = issues.board(folder).ready
+    assert [i.slug for i in ready] == ["a"]
+    # The date is still ON the file — it is read and compared, not consumed. Without this the test
+    # would pass vacuously today, since an unknown front-matter key simply lands in `extra`.
+    assert ready[0].sleep_until == "2020-01-01"
+    assert path.read_text() == before, "waking must not require rewriting the file"
+
+
+def test_sleeping_demands_a_reason(folder):
+    """A snooze with no reason is indistinguishable from avoidance, and reads to the next person as
+    one. Same rule the folder already applies to `register_note`: silence is not an allowed answer."""
+    write(folder, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\nscope: S")
+    with pytest.raises(issues.IssueFormatError, match="reason"):
+        issues.sleep(folder, "a", days=7, reason="  ")
+
+
+def test_waking_early_clears_the_date_and_the_reason(folder):
+    write(folder, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\nscope: S")
+    issues.sleep(folder, "a", days=7, reason="waiting on a decision")
+    assert [i.slug for i in issues.board(folder).ready] == []
+
+    got = issues.wake(folder, "a")
+    assert got.sleep_until is None and got.sleep_reason is None
+    assert [i.slug for i in issues.board(folder).ready] == ["a"]
+    assert "sleep_until" not in got.path.read_text()
+
+
+def test_sleeping_does_not_hide_a_blocker_from_what_it_blocks(folder):
+    """A slept issue is still OPEN, so anything blocked_by it stays blocked. Sleeping is about MY
+    attention, not about the work having gone away — treating it as closed would silently promote
+    dependents that genuinely cannot start."""
+    write(folder, "03-08-2026-first.md", "title: First\nstatus: open\narea: ci\nscope: S")
+    write(folder, "03-08-2026-second.md",
+          "title: Second\nstatus: open\narea: ci\nscope: S\nblocked_by:\n  - first")
+    issues.sleep(folder, "first", days=7, reason="parked for a week")
+
+    b = issues.board(folder)
+    assert [i.slug for i in b.ready] == []
+    assert {w.issue.slug: w.reason for w in b.waiting}["second"] == "blocked by First"
+
+
 def test_close_keeps_the_file_and_demands_a_sha(folder):
     """The decision, pinned: done marks the file, it does not delete it."""
     p = write(folder, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\nscope: S")

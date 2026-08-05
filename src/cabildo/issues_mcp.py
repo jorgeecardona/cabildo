@@ -282,6 +282,34 @@ def claim_issue(name: str, release: bool = False, force: bool = False) -> str:
 
 
 @mcp.tool(structured_output=False)
+def sleep_issue(name: str, days: int = issues.SLEEP_DAYS, reason: str = "", wake: bool = False) -> str:
+    """Park a follow-up for `days` (default a week) — it leaves `ready` and comes back on its own.
+
+    Use it when work is real but genuinely not now: waiting on someone else's deploy, a credential
+    that rotates Monday, a decision you have asked for. Not for work you have decided against —
+    that is a `done`/`blocked` call, or a body edit saying why.
+
+    What it stores is a wake DATE, not a `sleeping` status, and that matters to you as the caller:
+    nothing has to remember to wake it, so nothing can forget. It reappears in `board` the day the
+    date passes, with no second call. Until then it sits in `waiting` wearing its wake date and your
+    reason — asleep is not gone, and the board still says why it is not ready.
+
+    `reason` is required: an unexplained snooze is indistinguishable from avoidance, and the next
+    reader will believe whatever the file says. `wake=True` brings it back now."""
+    folder = _folder()
+    if wake:
+        updated = issues.wake(folder, name)
+        return f"woke {updated.path.name} — back on the board"
+    if not reason.strip():
+        return ("sleeping needs a reason — say what it is waiting ON, so the next reader can tell a "
+                "deferral from a dodge. Pass reason=...")
+    updated = issues.sleep(folder, name, days=days, reason=reason)
+    left = len(issues.board(folder).ready)
+    return (f"slept {updated.path.name} until {updated.sleep_until} ({days}d) — {left} ready now. "
+            "It returns on its own; no follow-up call needed.")
+
+
+@mcp.tool(structured_output=False)
 def close_issue(name: str, fixed_in: str) -> str:
     """Mark a follow-up done. The file stays, carrying `fixed_in`, so the folder records what was
     fixed by what. Use the sha on the MAINLINE — the land path re-commits, and a worktree sha

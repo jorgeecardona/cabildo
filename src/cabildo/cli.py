@@ -952,6 +952,29 @@ def cmd_issues(args) -> int:
             print(f"{C.RED}unparseable{C.OFF} {p}", file=sys.stderr)
         return 0
 
+    if args.action in ("sleep", "wake"):
+        if not args.name:
+            print(f"{args.action} needs a name", file=sys.stderr)
+            return 2
+        if args.action == "wake":
+            got = reg.wake(folder, args.name)
+            print(f"{C.GREEN}woke{C.OFF} {got.path.name} {C.DIM}— back on the board{C.OFF}")
+            return 0
+        if not (args.reason or "").strip():
+            print(f"{C.RED}sleep needs --reason{C.OFF}\n"
+                  f"  {C.DIM}say what it is waiting ON. An unexplained snooze is indistinguishable "
+                  f"from avoidance, and the next reader believes the file.{C.OFF}", file=sys.stderr)
+            return 2
+        days = args.days or reg.SLEEP_DAYS
+        try:
+            got = reg.sleep(folder, args.name, days=days, reason=args.reason)
+        except reg.IssueFormatError as exc:
+            print(f"{C.RED}{exc}{C.OFF}", file=sys.stderr)
+            return 2
+        print(f"{C.GREEN}slept{C.OFF} {got.path.name} {C.DIM}until {got.sleep_until} ({days}d){C.OFF}")
+        print(f"  {C.DIM}it returns on its own — nothing has to remember to wake it{C.OFF}")
+        return 0
+
     # ready — the default, and the question worth asking
     b = reg.board(folder, owner=args.owner)
     if b.ready:
@@ -1274,9 +1297,9 @@ def main(argv: list[str] | None = None) -> int:
         "issues",
         help="this project's docs/issues register: what's ready, what's blocked")
     iss.add_argument("action", nargs="?", default="ready",
-                     choices=["ready", "list", "show", "check", "reindex", "init"],
+                     choices=["ready", "list", "show", "check", "reindex", "init", "sleep", "wake"],
                      help="default: ready — what is unblocked and unowned")
-    iss.add_argument("name", nargs="?", help="for `show`: a filename or slug fragment")
+    iss.add_argument("name", nargs="?", help="for `show`/`sleep`/`wake`: a filename or slug fragment")
     iss.add_argument("-C", "--folder", metavar="DIR", default=".",
                      help="where to look for docs/issues (default: cwd, searching upward)")
     iss.add_argument("--status", help="filter: open | in-progress | blocked | done")
@@ -1285,6 +1308,11 @@ def main(argv: list[str] | None = None) -> int:
                      help="filter by area; on `init` for a new folder, declare one (repeatable)")
     iss.add_argument("--force", action="store_true",
                      help="for `init`: overwrite an existing config.toml")
+    iss.add_argument("--days", type=int, default=None, metavar="N",
+                     help="for `sleep`: how long to park it (default: a week)")
+    iss.add_argument("--reason", metavar="TEXT",
+                     help="for `sleep`: what it is waiting ON — required, so a deferral is "
+                          "distinguishable from a dodge")
     iss.set_defaults(fn=cmd_issues)
 
     sv = sub.add_parser(
