@@ -13,6 +13,7 @@ cannot falsify that.
 
 from __future__ import annotations
 
+import pathlib
 import subprocess
 
 import pytest
@@ -210,3 +211,80 @@ def test_claude_own_settings_gets_a_pointed_hint(repo):
     (work / "f.txt").write_text("also mine\n")
     res = land(work)
     assert "Claude Code's own settings file" not in res["reason"]
+
+
+# --------------------------------------------------------------------------- #
+# "No gate" has two meanings, and they are not the same (2026-08-13)
+# --------------------------------------------------------------------------- #
+def test_no_gate_and_no_hook_reports_nothing_verified(repo):
+    """The honest case: nothing checked this."""
+    origin, work, sha = repo
+    hook = pathlib.Path(work) / ".git" / "hooks" / "pre-push"
+    if hook.exists():
+        hook.unlink()
+    res = land(work)
+    assert res["landed"] is True
+    assert res["gate"] == "ABSENT"
+
+
+def test_no_gate_but_a_pre_push_hook_is_not_nothing(repo):
+    """MEASURED 2026-08-13: every land on crm reported "NOTHING WAS VERIFIED"
+    while its pre-push hook was running the entire CI mirror — and catching
+    real regressions. A warning that fires on verified lands is one nobody
+    reads on the land where it is true."""
+    origin, work, sha = repo
+    hook = pathlib.Path(work) / ".git" / "hooks" / "pre-push"
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text("#!/bin/sh\nexit 0\n")
+    hook.chmod(0o755)
+    res = land(work)
+    assert res["landed"] is True
+    assert res["gate"] == "HOOK", "a repo that gates in its hook is not ungated"
+
+
+def test_a_non_executable_hook_does_not_count(repo):
+    """git skips a hook it cannot execute, so neither may we."""
+    origin, work, sha = repo
+    hook = pathlib.Path(work) / ".git" / "hooks" / "pre-push"
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text("#!/bin/sh\nexit 0\n")
+    hook.chmod(0o644)
+    res = land(work)
+    assert res["gate"] == "ABSENT"
+
+
+def test_hooks_path_config_is_honoured(repo):
+    """crm sets core.hooksPath to a tracked .githooks/ directory, so looking
+    only in .git/hooks would miss the hook that is actually running."""
+    origin, work, sha = repo
+    hooks = pathlib.Path(work) / ".githooks"
+    hooks.mkdir(parents=True, exist_ok=True)
+    hook = hooks / "pre-push"
+    hook.write_text("#!/bin/sh\nexit 0\n")
+    hook.chmod(0o755)
+    subprocess.run(["git", "config", "core.hooksPath", ".githooks"], cwd=work, check=True)
+    assert actions.pre_push_hook(str(work)) == str(hook)
+
+
+def test_push_gets_a_gate_sized_timeout_not_a_fetch_sized_one(repo, monkeypatch):
+    """MEASURED 2026-08-13, intent #152: `git push` timed out after 120s and the
+    daemon reported "I did NOT land this" — a FALSE negative, because the push
+    was still running the repo's pre-push gate. On crm that hook runs the whole
+    CI mirror. The push is where verification happens in hook-gated repos, so it
+    gets the gate's budget, not a fetch's."""
+    origin, work, sha = repo
+    seen: dict[str, int] = {}
+    real_run = actions.run
+
+    def spy(args, cwd, timeout=actions.GIT_TIMEOUT):
+        if len(args) > 1 and args[0] == "git" and args[1] == "push":
+            seen["push"] = timeout
+        return real_run(args, cwd, timeout)
+
+    monkeypatch.setattr(actions, "run", spy)
+    land(work)
+    assert seen.get("push") == actions.PUSH_TIMEOUT
+    assert actions.PUSH_TIMEOUT >= actions.GATE_TIMEOUT, (
+        "the push runs the hook gate, so it cannot have a smaller budget than the gate"
+    )
+    assert actions.PUSH_TIMEOUT > actions.GIT_TIMEOUT * 4

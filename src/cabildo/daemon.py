@@ -91,8 +91,14 @@ def _report(conn, intent: dict, status: str, result: dict) -> None:
         body.append(f"landed {result.get('head')} on {result.get('target')} (gate: {result.get('gate')})")
     if result.get("gate") == "ABSENT":
         body.append(
-            f"⚠ NOTHING WAS VERIFIED: no {actions.GATE_PATH} in this repo. The "
-            "daemon pushed on your word alone."
+            f"⚠ NOTHING WAS VERIFIED: no {actions.GATE_PATH} and no pre-push hook "
+            "in this repo. The daemon pushed on your word alone."
+        )
+    elif result.get("gate") == "HOOK":
+        body.append(
+            f"ℹ no {actions.GATE_PATH}, so the only check was this repo's pre-push "
+            "hook — which the push above ran. Add a gate if you want the daemon to "
+            "verify independently."
         )
     try:
         store.post_message(

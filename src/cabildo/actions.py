@@ -24,6 +24,14 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 GIT_TIMEOUT = 120
+# `git push` is not just a network call: it fires the repo's pre-push hook, and
+# in repos that gate there (crm runs the whole CI mirror — format, lint, the
+# test suites, a typecheck) that hook IS the gate. 120s is a fetch's budget, not
+# a gate's. Worse, timing out here produces a FALSE NEGATIVE: the push may still
+# be running or may have succeeded, while the daemon reports "I did NOT land
+# this" (observed: intent #152, rc=124 after 120s). Same budget as GATE_TIMEOUT,
+# because it is doing the same job.
+PUSH_TIMEOUT = 1800
 # The gate is the referee: it can run a whole test suite, so it gets room.
 GATE_TIMEOUT = 1800
 # Repo-owned, not requester-supplied. The agent asking to land does not get to
@@ -102,6 +110,23 @@ def run(args: list[str], cwd: str, timeout: int = GIT_TIMEOUT) -> tuple[int, str
     except FileNotFoundError as e:
         return 127, str(e)
     return p.returncode, (p.stdout + p.stderr).strip()
+
+
+def pre_push_hook(root: str) -> str | None:
+    """The repo's executable pre-push hook, or None.
+
+    Worth knowing because it changes what "no gate" MEANS. `git push` runs this
+    hook, and repos that gate there (crm runs its whole CI mirror from it) are
+    verified even with no .cabildo/gate.sh — so reporting "NOTHING WAS VERIFIED"
+    is false, and a warning that fires on every land is one nobody reads by the
+    time it matters.
+    """
+    rc, out = git(["config", "core.hooksPath"], root)
+    hooks_dir = out.strip() if rc == 0 and out.strip() else os.path.join(root, ".git", "hooks")
+    if not os.path.isabs(hooks_dir):
+        hooks_dir = os.path.join(root, hooks_dir)
+    hook = os.path.join(hooks_dir, "pre-push")
+    return hook if os.path.isfile(hook) and os.access(hook, os.X_OK) else None
 
 
 def git(args: list[str], cwd: str, timeout: int = GIT_TIMEOUT) -> tuple[int, str]:
@@ -250,10 +275,20 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         gate_state = "passed"
     else:
         # Loud, and recorded in the result, so "no gate" can never look like
-        # "gate passed" to anyone reading the queue.
-        gate_state = "ABSENT"
-        steps.append({"step": "gate", "rc": 0, "out": f"no {GATE_PATH} in {root} — NOTHING VERIFIED"})
-        ctx.log(f"  ⚠ no gate at {GATE_PATH} — landing unverified")
+        # "gate passed" to anyone reading the queue. But distinguish the two
+        # cases: a repo that gates in its pre-push hook IS verified by the push
+        # below, and calling that "nothing" trains agents to ignore the warning
+        # for the case where it is true.
+        hook = pre_push_hook(root)
+        gate_state = "HOOK" if hook else "ABSENT"
+        note = (
+            f"no {GATE_PATH}; the push runs {os.path.relpath(hook, root)}, which is "
+            "this repo's only check"
+            if hook
+            else f"no {GATE_PATH} and no pre-push hook in {root} — NOTHING VERIFIED"
+        )
+        steps.append({"step": "gate", "rc": 0, "out": note})
+        ctx.log(f"  ⚠ {note}")
 
     # 5. Push.
     rc, sha = git(["rev-parse", "HEAD"], root)
@@ -268,7 +303,7 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
             "gate": gate_state,
             "steps": steps,
         }
-    push_rc, push_out = git(["push", remote, f"HEAD:{target}"], root)
+    push_rc, push_out = git(["push", remote, f"HEAD:{target}"], root, timeout=PUSH_TIMEOUT)
     steps.append({"step": "push", "rc": push_rc, "out": push_out[-4000:]})
 
     # 6. Verify against the REMOTE, not against push's exit code.

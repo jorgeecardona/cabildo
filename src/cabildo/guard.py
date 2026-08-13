@@ -36,7 +36,6 @@ instead of retrying blind.
 from __future__ import annotations
 
 import os
-import re
 import shlex
 import sqlite3
 from fnmatch import fnmatch
@@ -51,20 +50,57 @@ from .context import tree_root
 # (start or after ;&|), so the same words inside a quoted string don't trip it.
 # These clobber *everyone's* uncommitted work in a shared checkout, which is the
 # concrete harm we saw ("the reset that dropped feaf332a").
-_DESTRUCTIVE_GIT = [
-    (re.compile(r"(?:^|[;&|]\s*)git\s+reset\s+(?:[^;&|]*\s)?--hard\b"),
-     "git reset --hard"),
-    # checkout/restore that discards changes: `-- <path>`, `.`, or bare restore
-    # (restore discards by default unless it's --staged-only).
-    (re.compile(r"(?:^|[;&|]\s*)git\s+checkout\s+(?:[^;&|]*\s)?(?:--\s|\.(?:\s|$))"),
-     "git checkout (discard)"),
-    (re.compile(r"(?:^|[;&|]\s*)git\s+restore\b(?![^;&|]*--staged)"),
-     "git restore (discard)"),
-    (re.compile(r"(?:^|[;&|]\s*)git\s+clean\s+(?:[^;&|]*\s)?-[a-zA-Z]*f"),
-     "git clean -f"),
-    (re.compile(r"(?:^|[;&|]\s*)git\s+stash\b(?!\s+(?:list|show|pop|apply))"),
-     "git stash"),
-]
+# Working-tree-destroying git, matched on TOKENS like every other check here.
+#
+# These were regexes over the raw command string, and `git\s+reset` cannot see
+# past git's own options: `git -C /path reset --hard` matched nothing and walked
+# straight through the guard. Tokenising also gets the easy cases free — a
+# subcommand name inside a quoted string is one token, not a command.
+def _discards_reset(args: list[str]) -> bool:
+    return "--hard" in args
+
+
+def _discards_checkout(args: list[str]) -> bool:
+    # `--` introduces paths, `.` is the whole tree; both discard. A ref alone
+    # switches branches, which is a different denial with a different reason.
+    return "--" in args or "." in args
+
+
+def _discards_restore(args: list[str]) -> bool:
+    # restore discards the working tree unless it is only touching the index.
+    return not any(a == "--staged" or a.startswith("--staged=") for a in args)
+
+
+def _discards_clean(args: list[str]) -> bool:
+    return any(a.startswith("-") and not a.startswith("--") and "f" in a for a in args) or (
+        "--force" in args
+    )
+
+
+def _discards_stash(args: list[str]) -> bool:
+    # `stash list/show/pop/apply` read or restore; bare `stash` and `stash push`
+    # take the tree away.
+    return not args or args[0] not in ("list", "show", "pop", "apply", "drop", "branch")
+
+
+_DESTRUCTIVE_GIT = {
+    "reset": (_discards_reset, "git reset --hard"),
+    "checkout": (_discards_checkout, "git checkout (discard)"),
+    "restore": (_discards_restore, "git restore (discard)"),
+    "clean": (_discards_clean, "git clean -f"),
+    "stash": (_discards_stash, "git stash"),
+}
+
+
+def _destructive(argv: list[str]) -> str | None:
+    """The label for a command that would discard this checkout's work, else None."""
+    sub, args = _git_subcommand(argv)
+    entry = _DESTRUCTIVE_GIT.get(sub or "")
+    if entry is None:
+        return None
+    predicate, label = entry
+    return label if predicate(args) else None
+
 
 # Staging the whole tree rather than named paths. Matched on *tokens*, not on
 # the raw string: `git commit -m "add -A support"` must not read as `git add -A`,
@@ -122,6 +158,50 @@ def _git_subcommand(argv: list[str]) -> tuple[str | None, list[str]]:
             continue
         return tok, argv[i + 1:]
     return None, []
+
+
+def _chain_cwd(command: str, session_cwd: str | None) -> str | None:
+    """Where the commands in this chain actually run.
+
+    The session's registered cwd is where the AGENT started, which is not where
+    its commands run. An agent told to "isolate yourself first (`git worktree
+    add`)" then works with `cd ../lane && …` from that same session — so judging
+    it by the session cwd makes the prescribed remedy impossible to satisfy, and
+    the checks below fire forever on a checkout no peer can even see.
+
+    Handles the two shapes that occur in practice: a `cd <path>` in the chain,
+    and `git -C <path>` on the git command itself (see _argv_cwd). Anything else
+    falls back to the session cwd, which keeps the guard fail-safe — an unparsed
+    command is judged as if it ran where the agent lives.
+    """
+    cwd = session_cwd
+    for argv in _argvs(command):
+        if argv and os.path.basename(argv[0]) == "cd" and len(argv) > 1:
+            cwd = _resolved_dir(cwd, argv[1]) or cwd
+    return cwd
+
+
+def _resolved_dir(base: str | None, target: str) -> str | None:
+    """`target` as an absolute directory, or None if it is not one on disk.
+
+    Existence is deliberately the gate. This function only ever LOOSENS a
+    denial, so a path we cannot verify must not be taken at its word: a typo, a
+    variable that did not expand, or a directory that has not been created yet
+    would otherwise read as "somewhere else" and wave the command through. Fall
+    back to the agent's own cwd and let the guard fire.
+    """
+    path = os.path.normpath(os.path.join(base, target)) if base else target
+    return path if os.path.isdir(path) else None
+
+
+def _argv_cwd(argv: list[str], chain_cwd: str | None) -> str | None:
+    """`git -C <path>` moves one command without moving the chain."""
+    if not argv or os.path.basename(argv[0]) != "git":
+        return chain_cwd
+    for i, tok in enumerate(argv[:-1]):
+        if tok == "-C":
+            return _resolved_dir(chain_cwd, argv[i + 1]) or chain_cwd
+    return chain_cwd
 
 
 def _is_push(command: str) -> bool:
@@ -234,7 +314,7 @@ def _deny_blanket_stage(
     # A row without one tells us nothing, so it is not treated as a sharer.
     if not me["cwd"]:
         return None
-    mine = tree_root(me["cwd"])
+    mine = tree_root(_chain_cwd(command, me["cwd"]))
     sharers = [
         p for p in store.active_sessions(conn, project=me["project"],
                                          exclude=me["session_id"])
@@ -297,7 +377,7 @@ def _deny_branch_switch(
             break
     if label is None or not me["cwd"]:
         return None
-    mine = tree_root(me["cwd"])
+    mine = tree_root(_chain_cwd(command, me["cwd"]))
     sharers = [
         p for p in store.active_sessions(conn, project=me["project"],
                                          exclude=me["session_id"])
@@ -344,10 +424,27 @@ def _deny_destructive_git(
     """Deny a working-tree-destroying git op while other agents are live on the
     project. Unlike push/file locks this is not tied to a claim: the op wipes
     the whole shared tree, so the trigger is simply 'someone else is here'."""
-    label = next((lbl for rx, lbl in _DESTRUCTIVE_GIT if rx.search(command)), None)
+    chain = _chain_cwd(command, me["cwd"])
+    label, where = None, chain
+    for argv in _argvs(command):
+        label = _destructive(argv)
+        if label:
+            where = _argv_cwd(argv, chain)
+            break
     if label is None:
         return None
-    peers = store.active_sessions(conn, project=me["project"], exclude=me["session_id"])
+    # Only agents in the SAME CHECKOUT can be hurt by this. `project` collapses
+    # linked worktrees onto the main repo (that is what makes one channel per
+    # codebase work), so filtering on it denied a reset inside an isolated land
+    # lane whenever anyone was anywhere on the repo — while telling the agent to
+    # go and create the very worktree it was already standing in. The sibling
+    # checks above have always filtered by tree_root; this one did not.
+    mine = tree_root(where)
+    peers = [
+        p for p in store.active_sessions(conn, project=me["project"],
+                                         exclude=me["session_id"])
+        if p["cwd"] and tree_root(p["cwd"]) == mine
+    ]
     if not peers:
         return None
     who = ", ".join(store.display_name(p) for p in peers[:5])

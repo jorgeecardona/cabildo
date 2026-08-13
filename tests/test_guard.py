@@ -291,3 +291,101 @@ def test_reading_and_restoring_are_not_branch_switches(conn):
     for cmd in ("git status", "git branch", "git checkout", "git log --oneline"):
         r = guard.deny_reason(conn, "a", "Bash", {"command": cmd})
         assert r is None or "moves the branch" not in r, cmd
+
+
+# --------------------------------------------------------------------------- #
+# The remedy the guard prescribes has to actually work (2026-08-13)
+# --------------------------------------------------------------------------- #
+def _worktree_pair(tmp_path):
+    """A main checkout and a linked worktree of it, on disk, so tree_root and
+    the cd-resolver both see what they see in real life."""
+    main = tmp_path / "repo"
+    (main / ".git").mkdir(parents=True)
+    lane = tmp_path / "repo-lane"
+    lane.mkdir()
+    (lane / ".git").write_text(f"gitdir: {main}/.git/worktrees/lane\n")
+    return main, lane
+
+
+def test_destructive_git_allowed_from_your_own_worktree(conn, clock, tmp_path):
+    """MEASURED 2026-08-13: `git reset --hard` inside an isolated land lane was
+    denied because a peer was somewhere on the same PROJECT — and `project`
+    collapses worktrees by design. The denial even advised `git worktree add`,
+    which the agent had already done. A lane has its own index and its own HEAD;
+    resetting it cannot touch a peer's uncommitted work."""
+    main, lane = _worktree_pair(tmp_path)
+    store.register_session(conn, "a", cwd=str(lane), project=str(main),
+                           project_name="alpha", claude_pid=1000)
+    store.set_handle(conn, "a", "alice")
+    store.register_session(conn, "b", cwd=str(main), project=str(main),
+                           project_name="alpha", claude_pid=1001)
+    store.set_handle(conn, "b", "bob")
+
+    assert _bash(conn, "a", "git reset --hard abc123") is None
+    assert _bash(conn, "a", "git stash") is None
+    # ...and the shared checkout is still protected, which needs TWO agents
+    # standing in it — b alone in `main` has nobody to hurt.
+    store.register_session(conn, "c", cwd=str(main), project=str(main),
+                           project_name="alpha", claude_pid=1002)
+    store.set_handle(conn, "c", "carol")
+    reason = _bash(conn, "b", "git reset --hard abc123")
+    assert reason is not None and "@carol" in reason
+    # And a bypass that used to work: git's own options hid the subcommand.
+    assert _bash(conn, "b", "git -C . reset --hard abc123") is not None
+
+
+def test_destructive_git_judged_where_the_command_runs_not_where_the_agent_lives(
+    conn, clock, tmp_path
+):
+    """An agent stays registered in the shared checkout and works in its lane
+    with `cd`. Judging by the session cwd made the prescribed escape hatch
+    unreachable from the session that was told to use it."""
+    main, lane = _worktree_pair(tmp_path)
+    store.register_session(conn, "a", cwd=str(main), project=str(main),
+                           project_name="alpha", claude_pid=1000)
+    store.set_handle(conn, "a", "alice")
+    store.register_session(conn, "b", cwd=str(main), project=str(main),
+                           project_name="alpha", claude_pid=1001)
+    store.set_handle(conn, "b", "bob")
+
+    # In the shared checkout: denied.
+    assert _bash(conn, "a", "git reset --hard abc") is not None
+    # Same session, same peer, but the command runs in the lane: allowed.
+    assert _bash(conn, "a", f"cd {lane} && git reset --hard abc") is None
+    # `git -C` moves one command without moving the chain.
+    assert _bash(conn, "a", f"git -C {lane} reset --hard abc") is None
+
+
+def test_an_unverifiable_cd_target_still_denies(conn, clock, tmp_path):
+    """The resolver only ever loosens a denial, so a path it cannot verify must
+    not be taken at its word — a typo or an unexpanded variable would otherwise
+    read as "somewhere else" and wave a tree-wipe through."""
+    main, _lane = _worktree_pair(tmp_path)
+    store.register_session(conn, "a", cwd=str(main), project=str(main),
+                           project_name="alpha", claude_pid=1000)
+    store.set_handle(conn, "a", "alice")
+    store.register_session(conn, "b", cwd=str(main), project=str(main),
+                           project_name="alpha", claude_pid=1001)
+    store.set_handle(conn, "b", "bob")
+
+    for cmd in (
+        "cd /no/such/lane && git reset --hard abc",
+        "cd $LANE && git reset --hard abc",
+        "git -C /no/such/lane reset --hard abc",
+    ):
+        assert _bash(conn, "a", cmd) is not None, cmd
+
+
+def test_blanket_stage_follows_the_command_into_a_lane(conn, clock, tmp_path):
+    """Same reasoning for `git add -A`: a lane has its own index, so staging
+    everything there cannot pick up a peer's half-written files."""
+    main, lane = _worktree_pair(tmp_path)
+    store.register_session(conn, "a", cwd=str(main), project=str(main),
+                           project_name="alpha", claude_pid=1000)
+    store.set_handle(conn, "a", "alice")
+    store.register_session(conn, "b", cwd=str(main), project=str(main),
+                           project_name="alpha", claude_pid=1001)
+    store.set_handle(conn, "b", "bob")
+
+    assert _bash(conn, "a", "git add -A") is not None
+    assert _bash(conn, "a", f"cd {lane} && git add -A") is None
