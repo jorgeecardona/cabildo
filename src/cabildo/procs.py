@@ -69,7 +69,8 @@ class Memory:
 
         MemAvailable, not MemFree: page cache is reclaimable, so a healthy Linux
         box reports MemFree near zero at all times. Alerting on MemFree means
-        alerting always, which means alerting never."""
+        alerting always, which means alerting never.
+        """
         return 100.0 * self.available_kb / self.total_kb if self.total_kb else 100.0
 
     @property
@@ -107,7 +108,8 @@ def pressure() -> dict[str, float]:
     happy, or at 25% and be thrashing itself to death. PSI measures the thing we
     actually care about — wall time lost waiting on memory. `full avg60` is time
     when every runnable task was stalled, which is the machine being unusable,
-    and being a 60-second average it does not flap."""
+    and being a 60-second average it does not flap.
+    """
     out: dict[str, float] = {}
     for line in _read("/proc/pressure/memory").splitlines():
         kind = line.split(None, 1)[0] if line.split() else ""
@@ -130,11 +132,11 @@ class Proc:
     ppid: int
     comm: str
     rss_kb: int
-    started_at: float                    # epoch seconds
+    started_at: float  # epoch seconds
     cmdline: str = ""
-    session_id: str | None = None        # owning agent, once attributed
+    session_id: str | None = None  # owning agent, once attributed
     claude_pid: int = 0
-    via: str = ""                        # 'path' | 'ancestry' — how we attributed it
+    via: str = ""  # 'path' | 'ancestry' — how we attributed it
 
     @property
     def rss_mb(self) -> int:
@@ -163,7 +165,8 @@ def _boot_time() -> float:
 
 def _rss_kb(pid: int) -> int:
     """Resident pages from statm — one small read, no parsing of the big stat
-    line. This runs for every pid on the box, so it is the hot path."""
+    line. This runs for every pid on the box, so it is the hot path.
+    """
     try:
         return int(Path(f"/proc/{pid}/statm").read_text().split()[1]) * PAGE_KB
     except (OSError, IndexError, ValueError):
@@ -172,7 +175,8 @@ def _rss_kb(pid: int) -> int:
 
 def _stat(pid: int) -> tuple[str, int, float] | None:
     """(comm, ppid, starttime_ticks). comm is parenthesized and may contain
-    spaces and parens itself, so index off the final ')'."""
+    spaces and parens itself, so index off the final ')'.
+    """
     data = b""
     try:
         data = Path(f"/proc/{pid}/stat").read_bytes()
@@ -210,7 +214,8 @@ def processes(min_rss_kb: int = 0) -> list[Proc]:
 
     Filtered on RSS *before* reading cmdline: the RSS read is one line per pid
     and cheap enough for all ~500 of them, the cmdline read is not worth doing
-    for the 480 that hold a few megabytes."""
+    for the 480 that hold a few megabytes.
+    """
     boot = _boot_time()
     out: list[Proc] = []
     try:
@@ -223,16 +228,21 @@ def processes(min_rss_kb: int = 0) -> list[Proc]:
         pid = int(entry)
         rss = _rss_kb(pid)
         if rss < min_rss_kb or rss == 0:
-            continue          # rss == 0: kernel thread, or it exited under us
+            continue  # rss == 0: kernel thread, or it exited under us
         st = _stat(pid)
         if st is None:
             continue
         comm, ppid, start_ticks = st
-        out.append(Proc(
-            pid=pid, ppid=ppid, comm=comm, rss_kb=rss,
-            started_at=boot + start_ticks / TICKS if boot else 0.0,
-            cmdline=_cmdline(pid),
-        ))
+        out.append(
+            Proc(
+                pid=pid,
+                ppid=ppid,
+                comm=comm,
+                rss_kb=rss,
+                started_at=boot + start_ticks / TICKS if boot else 0.0,
+                cmdline=_cmdline(pid),
+            )
+        )
     out.sort(key=lambda p: p.rss_kb, reverse=True)
     return out
 
@@ -246,7 +256,8 @@ def attribute(procs: list[Proc], *, pid_to_session: dict[int, str] | None = None
     route sees exactly that, which is the case worth alerting on.
 
     `pid_to_session` maps claude pids to session ids (from the bus). Without it,
-    ancestry still resolves a pid, and the caller can map it later."""
+    ancestry still resolves a pid, and the caller can map it later.
+    """
     lookup = pid_to_session or {}
     for p in procs:
         sid = scratchpad_session(p.cmdline) or scratchpad_session(_cwd(p.pid))
@@ -269,7 +280,8 @@ class Snapshot:
     def stall_pct(self) -> float:
         """PSI `full avg60`: percent of the last minute in which *everything*
         was stalled on memory. 0.0 when PSI is unavailable — absence of the
-        signal must read as "no evidence", never as "it is bad"."""
+        signal must read as "no evidence", never as "it is bad".
+        """
         return self.pressure.get("full60", 0.0)
 
     def by_session(self) -> dict[str, list[Proc]]:
@@ -316,16 +328,17 @@ def loose(snap: Snapshot, live_sessions: set[str], *, alive=None) -> list[Proc]:
     Deliberately narrow. Anything we could not attribute is left out entirely —
     it is far likelier to be the human's editor than an agent's leftovers, and
     one nudge about somebody's browser costs more trust than ten correct ones
-    earn. Attributed-and-alive is also left out: that is the fleet working."""
+    earn. Attributed-and-alive is also left out: that is the fleet working.
+    """
     is_alive = alive or _alive
     out = []
     for p in snap.procs:
         if not p.session_id and not p.claude_pid:
-            continue                                  # unattributable: not ours to judge
+            continue  # unattributable: not ours to judge
         if p.session_id and p.session_id in live_sessions:
             continue
         if p.via == "ancestry" and is_alive(p.claude_pid):
-            continue                                  # its agent is right there, working
+            continue  # its agent is right there, working
         out.append(p)
     return out
 
@@ -334,5 +347,5 @@ _SELF_RE = re.compile(r"\b(cabildo|systemd)\b")
 
 
 def is_self(p: Proc) -> bool:
-    """cabildo's own daemon must never appear in its own list of things to kill."""
+    """Cabildo's own daemon must never appear in its own list of things to kill."""
     return bool(_SELF_RE.search(p.comm)) or "cabildo" in p.cmdline.split(" ")[0]

@@ -81,14 +81,19 @@ def _log(msg: str) -> None:
 def _report(conn, intent: dict, status: str, result: dict) -> None:
     """Tell the requester what happened, on the bus, as a DM."""
     ok = result.get("ok")
-    head = "⌛" if result.get("expired") else (
-        "✅" if (ok and result.get("landed")) else ("⚠️" if ok else "❌"))
+    head = (
+        "⌛"
+        if result.get("expired")
+        else ("✅" if (ok and result.get("landed")) else ("⚠️" if ok else "❌"))
+    )
     body = [
         f"{head} intent #{intent['id']} `{intent['action']}` → {status}",
         result.get("reason") or "",
     ]
     if result.get("landed"):
-        body.append(f"landed {result.get('head')} on {result.get('target')} (gate: {result.get('gate')})")
+        body.append(
+            f"landed {result.get('head')} on {result.get('target')} (gate: {result.get('gate')})"
+        )
     if result.get("gate") == "ABSENT":
         body.append(
             f"⚠ NOTHING WAS VERIFIED: no {actions.GATE_PATH} in this repo. The "
@@ -127,9 +132,9 @@ def handle(conn, intent: dict, ctx: actions.Ctx) -> None:
             "ok": False,
             "expired": True,
             "reason": f"expired: queued {age / 3600:.1f}h ago, ceiling is "
-                      f"{ctx.max_intent_age / 3600:.1f}h. Nothing was run — the "
-                      f"tree and the target branch have moved since. Re-request "
-                      f"it if you still want it.",
+            f"{ctx.max_intent_age / 3600:.1f}h. Nothing was run — the "
+            f"tree and the target branch have moved since. Re-request "
+            f"it if you still want it.",
         }
         store.finish_intent(conn, intent["id"], status="expired", result=result)
         _log(f"⌛ #{intent['id']} {intent['action']} expired ({age / 3600:.1f}h old)")
@@ -140,14 +145,15 @@ def handle(conn, intent: dict, ctx: actions.Ctx) -> None:
     if fn is None:
         result = {
             "ok": False,
-            "reason": f"unknown action {intent['action']!r}; allowed: "
-            f"{sorted(actions.ACTIONS)}",
+            "reason": f"unknown action {intent['action']!r}; allowed: {sorted(actions.ACTIONS)}",
         }
         store.finish_intent(conn, intent["id"], status="rejected", result=result)
         _report(conn, intent, "rejected", result)
         return
 
-    _log(f"▶ #{intent['id']} {intent['action']} from {intent['from_handle'] or names.robot_name(intent['from_session'])}")
+    _log(
+        f"▶ #{intent['id']} {intent['action']} from {intent['from_handle'] or names.robot_name(intent['from_session'])}"
+    )
     try:
         result = fn(intent["params"], ctx)
         status = "done" if result.get("ok") else "failed"
@@ -163,40 +169,82 @@ def handle(conn, intent: dict, ctx: actions.Ctx) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="cabildo-daemon", description=(__doc__ or "").split("\n")[0])
-    p.add_argument("--allow-push", action="store_true",
-                   help="actually push. Without it, land stops before the push and reports.")
-    p.add_argument("--allow-spawn", action="store_true",
-                   help="actually launch agents. Without it, spawn builds the worktree, "
-                        "proves it works, and cleans up.")
+    p.add_argument(
+        "--allow-push",
+        action="store_true",
+        help="actually push. Without it, land stops before the push and reports.",
+    )
+    p.add_argument(
+        "--allow-spawn",
+        action="store_true",
+        help="actually launch agents. Without it, spawn builds the worktree, "
+        "proves it works, and cleans up.",
+    )
     p.add_argument("--max-agents", type=int, default=3, help="concurrent spawned agents")
-    p.add_argument("--max-depth", type=int, default=2,
-                   help="how deep spawn chains may go (you→agent is depth 1, "
-                        "its helper is 2)")
-    p.add_argument("--budget", type=float, default=0.0,
-                   help="weighted-token ceiling over --budget-days; refuse to spawn past it. "
-                        "0 disables the throttle.")
+    p.add_argument(
+        "--max-depth",
+        type=int,
+        default=2,
+        help="how deep spawn chains may go (you→agent is depth 1, its helper is 2)",
+    )
+    p.add_argument(
+        "--budget",
+        type=float,
+        default=0.0,
+        help="weighted-token ceiling over --budget-days; refuse to spawn past it. "
+        "0 disables the throttle.",
+    )
     p.add_argument("--budget-days", type=float, default=7.0, help="window for --budget")
-    p.add_argument("--max-intent-age", type=float, default=2.0,
-                   help="hours a queued intent may wait before the daemon refuses "
-                        "it instead of running it (0 disables)")
+    p.add_argument(
+        "--max-intent-age",
+        type=float,
+        default=2.0,
+        help="hours a queued intent may wait before the daemon refuses "
+        "it instead of running it (0 disables)",
+    )
     p.add_argument("--once", action="store_true", help="drain the queue and exit")
     p.add_argument("--interval", type=float, default=2.0, help="poll seconds")
-    p.add_argument("--notify-all", action="store_true",
-                   help="pop a desktop notification for urgent traffic between agents too. "
-                        "Off by default: measured over 40 pops, none were addressed to the "
-                        "human. Use `cabildo watch` for the firehose.")
-    p.add_argument("--no-notify", action="store_true",
-                   help="don't pop desktop notifications for messages addressed to you")
-    p.add_argument("--no-monitor", action="store_true",
-                   help="don't watch this machine's memory / leftover processes")
-    p.add_argument("--monitor-every", type=float, default=MONITOR_EVERY,
-                   help=f"seconds between machine samples (default: {MONITOR_EVERY:g})")
-    p.add_argument("--mem-warn", type=float, default=monitor.Thresholds.warn_pct,
-                   help="%% RAM available below which agents are told to be careful")
-    p.add_argument("--mem-critical", type=float, default=monitor.Thresholds.critical_pct,
-                   help="%% RAM available below which agents are told to stop starting things")
-    p.add_argument("--orphan-mb", type=int, default=monitor.Thresholds.orphan_rss_mb,
-                   help="ignore leftover processes smaller than this")
+    p.add_argument(
+        "--notify-all",
+        action="store_true",
+        help="pop a desktop notification for urgent traffic between agents too. "
+        "Off by default: measured over 40 pops, none were addressed to the "
+        "human. Use `cabildo watch` for the firehose.",
+    )
+    p.add_argument(
+        "--no-notify",
+        action="store_true",
+        help="don't pop desktop notifications for messages addressed to you",
+    )
+    p.add_argument(
+        "--no-monitor",
+        action="store_true",
+        help="don't watch this machine's memory / leftover processes",
+    )
+    p.add_argument(
+        "--monitor-every",
+        type=float,
+        default=MONITOR_EVERY,
+        help=f"seconds between machine samples (default: {MONITOR_EVERY:g})",
+    )
+    p.add_argument(
+        "--mem-warn",
+        type=float,
+        default=monitor.Thresholds.warn_pct,
+        help="%% RAM available below which agents are told to be careful",
+    )
+    p.add_argument(
+        "--mem-critical",
+        type=float,
+        default=monitor.Thresholds.critical_pct,
+        help="%% RAM available below which agents are told to stop starting things",
+    )
+    p.add_argument(
+        "--orphan-mb",
+        type=int,
+        default=monitor.Thresholds.orphan_rss_mb,
+        help="ignore leftover processes smaller than this",
+    )
     args = p.parse_args(argv)
 
     worker = _worker_name()
@@ -234,14 +282,16 @@ def main(argv: list[str] | None = None) -> int:
         orphan_rss_mb=args.orphan_mb,
     )
 
-    _log(f"daemon {worker} up · actions={sorted(actions.ACTIONS)} · "
-         f"push={'ENABLED' if args.allow_push else 'dry-run'} · "
-         f"spawn={'ENABLED' if args.allow_spawn else 'dry-run'} "
-         f"(≤{args.max_agents} agents, depth ≤{args.max_depth}) · "
-         f"notify={'on' if notifying else 'off'} · "
-         f"monitor={'off' if args.no_monitor else 'mem<%g%%/%g%% every %gs' % (args.mem_warn, args.mem_critical, args.monitor_every)} · "
-         f"budget={'%.0f/%gd' % (args.budget, args.budget_days) if args.budget else 'none'} · "
-         f"intent age ≤{'%gh' % args.max_intent_age if args.max_intent_age else 'unbounded'}")
+    _log(
+        f"daemon {worker} up · actions={sorted(actions.ACTIONS)} · "
+        f"push={'ENABLED' if args.allow_push else 'dry-run'} · "
+        f"spawn={'ENABLED' if args.allow_spawn else 'dry-run'} "
+        f"(≤{args.max_agents} agents, depth ≤{args.max_depth}) · "
+        f"notify={'on' if notifying else 'off'} · "
+        f"monitor={'off' if args.no_monitor else 'mem<%g%%/%g%% every %gs' % (args.mem_warn, args.mem_critical, args.monitor_every)} · "
+        f"budget={'%.0f/%gd' % (args.budget, args.budget_days) if args.budget else 'none'} · "
+        f"intent age ≤{'%gh' % args.max_intent_age if args.max_intent_age else 'unbounded'}"
+    )
 
     # What is already in the queue, before touching any of it. A daemon coming up
     # with push enabled onto a backlog it did not queue is the moment to be loud.
@@ -249,8 +299,7 @@ def main(argv: list[str] | None = None) -> int:
     if waiting:
         stale = store.count_pending_intents(conn, older_than=ctx.max_intent_age)
         fresh = waiting - stale if ctx.max_intent_age else waiting
-        _log(f"queue: {waiting} pending — {stale} will be refused as expired, "
-             f"{fresh} will be RUN")
+        _log(f"queue: {waiting} pending — {stale} will be refused as expired, {fresh} will be RUN")
 
     last_reap = 0.0
     last_monitor = 0.0
@@ -279,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
                 try:
                     for line in monitor.sweep(conn, thresholds, source=f"daemon:{worker}"):
                         _log(line)
-                except Exception as e:   # a bad /proc read must not kill the daemon
+                except Exception as e:  # a bad /proc read must not kill the daemon
                     _log(f"monitor: {type(e).__name__}: {e}")
             if args.once:
                 _log("queue empty — exiting")

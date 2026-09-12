@@ -1,6 +1,7 @@
 """Exercise the MCP tool surface agents actually call. Identity normally comes
 from the PID rendezvous; here we drive it by patching resolve_claude_pid and
-pre-registering sessions bound to those PIDs, simulating two agents."""
+pre-registering sessions bound to those PIDs, simulating two agents.
+"""
 
 from __future__ import annotations
 
@@ -10,14 +11,17 @@ from cabildo import mcp_server as srv
 from cabildo import store
 
 
-@pytest.fixture()
+@pytest.fixture
 def two_agents(conn, monkeypatch):
     """Register agents A (pid 111) and B (pid 222) on the same project, and give
-    a knob to switch which one 'we' are for the next tool call."""
-    store.register_session(conn, "A", cwd="/repo/alpha", project="/repo/alpha",
-                           project_name="alpha", claude_pid=111)
-    store.register_session(conn, "B", cwd="/repo/alpha", project="/repo/alpha",
-                           project_name="alpha", claude_pid=222)
+    a knob to switch which one 'we' are for the next tool call.
+    """
+    store.register_session(
+        conn, "A", cwd="/repo/alpha", project="/repo/alpha", project_name="alpha", claude_pid=111
+    )
+    store.register_session(
+        conn, "B", cwd="/repo/alpha", project="/repo/alpha", project_name="alpha", claude_pid=222
+    )
     store.set_handle(conn, "A", "alice")
     store.set_handle(conn, "B", "bob")
     current = {"pid": 111}
@@ -48,7 +52,7 @@ def test_send_to_handle_and_inbox_and_read_flow(two_agents):
     box = srv.inbox()["messages"]
     assert len(box) == 1
     assert box[0]["from"] == "@alice"
-    assert "read" not in box[0]          # unread_only: saying so would be noise
+    assert "read" not in box[0]  # unread_only: saying so would be noise
     mid = box[0]["id"]
 
     assert srv.whoami()["unread"] == 1
@@ -153,6 +157,7 @@ def test_get_message_denies_out_of_inbox(two_agents):
 # --------------------------------------------------------------------------- #
 def _chars(payload) -> int:
     import json
+
     return len(json.dumps(payload))
 
 
@@ -182,14 +187,15 @@ def test_previews_shrink_as_the_backlog_grows(two_agents):
     two_agents(222)
     crowded = len(srv.inbox()["messages"][0]["body"])
 
-    assert alone == srv.PREVIEW_CHARS + 2      # + " …"
+    assert alone == srv.PREVIEW_CHARS + 2  # + " …"
     assert crowded < alone
-    assert crowded >= srv.MIN_PREVIEW_CHARS    # still worth reading
+    assert crowded >= srv.MIN_PREVIEW_CHARS  # still worth reading
 
 
 def test_short_messages_hand_their_share_back(two_agents):
     """A budget split evenly would starve one long message among many short
-    ones for no reason — the short ones never used their share."""
+    ones for no reason — the short ones never used their share.
+    """
     two_agents(111)
     for _ in range(9):
         srv.send("ok", to="bob")
@@ -222,7 +228,8 @@ def test_more_is_zero_when_the_inbox_fits(two_agents):
 
 def test_full_still_means_full(two_agents):
     """The escape hatch has to actually escape — otherwise an agent that needs
-    the whole thing has no way to get it except get_message in a loop."""
+    the whole thing has no way to get it except get_message in a loop.
+    """
     two_agents(111)
     srv.send("Z" * 5000, to="bob")
     two_agents(222)

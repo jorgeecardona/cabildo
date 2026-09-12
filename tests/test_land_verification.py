@@ -20,15 +20,21 @@ import pytest
 from cabildo import actions
 
 ENV_ID = {
-    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@x",
-    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@x",
+    "GIT_AUTHOR_NAME": "t",
+    "GIT_AUTHOR_EMAIL": "t@x",
+    "GIT_COMMITTER_NAME": "t",
+    "GIT_COMMITTER_EMAIL": "t@x",
 }
 
 
 def sh(cmd, cwd, env=None):
     import os
+
     p = subprocess.run(
-        cmd, cwd=str(cwd), capture_output=True, text=True,
+        cmd,
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
         env={**os.environ, **ENV_ID, **(env or {})},
     )
     assert p.returncode == 0, f"{cmd} failed: {p.stdout}{p.stderr}"
@@ -37,18 +43,29 @@ def sh(cmd, cwd, env=None):
 
 def on_remote(origin, sha, branch="main") -> bool:
     """Ground truth, asked of the remote itself: is sha on the branch at all —
-    tip or not? This is the question land() is really answering."""
+    tip or not? This is the question land() is really answering.
+    """
     # --git-dir, not cwd: environments that set safe.bareRepository=explicit
     # (Claude Code injects it via GIT_CONFIG_*) refuse git run from inside a
     # bare repo unless the git dir is named explicitly.
-    return subprocess.run(
-        ["git", "--git-dir", str(origin), "merge-base", "--is-ancestor",
-         sha, f"refs/heads/{branch}"],
-        capture_output=True,
-    ).returncode == 0
+    return (
+        subprocess.run(
+            [
+                "git",
+                "--git-dir",
+                str(origin),
+                "merge-base",
+                "--is-ancestor",
+                sha,
+                f"refs/heads/{branch}",
+            ],
+            capture_output=True,
+        ).returncode
+        == 0
+    )
 
 
-@pytest.fixture()
+@pytest.fixture
 def repo(tmp_path):
     """A bare origin at 'base', plus a clone holding one unpushed commit."""
     origin, seed, work = tmp_path / "origin.git", tmp_path / "seed", tmp_path / "work"
@@ -68,15 +85,16 @@ def repo(tmp_path):
 
 def race_on_receive(origin):
     """Make origin append a commit the moment it accepts a push — i.e. another
-    agent (or Jorge's VS Code) landing between our push and our verify."""
+    agent (or Jorge's VS Code) landing between our push and our verify.
+    """
     hook = origin / "hooks" / "post-receive"
     hook.write_text(
         "#!/bin/bash\n"
         "export GIT_DIR=$(pwd)\n"
         "tip=$(git rev-parse main); tree=$(git rev-parse main^{tree})\n"
         "c=$(GIT_AUTHOR_NAME=o GIT_AUTHOR_EMAIL=o@x GIT_COMMITTER_NAME=o "
-        "GIT_COMMITTER_EMAIL=o@x git commit-tree \"$tree\" -p \"$tip\" -m other)\n"
-        "git update-ref refs/heads/main \"$c\"\n"
+        'GIT_COMMITTER_EMAIL=o@x git commit-tree "$tree" -p "$tip" -m other)\n'
+        'git update-ref refs/heads/main "$c"\n'
     )
     hook.chmod(0o755)
 
@@ -194,7 +212,8 @@ def test_staged_but_uncommitted_change_still_blocks(repo):
 
 def test_claude_own_settings_gets_a_pointed_hint(repo):
     """Claude Code rewrites .claude/settings.json when you accept a permission.
-    An agent told only 'dirty' will not think to look there — it didn't do it."""
+    An agent told only 'dirty' will not think to look there — it didn't do it.
+    """
     _origin, work, _sha = repo
     (work / ".claude").mkdir()
     (work / ".claude" / "settings.json").write_text('{"permissions": {}}\n')

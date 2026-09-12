@@ -1,5 +1,6 @@
 """Advisory-lease coordination: acquire, conflict, refresh, expiry, release,
-and cleanup on session end."""
+and cleanup on session end.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ from cabildo import store
 from tests.conftest import make_session
 
 
-@pytest.fixture()
+@pytest.fixture
 def clock(monkeypatch):
     """Controllable time source so TTL expiry is deterministic."""
     state = {"t": 1_000.0}
@@ -19,8 +20,13 @@ def clock(monkeypatch):
 
 def _acquire(conn, resource, sid, ttl=600, note=None):
     return store.acquire_claim(
-        conn, resource=resource, holder_session=sid,
-        holder_handle=None, project="/repo/alpha", ttl_seconds=ttl, note=note,
+        conn,
+        resource=resource,
+        holder_session=sid,
+        holder_handle=None,
+        project="/repo/alpha",
+        ttl_seconds=ttl,
+        note=note,
     )
 
 
@@ -87,15 +93,31 @@ def test_end_session_drops_its_locks(conn, clock):
     _acquire(conn, "file:x.py", "a")
     store.end_session(conn, "a")
     assert store.list_claims(conn) == []
-    assert store.get_session(conn, "a")["status"] == "ended"
+    sess = store.get_session(conn, "a")
+    assert sess is not None
+    assert sess["status"] == "ended"
 
 
 def test_claims_scoped_by_project(conn, clock):
     make_session(conn, "a", handle="a", project="/repo/alpha", project_name="alpha")
     make_session(conn, "b", handle="b", project="/repo/beta", project_name="beta")
-    store.acquire_claim(conn, resource="push:alpha", holder_session="a",
-                        holder_handle="a", project="/repo/alpha", ttl_seconds=600, note=None)
-    store.acquire_claim(conn, resource="push:beta", holder_session="b",
-                        holder_handle="b", project="/repo/beta", ttl_seconds=600, note=None)
+    store.acquire_claim(
+        conn,
+        resource="push:alpha",
+        holder_session="a",
+        holder_handle="a",
+        project="/repo/alpha",
+        ttl_seconds=600,
+        note=None,
+    )
+    store.acquire_claim(
+        conn,
+        resource="push:beta",
+        holder_session="b",
+        holder_handle="b",
+        project="/repo/beta",
+        ttl_seconds=600,
+        note=None,
+    )
     alpha = store.list_claims(conn, project="/repo/alpha")
     assert {c["resource"] for c in alpha} == {"push:alpha"}

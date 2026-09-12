@@ -2,8 +2,7 @@
 # Publish dist/* to PyPI using GitLab OIDC Trusted Publishing -- no API token is
 # stored anywhere. Mints a short-lived PyPI upload token from the job's OIDC id_token
 # ($PYPI_ID_TOKEN, provided by the CI job's id_tokens block), then uploads.
-# Run by scripts/release (which builds dist/ first). Same mechanism as
-# pytest-parallex and musil.
+# Run by the `publish` moon task (which deps on `build`, so dist/ exists).
 set -e
 cd "$(CDPATH= cd "$(dirname "$0")/.." && pwd)"
 

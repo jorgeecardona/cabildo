@@ -46,24 +46,21 @@ from typing import Any
 from . import store
 from .context import tree_root
 
-
 # Working-tree-destroying git ops. Each matches only as its own shell command
 # (start or after ;&|), so the same words inside a quoted string don't trip it.
 # These clobber *everyone's* uncommitted work in a shared checkout, which is the
 # concrete harm we saw ("the reset that dropped feaf332a").
 _DESTRUCTIVE_GIT = [
-    (re.compile(r"(?:^|[;&|]\s*)git\s+reset\s+(?:[^;&|]*\s)?--hard\b"),
-     "git reset --hard"),
+    (re.compile(r"(?:^|[;&|]\s*)git\s+reset\s+(?:[^;&|]*\s)?--hard\b"), "git reset --hard"),
     # checkout/restore that discards changes: `-- <path>`, `.`, or bare restore
     # (restore discards by default unless it's --staged-only).
-    (re.compile(r"(?:^|[;&|]\s*)git\s+checkout\s+(?:[^;&|]*\s)?(?:--\s|\.(?:\s|$))"),
-     "git checkout (discard)"),
-    (re.compile(r"(?:^|[;&|]\s*)git\s+restore\b(?![^;&|]*--staged)"),
-     "git restore (discard)"),
-    (re.compile(r"(?:^|[;&|]\s*)git\s+clean\s+(?:[^;&|]*\s)?-[a-zA-Z]*f"),
-     "git clean -f"),
-    (re.compile(r"(?:^|[;&|]\s*)git\s+stash\b(?!\s+(?:list|show|pop|apply))"),
-     "git stash"),
+    (
+        re.compile(r"(?:^|[;&|]\s*)git\s+checkout\s+(?:[^;&|]*\s)?(?:--\s|\.(?:\s|$))"),
+        "git checkout (discard)",
+    ),
+    (re.compile(r"(?:^|[;&|]\s*)git\s+restore\b(?![^;&|]*--staged)"), "git restore (discard)"),
+    (re.compile(r"(?:^|[;&|]\s*)git\s+clean\s+(?:[^;&|]*\s)?-[a-zA-Z]*f"), "git clean -f"),
+    (re.compile(r"(?:^|[;&|]\s*)git\s+stash\b(?!\s+(?:list|show|pop|apply))"), "git stash"),
 ]
 
 # Staging the whole tree rather than named paths. Matched on *tokens*, not on
@@ -88,10 +85,11 @@ def _argvs(command: str) -> list[list[str]]:
     Tokenising is what keeps `git commit -m "add -A support"` out of the
     blanket-stage check: the message is a single token, and a token is not a
     flag. Unparseable input yields nothing — this guard catches the ordinary
-    case, it does not try to out-parse bash."""
+    case, it does not try to out-parse bash.
+    """
     try:
         tokens = shlex.split(command, comments=True)
-    except ValueError:                    # unbalanced quotes; not ours to fix
+    except ValueError:  # unbalanced quotes; not ours to fix
         return []
     out: list[list[str]] = []
     cur: list[str] = []
@@ -120,7 +118,7 @@ def _git_subcommand(argv: list[str]) -> tuple[str | None, list[str]]:
         if tok.startswith("-"):
             i += 1
             continue
-        return tok, argv[i + 1:]
+        return tok, argv[i + 1 :]
     return None, []
 
 
@@ -129,13 +127,15 @@ def _is_push(command: str) -> bool:
 
     Tokenised for the same reason as staging, plus one this file learned the
     hard way: `git stash push -m wip` contains "push" and is its opposite. A
-    pattern that reads the string mislabels it; reading the subcommand cannot."""
+    pattern that reads the string mislabels it; reading the subcommand cannot.
+    """
     return any(_git_subcommand(argv)[0] == "push" for argv in _argvs(command))
 
 
 def _stages_whole_tree(argv: list[str]) -> str | None:
     """Label for a command that stages or commits the *whole* tree instead of
-    named paths, else None. `git add src/x.py` is fine; `git add -A` is not."""
+    named paths, else None. `git add src/x.py` is fine; `git add -A` is not.
+    """
     sub, rest = _git_subcommand(argv)
     if sub == "add":
         return next((f"git add {t}" for t in rest if t in _STAGE_ALL), None)
@@ -150,9 +150,7 @@ def _stages_whole_tree(argv: list[str]) -> str | None:
     return None
 
 
-def _held_by_other(
-    conn: sqlite3.Connection, resource: str, session_id: str
-) -> sqlite3.Row | None:
+def _held_by_other(conn: sqlite3.Connection, resource: str, session_id: str) -> sqlite3.Row | None:
     row = conn.execute(
         "SELECT * FROM claims WHERE resource=? AND expires_at>? AND holder_session!=?",
         (resource, store._now(), session_id),
@@ -161,16 +159,17 @@ def _held_by_other(
 
 
 def _holder_name(conn: sqlite3.Connection, row: sqlite3.Row) -> str:
-    return store.display_name(
-        store.get_session(conn, row["holder_session"]), row["holder_session"]
-    )
+    return store.display_name(store.get_session(conn, row["holder_session"]), row["holder_session"])
 
 
 def _held_by_me(conn: sqlite3.Connection, resource: str, session_id: str) -> bool:
-    return conn.execute(
-        "SELECT 1 FROM claims WHERE resource=? AND expires_at>? AND holder_session=?",
-        (resource, store._now(), session_id),
-    ).fetchone() is not None
+    return (
+        conn.execute(
+            "SELECT 1 FROM claims WHERE resource=? AND expires_at>? AND holder_session=?",
+            (resource, store._now(), session_id),
+        ).fetchone()
+        is not None
+    )
 
 
 def _deny_push(conn: sqlite3.Connection, me: sqlite3.Row, command: str) -> str | None:
@@ -193,10 +192,10 @@ def _deny_push(conn: sqlite3.Connection, me: sqlite3.Row, command: str) -> str |
     # already runs one intent at a time, which is the ordering nobody can get
     # right by hand, so send them there rather than letting them find out.
     if _held_by_me(conn, resource, me["session_id"]):
-        return None                       # you took the lock: peers are the ones denied
+        return None  # you took the lock: peers are the ones denied
     peers = store.active_sessions(conn, project=me["project"], exclude=me["session_id"])
     if not peers:
-        return None                       # alone: push is nobody's business but yours
+        return None  # alone: push is nobody's business but yours
     who = ", ".join(store.display_name(p) for p in peers[:5])
     return (
         f"cabildo: {len(peers)} other agent(s) live on {me['project_name']} ({who}) — "
@@ -212,9 +211,7 @@ def _deny_push(conn: sqlite3.Connection, me: sqlite3.Row, command: str) -> str |
     )
 
 
-def _deny_blanket_stage(
-    conn: sqlite3.Connection, me: sqlite3.Row, command: str
-) -> str | None:
+def _deny_blanket_stage(conn: sqlite3.Connection, me: sqlite3.Row, command: str) -> str | None:
     """Deny `git add -A` / `git commit -a` while another agent shares this exact
     working tree.
 
@@ -222,7 +219,8 @@ def _deny_blanket_stage(
     checkout it sweeps whatever the other agent has half-written into your
     commit, and the fix for that — reset, revert, force-push — destroys more
     than the mistake did. Separate worktrees have separate indexes, so this
-    never fires on agents who isolated themselves properly."""
+    never fires on agents who isolated themselves properly.
+    """
     label = None
     for argv in _argvs(command):
         label = _stages_whole_tree(argv)
@@ -236,8 +234,8 @@ def _deny_blanket_stage(
         return None
     mine = tree_root(me["cwd"])
     sharers = [
-        p for p in store.active_sessions(conn, project=me["project"],
-                                         exclude=me["session_id"])
+        p
+        for p in store.active_sessions(conn, project=me["project"], exclude=me["session_id"])
         if p["cwd"] and tree_root(p["cwd"]) == mine
     ]
     if not sharers:
@@ -262,23 +260,21 @@ def _switches_branch(argv: list[str]) -> str | None:
     sub, args = _git_subcommand(argv)
     if sub in ("checkout", "switch"):
         if "--" in args:
-            return None                     # `git checkout <tree-ish> -- <path>`: a restore
+            return None  # `git checkout <tree-ish> -- <path>`: a restore
         if any(a in ("-b", "-B", "-c", "-C") for a in args):
             return f"git {sub} -b"
         positional = [a for a in args if not a.startswith("-")]
         if not positional:
-            return None                     # bare `git checkout`: prints, changes nothing
+            return None  # bare `git checkout`: prints, changes nothing
         if sub == "checkout" and any(os.sep in a or os.path.exists(a) for a in positional):
-            return None                     # looks like a path, not a ref
+            return None  # looks like a path, not a ref
         return f"git {sub}"
     if sub == "branch" and any(a in ("-f", "--force", "-M", "-m") for a in args):
         return "git branch -f"
     return None
 
 
-def _deny_branch_switch(
-    conn: sqlite3.Connection, me: sqlite3.Row, command: str
-) -> str | None:
+def _deny_branch_switch(conn: sqlite3.Connection, me: sqlite3.Row, command: str) -> str | None:
     """Deny changing the branch while another agent shares this exact working tree.
 
     A checkout has ONE HEAD. Switching it moves every agent standing in that directory, and none of
@@ -299,8 +295,8 @@ def _deny_branch_switch(
         return None
     mine = tree_root(me["cwd"])
     sharers = [
-        p for p in store.active_sessions(conn, project=me["project"],
-                                         exclude=me["session_id"])
+        p
+        for p in store.active_sessions(conn, project=me["project"], exclude=me["session_id"])
         if p["cwd"] and tree_root(p["cwd"]) == mine
     ]
     if not sharers:
@@ -320,13 +316,13 @@ def _deny_file(conn: sqlite3.Connection, me: sqlite3.Row, path: str) -> str | No
     rel: str | None = None
     project = me["project"]
     if project and str(abspath).startswith(project.rstrip("/") + "/"):
-        rel = str(abspath)[len(project.rstrip("/")) + 1:]
+        rel = str(abspath)[len(project.rstrip("/")) + 1 :]
     for row in conn.execute(
         "SELECT * FROM claims WHERE resource LIKE 'file:%' AND expires_at>? "
         "AND holder_session!=? AND project=?",
         (store._now(), me["session_id"], project),
     ):
-        pattern = row["resource"][len("file:"):]
+        pattern = row["resource"][len("file:") :]
         if fnmatch(str(abspath), pattern) or (rel is not None and fnmatch(rel, pattern)):
             note = f" ({row['note']})" if row["note"] else ""
             return (
@@ -338,12 +334,11 @@ def _deny_file(conn: sqlite3.Connection, me: sqlite3.Row, path: str) -> str | No
     return None
 
 
-def _deny_destructive_git(
-    conn: sqlite3.Connection, me: sqlite3.Row, command: str
-) -> str | None:
+def _deny_destructive_git(conn: sqlite3.Connection, me: sqlite3.Row, command: str) -> str | None:
     """Deny a working-tree-destroying git op while other agents are live on the
     project. Unlike push/file locks this is not tied to a claim: the op wipes
-    the whole shared tree, so the trigger is simply 'someone else is here'."""
+    the whole shared tree, so the trigger is simply 'someone else is here'.
+    """
     label = next((lbl for rx, lbl in _DESTRUCTIVE_GIT if rx.search(command)), None)
     if label is None:
         return None
@@ -366,7 +361,8 @@ def deny_reason(
     tool_input: dict[str, Any],
 ) -> str | None:
     """Reason to deny this tool call, or None to fall through. Never raises —
-    a guard that crashes must not take the session down with it."""
+    a guard that crashes must not take the session down with it.
+    """
     me = store.get_session(conn, session_id)
     if me is None or not me["project"]:
         return None
@@ -388,11 +384,12 @@ def deny_reason(
 
 def _file_resource(me: sqlite3.Row, path: str) -> str:
     """The claim resource for a path: repo-relative when inside the project
-    (portable, matches how humans claim `file:src/x.py`), else absolute."""
+    (portable, matches how humans claim `file:src/x.py`), else absolute.
+    """
     project = me["project"]
     p = str(PurePosixPath(path))
     if project and p.startswith(project.rstrip("/") + "/"):
-        return "file:" + p[len(project.rstrip("/")) + 1:]
+        return "file:" + p[len(project.rstrip("/")) + 1 :]
     return "file:" + p
 
 
@@ -408,7 +405,8 @@ def autoclaim_on_edit(
 
     This is what gives the guard teeth without agent discipline: claims were
     almost never made by hand, so nothing was ever enforced. Editing a file now
-    *is* claiming it."""
+    *is* claiming it.
+    """
     key = _FILE_TOOLS.get(tool_name)
     if not key:
         return None
@@ -420,8 +418,12 @@ def autoclaim_on_edit(
         return None
     resource = _file_resource(me, str(path))
     store.acquire_claim(
-        conn, resource=resource, holder_session=session_id,
-        holder_handle=me["handle"], project=me["project"],
-        ttl_seconds=AUTOCLAIM_TTL, note="auto: editing",
+        conn,
+        resource=resource,
+        holder_session=session_id,
+        holder_handle=me["handle"],
+        project=me["project"],
+        ttl_seconds=AUTOCLAIM_TTL,
+        note="auto: editing",
     )
     return resource

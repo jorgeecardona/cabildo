@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """UserPromptSubmit hook: refresh liveness + re-assert the PID rendezvous, then
 inject a compact unread notice (only when there is something unread). This is
-the passive "you have mail" delivery that runs on every user turn."""
+the passive "you have mail" delivery that runs on every user turn.
+"""
 
 from __future__ import annotations
 
@@ -17,9 +18,8 @@ def main() -> None:
         return
     cwd = data.get("cwd") or os.getcwd()
 
-    from cabildo import store
+    from cabildo import notify, store
     from cabildo.context import git_project, resolve_claude_pid
-    from cabildo import notify
 
     root, name = git_project(cwd)
     pid = resolve_claude_pid()
@@ -28,7 +28,12 @@ def main() -> None:
         # Idempotent: keeps last_seen fresh and re-binds pid->session_id in case
         # SessionStart was missed (e.g. hook added mid-session).
         store.register_session(
-            conn, session_id, cwd=cwd, project=root, project_name=name, claude_pid=pid,
+            conn,
+            session_id,
+            cwd=cwd,
+            project=root,
+            project_name=name,
+            claude_pid=pid,
             tag=os.environ.get("CABILDO_TAG"),
         )
         # Conditions too: a turn that never makes a tool call would otherwise
@@ -41,4 +46,3 @@ def main() -> None:
     finally:
         conn.close()
     emit_context("UserPromptSubmit", line)
-

@@ -59,8 +59,8 @@ def resolve(token: str | None = None, base: str | None = None) -> tuple[str, str
     base = base or os.environ.get("CABILDO_BASE") or cfg.get("base") or DEFAULT_BASE
     if not token:
         raise RuntimeError(
-            "no cloud token — run `cabildo sync --set-token <token>` once, "
-            "or set CABILDO_TOKEN")
+            "no cloud token — run `cabildo sync --set-token <token>` once, or set CABILDO_TOKEN"
+        )
     return base.rstrip("/"), token
 
 
@@ -98,7 +98,8 @@ def _norm(name: Any) -> str:
 def _norm_root(path: Any) -> str:
     """A folder as the registry stores it: absolute, ~-expanded, symlinks
     resolved, no trailing slash. NOT lowercased — paths are case-sensitive here,
-    and a registry that quietly renamed your directories would be a trap."""
+    and a registry that quietly renamed your directories would be a trap.
+    """
     p = str(path or "").strip()
     if not p:
         return ""
@@ -113,11 +114,12 @@ def default_uplink() -> str:
 
 def _registry(cfg: dict | None = None) -> dict[str, dict]:
     """The normalized project map, folding any legacy `share_projects` list in as
-    content-level entries so old configs keep working."""
+    content-level entries so old configs keep working.
+    """
     cfg = cfg if cfg is not None else load_config()
     raw = cfg.get("projects")
     raw = dict(raw) if isinstance(raw, dict) else {}
-    for name in cfg.get("share_projects") or []:      # migrate the old boolean list
+    for name in cfg.get("share_projects") or []:  # migrate the old boolean list
         n = _norm(name)
         if n and n not in raw:
             raw[n] = {"uplink": "content"}
@@ -131,11 +133,13 @@ def _registry(cfg: dict | None = None) -> dict[str, dict]:
         peers = e.get("peers")
         roots = e.get("roots")
         out[n] = {
-            "uplink": lvl if lvl in _UPLINK_RANK else "",   # "" ⇒ fall back to default
+            "uplink": lvl if lvl in _UPLINK_RANK else "",  # "" ⇒ fall back to default
             "peers": sorted({_norm(p) for p in peers if _norm(p)})
-                     if isinstance(peers, list) else [],
+            if isinstance(peers, list)
+            else [],
             "roots": sorted({_norm_root(r) for r in roots if _norm_root(r)})
-                     if isinstance(roots, list) else [],
+            if isinstance(roots, list)
+            else [],
         }
     return out
 
@@ -149,13 +153,17 @@ def _save_registry(reg: dict[str, dict]) -> Path:
     p = config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     cfg = load_config()
-    cfg["projects"] = {n: {"uplink": e.get("uplink") or default_uplink(),
-                           "peers": sorted(set(e.get("peers") or [])),
-                           "roots": sorted(set(e.get("roots") or []))}
-                       for n, e in reg.items()}
-    cfg.pop("share_projects", None)                   # fully migrated into projects
+    cfg["projects"] = {
+        n: {
+            "uplink": e.get("uplink") or default_uplink(),
+            "peers": sorted(set(e.get("peers") or [])),
+            "roots": sorted(set(e.get("roots") or [])),
+        }
+        for n, e in reg.items()
+    }
+    cfg.pop("share_projects", None)  # fully migrated into projects
     p.write_text(json.dumps(cfg, indent=2))
-    os.chmod(p, stat.S_IRUSR | stat.S_IWUSR)          # 600 — sits beside the token
+    os.chmod(p, stat.S_IRUSR | stat.S_IWUSR)  # 600 — sits beside the token
     return p
 
 
@@ -174,7 +182,8 @@ _key_cache: dict[str, tuple[float, str]] = {}
 def project_key(value: Any) -> str:
     """The registry key for a project named either way: a name stays a name, an
     absolute path resolves through the same logic a session uses (pins, linked
-    worktrees, git root) so `/…/paas/.claude/worktrees/x` is still `paas`."""
+    worktrees, git root) so `/…/paas/.claude/worktrees/x` is still `paas`.
+    """
     v = str(value or "").strip()
     if not v.startswith("/"):
         return _norm(v)
@@ -184,6 +193,7 @@ def project_key(value: Any) -> str:
         return hit[1]
     try:
         from . import context
+
         name = _norm(context.git_project(v)[1])
     except Exception:
         name = _norm(os.path.basename(v.rstrip("/")))
@@ -193,7 +203,8 @@ def project_key(value: Any) -> str:
 
 def uplink_of(name: Any) -> str:
     """The effective uplink level for a project (its own, or the default).
-    Accepts a project name or a project path."""
+    Accepts a project name or a project path.
+    """
     e = _registry().get(project_key(name))
     lvl = _norm(e.get("uplink")) if e else ""
     return lvl if lvl in _UPLINK_RANK else default_uplink()
@@ -245,7 +256,7 @@ def add_peer(name: str, peer: str) -> list[str]:
     if not n or not p or n == p:
         return peers_of(name)
     reg = _registry()
-    for a, b in ((n, p), (p, n)):                      # symmetric — link both ways
+    for a, b in ((n, p), (p, n)):  # symmetric — link both ways
         e = reg.get(a) or {"uplink": "", "peers": []}
         e["peers"] = sorted(set(e.get("peers") or []) | {b})
         reg[a] = e
@@ -269,7 +280,8 @@ def remove_peer(name: str, peer: str) -> list[str]:
 def peers_visible(name: Any) -> set[str]:
     """The set of projects an agent in `name` may see on the bus: itself + its
     linked peers. Used to enforce cross-project isolation. Takes a name or a
-    path, like every other lookup here."""
+    path, like every other lookup here.
+    """
     n = project_key(name)
     return {n} | set(peers_of(n)) if n else set()
 
@@ -298,7 +310,8 @@ def register_root(name: str, root: str, *, uplink: str | None = None) -> tuple[s
     A root belongs to exactly one project: re-registering it under a new name
     moves it, rather than leaving the same directory claimed twice (whichever
     entry the dict happened to yield first would win, which is not a thing to
-    debug at 3am)."""
+    debug at 3am).
+    """
     n, r = _norm(name), _norm_root(root)
     if not n:
         raise ValueError("project name required")
@@ -307,7 +320,7 @@ def register_root(name: str, root: str, *, uplink: str | None = None) -> tuple[s
     if uplink is not None and _norm(uplink) not in _UPLINK_RANK:
         raise ValueError(f"uplink must be one of: {', '.join(UPLINK_LEVELS)}")
     reg = _registry()
-    for other, e in reg.items():                       # move, don't duplicate
+    for other, e in reg.items():  # move, don't duplicate
         if other != n:
             e["roots"] = [x for x in (e.get("roots") or []) if x != r]
     e = reg.get(n) or {"uplink": "", "peers": [], "roots": []}
@@ -322,7 +335,8 @@ def register_root(name: str, root: str, *, uplink: str | None = None) -> tuple[s
 def unregister_root(root: str) -> str | None:
     """Forget a folder. Returns the project it belonged to, or None. The project
     entry itself stays: its uplink and peer links are settings, not consequences
-    of one directory existing."""
+    of one directory existing.
+    """
     r = _norm_root(root)
     reg = _registry()
     owner = None
@@ -338,7 +352,8 @@ def unregister_root(root: str) -> str | None:
 def project_for_path(path: Any) -> tuple[str, str] | None:
     """(project name, registered root) for the deepest registered folder that
     contains `path` — or None. Deepest wins so a package registered inside an
-    already-registered monorepo keeps its own identity."""
+    already-registered monorepo keeps its own identity.
+    """
     p = _norm_root(path)
     if not p:
         return None
@@ -356,7 +371,8 @@ def message_project(topic: Any, project: Any = None) -> str | None:
     embedded in a `proj:<name>` topic, else None (a cross-cutting channel).
 
     Always a registry key — the stored `project` is a path, and returning it raw
-    is what made the message dial a no-op."""
+    is what made the message dial a no-op.
+    """
     if project:
         return project_key(project)
     t = str(topic or "")
@@ -397,8 +413,7 @@ def _api(base: str, token: str, method: str, path: str, body=None) -> dict | lis
         with urllib.request.urlopen(req, timeout=20) as r:
             return json.loads(r.read() or "{}")
     except urllib.error.HTTPError as e:
-        return {"ok": False, "error": f"HTTP {e.code}",
-                "body": e.read().decode("utf-8", "replace")}
+        return {"ok": False, "error": f"HTTP {e.code}", "body": e.read().decode("utf-8", "replace")}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
@@ -427,11 +442,13 @@ def _save_cursor(cur: dict) -> None:
 def sync_once(base: str, token: str) -> dict:
     """One pass: push active sessions, any new messages since the cursor, and
     live claims. Reads the bus read-only; the cursor keeps message sync
-    incremental and restart-safe. Returns a small counts dict."""
+    incremental and restart-safe. Returns a small counts dict.
+    """
     dbp = store.db_path()
     if not dbp.exists():
         return {"ok": False, "error": f"no local bus at {dbp}"}
     import sqlite3
+
     cur = _load_cursor()
     now = time.time()
     conn = sqlite3.connect(f"file:{dbp}?mode=ro", uri=True)
@@ -441,48 +458,79 @@ def sync_once(base: str, token: str) -> dict:
         # dashboard. Isolated projects (uplink=none) never appear at all.
         agents = conn.execute(
             "SELECT session_id, handle, project_name, cwd FROM sessions "
-            "WHERE status='active' AND last_seen_at>=?", (now - 1800,)).fetchall()
+            "WHERE status='active' AND last_seen_at>=?",
+            (now - 1800,),
+        ).fetchall()
         agents = [a for a in agents if uplink_allows(a["project_name"], "presence")]
         for a in agents:
-            _api(base, token, "POST", "/api/agents",
-                 {"session_id": a["session_id"], "handle": a["handle"],
-                  "project": a["project_name"], "cwd": a["cwd"]})
+            _api(
+                base,
+                token,
+                "POST",
+                "/api/agents",
+                {
+                    "session_id": a["session_id"],
+                    "handle": a["handle"],
+                    "project": a["project_name"],
+                    "cwd": a["cwd"],
+                },
+            )
 
         # Message bodies (uplink>=messages). Anything the downlink injected is
         # already in the cloud; mirroring it back up would duplicate it forever.
-        has_origin = any(r["name"] == "origin"
-                         for r in conn.execute("PRAGMA table_info(messages)"))
-        has_proj = any(r["name"] == "project"
-                       for r in conn.execute("PRAGMA table_info(messages)"))
+        has_origin = any(r["name"] == "origin" for r in conn.execute("PRAGMA table_info(messages)"))
+        has_proj = any(r["name"] == "project" for r in conn.execute("PRAGMA table_info(messages)"))
         not_echo = " AND COALESCE(origin,'local')<>'cloud'" if has_origin else ""
         proj_col = ", project" if has_proj else ""
         msgs = conn.execute(
             f"SELECT id, from_session, from_handle, topic, to_session, body, urgent"
             f"{proj_col} FROM messages WHERE id>?{not_echo} ORDER BY id LIMIT 300",
-            (cur.get("msg", 0),)
+            (cur.get("msg", 0),),
         ).fetchall()
         pushed_msgs = 0
         for m in msgs:
-            cur["msg"] = m["id"]        # advance regardless — skipped ones don't retry
+            cur["msg"] = m["id"]  # advance regardless — skipped ones don't retry
             mp = message_project(m["topic"], m["project"] if has_proj else None)
             if not uplink_allows(mp, "messages"):
                 continue
-            _api(base, token, "POST", "/api/messages",
-                 {"from_session": m["from_session"], "from_handle": m["from_handle"],
-                  "topic": m["topic"], "to_session": m["to_session"],
-                  "body": m["body"], "urgent": bool(m["urgent"])})
+            _api(
+                base,
+                token,
+                "POST",
+                "/api/messages",
+                {
+                    "from_session": m["from_session"],
+                    "from_handle": m["from_handle"],
+                    "topic": m["topic"],
+                    "to_session": m["to_session"],
+                    "body": m["body"],
+                    "urgent": bool(m["urgent"]),
+                },
+            )
             pushed_msgs += 1
 
         # Locks (uplink>=presence): a coordination signal, not content.
         claims = conn.execute(
             "SELECT resource, holder_session, holder_handle, project, note, expires_at "
-            "FROM claims WHERE expires_at>?", (now,)).fetchall()
+            "FROM claims WHERE expires_at>?",
+            (now,),
+        ).fetchall()
         claims = [c for c in claims if uplink_allows(c["project"], "presence")]
         for c in claims:
-            _api(base, token, "POST", "/api/claims",
-                 {"resource": c["resource"], "holder_session": c["holder_session"],
-                  "holder_handle": c["holder_handle"], "project": c["project"],
-                  "note": c["note"], "ttl_seconds": max(1, c["expires_at"] - now)})
+            _api(
+                base,
+                token,
+                "POST",
+                "/api/claims",
+                {
+                    "resource": c["resource"],
+                    "holder_session": c["holder_session"],
+                    "holder_handle": c["holder_handle"],
+                    "project": c["project"],
+                    "note": c["note"],
+                    "ttl_seconds": max(1, c["expires_at"] - now),
+                },
+            )
 
         # Conversation capture (uplink==content) — only opted-in projects.
         turns_pushed = capture_turns(base, token, cur, agents)
@@ -501,8 +549,14 @@ def sync_once(base: str, token: str) -> dict:
             pass
 
     _save_cursor(cur)
-    return {"ok": True, "agents": len(agents), "messages": pushed_msgs,
-            "claims": len(claims), "cost": cost_pushed, "turns": turns_pushed}
+    return {
+        "ok": True,
+        "agents": len(agents),
+        "messages": pushed_msgs,
+        "claims": len(claims),
+        "cost": cost_pushed,
+        "turns": turns_pushed,
+    }
 
 
 def drain_once(base: str, token: str) -> dict:
@@ -510,7 +564,8 @@ def drain_once(base: str, token: str) -> dict:
     local bus, so a reply typed in the browser reaches the agent it addresses.
 
     Rows land with origin='cloud' and `sync_once` skips those, which is what
-    stops the mirror from bouncing them back up as duplicates."""
+    stops the mirror from bouncing them back up as duplicates.
+    """
     dbp = store.db_path()
     if not dbp.exists():
         return {"ok": False, "error": f"no local bus at {dbp}"}
@@ -518,22 +573,27 @@ def drain_once(base: str, token: str) -> dict:
     msgs = _api(base, token, "GET", f"/api/messages/outbound?since={cur.get('out', 0)}")
     if not isinstance(msgs, list):
         return {"ok": False, "error": str(msgs)[:200]}
-    conn = store.connect()          # opening through store runs the migration
+    conn = store.connect()  # opening through store runs the migration
     n = skipped = 0
     try:
         for m in msgs:
             topic, to_session = m.get("topic"), m.get("to_session")
             cur["out"] = max(cur.get("out", 0), m.get("created") or 0)
             if bool(topic) == bool(to_session):
-                skipped += 1        # exactly one of the two must be set
+                skipped += 1  # exactly one of the two must be set
                 continue
             project = topic[5:] if topic and topic.startswith("proj:") else None
             store.post_message(
                 conn,
                 from_session=m.get("from_session") or "human:cloud",
-                from_handle=m.get("from_handle"), body=m.get("body") or "",
-                topic=topic, to_session=to_session, project=project,
-                urgent=bool(m.get("urgent")), origin="cloud")
+                from_handle=m.get("from_handle"),
+                body=m.get("body") or "",
+                topic=topic,
+                to_session=to_session,
+                project=project,
+                urgent=bool(m.get("urgent")),
+                origin="cloud",
+            )
             n += 1
     finally:
         conn.close()
@@ -554,7 +614,8 @@ def _transcript_path(root, session_id: str, cwd: str | None):
     """Locate a session's transcript file. Claude names the directory after the
     cwd (project_slug), so the precise path is root/<slug>/<sid>.jsonl; if the
     session ran from a different cwd than we recorded, fall back to a recursive
-    glob for the id."""
+    glob for the id.
+    """
     from .transcript import project_slug
 
     if cwd:
@@ -572,7 +633,8 @@ def capture_turns(base: str, token: str, cur: dict, agents, log=None) -> int:
     the number of sessions that shipped at least one new turn.
 
     Offsets live in cur["turns"][session_id]; on a push failure we leave the
-    offset unadvanced so the turns retry next pass rather than being lost."""
+    offset unadvanced so the turns retry next pass rather than being lost.
+    """
     from . import transcript
 
     allow = set(shared_projects())
@@ -594,10 +656,19 @@ def capture_turns(base: str, token: str, cur: dict, agents, log=None) -> int:
         if not turns:
             offsets[sid] = new_off  # nothing new, but keep any rotation reset
             continue
-        resp = _api(base, token, "POST", "/api/turns",
-                    {"session_id": sid, "handle": a["handle"],
-                     "project": a["project_name"], "cwd": a["cwd"],
-                     "turns": turns})
+        resp = _api(
+            base,
+            token,
+            "POST",
+            "/api/turns",
+            {
+                "session_id": sid,
+                "handle": a["handle"],
+                "project": a["project_name"],
+                "cwd": a["cwd"],
+                "turns": turns,
+            },
+        )
         if isinstance(resp, dict) and resp.get("ok") is False:
             if log:
                 log(f"turns push failed for {sid[:8]}: {resp.get('error')}")
@@ -613,8 +684,10 @@ COST_EVERY = 300  # seconds — recompute the (transcript-scanning) cost at most
 def cost_snapshot() -> dict:
     """A compact version of `cabildo cost` for the hosted dashboard: context this
     machine injects into sessions, hook latency per event, and the tokens agents
-    spend calling cabildo tools. Char->token is the same rough /4 as the CLI."""
+    spend calling cabildo tools. Char->token is the same rough /4 as the CLI.
+    """
     import socket
+
     from . import transcript
     from .transcript import CHARS_PER_TOKEN
 
@@ -625,24 +698,41 @@ def cost_snapshot() -> dict:
     injected_tok = (t["chars"] or 0) // CHARS_PER_TOKEN
     return {
         "machine": socket.gethostname(),
-        "injected": {"chars": t["chars"] or 0, "tokens": injected_tok,
-                     "fires": t["fires"] or 0, "sessions": t["sessions"] or 0},
-        "hooks": [{"event": e["event"], "fires": e["fires"],
-                   "injections": e["injections"], "chars": e["chars"],
-                   "avg_ms": round(e["avg_ms"] or 0, 1),
-                   "total_s": round((e["total_ms"] or 0) / 1000, 1)}
-                  for e in m["per_event"]],
+        "injected": {
+            "chars": t["chars"] or 0,
+            "tokens": injected_tok,
+            "fires": t["fires"] or 0,
+            "sessions": t["sessions"] or 0,
+        },
+        "hooks": [
+            {
+                "event": e["event"],
+                "fires": e["fires"],
+                "injections": e["injections"],
+                "chars": e["chars"],
+                "avg_ms": round(e["avg_ms"] or 0, 1),
+                "total_s": round((e["total_ms"] or 0) / 1000, 1),
+            }
+            for e in m["per_event"]
+        ],
         "traffic": {
-            "calls": tr["calls"], "files": tr["files"],
+            "calls": tr["calls"],
+            "files": tr["files"],
             "in_tok": tr["input_chars"] // CHARS_PER_TOKEN,
             "out_tok": tr["output_chars"] // CHARS_PER_TOKEN,
             "tokens_est": tr["tokens_est"],
             "by_tool": sorted(
-                [{"tool": name.replace("mcp__cabildo__", ""), "calls": e["calls"],
-                  "in_tok": e["input_chars"] // CHARS_PER_TOKEN,
-                  "out_tok": e["output_chars"] // CHARS_PER_TOKEN}
-                 for name, e in tr["by_tool"].items()],
-                key=lambda x: -(x["in_tok"] + x["out_tok"]))[:20],
+                [
+                    {
+                        "tool": name.replace("mcp__cabildo__", ""),
+                        "calls": e["calls"],
+                        "in_tok": e["input_chars"] // CHARS_PER_TOKEN,
+                        "out_tok": e["output_chars"] // CHARS_PER_TOKEN,
+                    }
+                    for name, e in tr["by_tool"].items()
+                ],
+                key=lambda x: -(x["in_tok"] + x["out_tok"]),
+            )[:20],
         },
         "total_tok": injected_tok + tr["tokens_est"],
     }

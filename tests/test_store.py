@@ -1,5 +1,6 @@
 """Core data-layer behavior: sessions, topics, messaging, unread + explicit
-read semantics, DMs, and the PID rendezvous lookup."""
+read semantics, DMs, and the PID rendezvous lookup.
+"""
 
 from __future__ import annotations
 
@@ -34,8 +35,9 @@ def test_topic_message_is_unread_for_subscribers_not_sender(conn):
     make_session(conn, "recv", project_name="alpha")  # same project -> same topic
     topic = store.project_topic("alpha")
 
-    store.post_message(conn, from_session="sender", from_handle="snd",
-                       body="hello team", topic=topic)
+    store.post_message(
+        conn, from_session="sender", from_handle="snd", body="hello team", topic=topic
+    )
 
     # recipient sees it unread; sender does not see own message
     assert len(store.inbox(conn, "recv", unread_only=True)) == 1
@@ -65,8 +67,7 @@ def test_direct_message_only_reaches_target(conn):
     make_session(conn, "a", handle="alice")
     make_session(conn, "b", handle="bob")
     make_session(conn, "c", handle="carol")
-    store.post_message(conn, from_session="a", from_handle="alice",
-                       body="psst bob", to_session="b")
+    store.post_message(conn, from_session="a", from_handle="alice", body="psst bob", to_session="b")
 
     assert store.unread_summary(conn, "b")["count"] == 1
     assert store.unread_summary(conn, "c")["count"] == 0
@@ -95,8 +96,9 @@ def test_post_message_requires_exactly_one_destination(conn):
     with pytest.raises(ValueError):
         store.post_message(conn, from_session="a", from_handle="a", body="x")
     with pytest.raises(ValueError):
-        store.post_message(conn, from_session="a", from_handle="a", body="x",
-                           topic="t", to_session="a")
+        store.post_message(
+            conn, from_session="a", from_handle="a", body="x", topic="t", to_session="a"
+        )
 
 
 def test_active_sessions_scoped_by_project_and_excludes_self(conn):
@@ -127,6 +129,7 @@ def test_display_name_prefers_handle(conn):
     row = store.get_session(conn, "abcd1234ef")
     # falsy handle -> deterministic robot codename
     from cabildo import names
+
     assert store.display_name(row) == names.robot_name("abcd1234ef")
 
 
@@ -157,5 +160,5 @@ def test_robot_name_resolves_as_address(conn):
     name = names.robot_name(sid)
     assert store.session_for_robot_name(conn, name) == sid
     assert store.session_for_robot_name(conn, name.lower()) == sid  # case-insensitive
-    assert store.session_for_robot_name(conn, "@" + name) == sid    # @-prefixed
+    assert store.session_for_robot_name(conn, "@" + name) == sid  # @-prefixed
     assert store.session_for_robot_name(conn, "NOPE-00") is None

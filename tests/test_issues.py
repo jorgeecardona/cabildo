@@ -31,7 +31,7 @@ def write(folder, name, front, body="\nsomething.\n"):
     return path
 
 
-@pytest.fixture()
+@pytest.fixture
 def folder(tmp_path):
     d = tmp_path / "docs" / "issues"
     d.mkdir(parents=True)
@@ -43,7 +43,10 @@ def folder(tmp_path):
 # Parsing and round-trip
 # --------------------------------------------------------------------------- #
 def test_parses_core_and_keeps_unknown_fields(folder):
-    p = write(folder, "03-08-2026-a-thing.md", """
+    p = write(
+        folder,
+        "03-08-2026-a-thing.md",
+        """
 title: A thing
 status: open
 area: ci
@@ -51,7 +54,8 @@ owner: null
 filed: 2026-08-03
 scope: S
 register: G12
-""")
+""",
+    )
     issue = issues.load(p, issues.load_config(folder))
     assert issue.title == "A thing"
     assert issue.status is issues.Status.OPEN
@@ -66,7 +70,8 @@ register: G12
 
 def test_a_write_changes_only_what_you_changed(folder):
     """render(parse(text)) == text. Otherwise a status change is a one-line diff plus a silently
-    eaten blank line, and every save produces noise nobody asked for."""
+    eaten blank line, and every save produces noise nobody asked for.
+    """
     path = folder / "03-08-2026-a.md"
     original = (
         "---\ntitle: A\nstatus: open\narea: ci\nowner: null\nfiled: 2026-08-03\nscope: S\n---\n"
@@ -83,9 +88,13 @@ def test_a_write_changes_only_what_you_changed(folder):
 
 
 def test_parses_block_lists(folder):
-    """crm's `tags:` is a YAML block list. A parser that only does flat scalars declares 41 real
-    issues malformed, which is how a tool gets abandoned on day one."""
-    p = write(folder, "03-08-2026-tagged.md", """
+    """Crm's `tags:` is a YAML block list. A parser that only does flat scalars declares 41 real
+    issues malformed, which is how a tool gets abandoned on day one.
+    """
+    p = write(
+        folder,
+        "03-08-2026-tagged.md",
+        """
 title: Tagged
 status: open
 area: ci
@@ -94,7 +103,8 @@ scope: S
 tags:
   - roast-detect
   - marks
-""")
+""",
+    )
     issue = issues.load(p, issues.load_config(folder))
     assert issue.extra["tags"] == ("roast-detect", "marks")
     issues.save(issue)
@@ -102,12 +112,16 @@ tags:
 
 
 def test_filed_falls_back_to_the_filename(folder):
-    p = write(folder, "03-08-2026-dated.md", """
+    p = write(
+        folder,
+        "03-08-2026-dated.md",
+        """
 title: Dated
 status: open
 area: ci
 scope: S
-""")
+""",
+    )
     assert issues.load(p, issues.load_config(folder)).filed == "2026-08-03"
 
 
@@ -124,10 +138,16 @@ def test_malformed_file_does_not_hide_the_rest(folder):
 # --------------------------------------------------------------------------- #
 def test_board_separates_ready_from_blocked(folder):
     write(folder, "03-08-2026-first.md", "title: First\nstatus: open\narea: ci\nscope: S")
-    write(folder, "03-08-2026-second.md",
-          "title: Second\nstatus: open\narea: ci\nscope: S\nblocked_by:\n  - first")
-    write(folder, "03-08-2026-taken.md",
-          "title: Taken\nstatus: in-progress\narea: ci\nscope: S\nowner: qa")
+    write(
+        folder,
+        "03-08-2026-second.md",
+        "title: Second\nstatus: open\narea: ci\nscope: S\nblocked_by:\n  - first",
+    )
+    write(
+        folder,
+        "03-08-2026-taken.md",
+        "title: Taken\nstatus: in-progress\narea: ci\nscope: S\nowner: qa",
+    )
 
     b = issues.board(folder)
     assert [i.slug for i in b.ready] == ["first"]
@@ -138,8 +158,11 @@ def test_board_separates_ready_from_blocked(folder):
 
 def test_closing_a_blocker_makes_the_next_one_ready(folder):
     write(folder, "03-08-2026-first.md", "title: First\nstatus: open\narea: ci\nscope: S")
-    write(folder, "03-08-2026-second.md",
-          "title: Second\nstatus: open\narea: ci\nscope: S\nblocked_by:\n  - first")
+    write(
+        folder,
+        "03-08-2026-second.md",
+        "title: Second\nstatus: open\narea: ci\nscope: S\nblocked_by:\n  - first",
+    )
     assert [i.slug for i in issues.board(folder).ready] == ["first"]
 
     issues.close(folder, "first", fixed_in="abc1234")
@@ -149,10 +172,10 @@ def test_closing_a_blocker_makes_the_next_one_ready(folder):
 
 
 def test_mine_is_separated_from_everyone_elses(folder):
-    write(folder, "03-08-2026-a.md",
-          "title: A\nstatus: in-progress\narea: ci\nscope: S\nowner: me")
-    write(folder, "03-08-2026-b.md",
-          "title: B\nstatus: in-progress\narea: ci\nscope: S\nowner: you")
+    write(folder, "03-08-2026-a.md", "title: A\nstatus: in-progress\narea: ci\nscope: S\nowner: me")
+    write(
+        folder, "03-08-2026-b.md", "title: B\nstatus: in-progress\narea: ci\nscope: S\nowner: you"
+    )
     b = issues.board(folder, owner="me")
     assert [i.slug for i in b.mine] == ["a"]
     assert [w.issue.slug for w in b.waiting] == ["b"]
@@ -172,8 +195,7 @@ def test_claim_sets_owner_and_status_and_refuses_to_steal(folder):
 
 
 def test_release_puts_it_back_on_the_board(folder):
-    write(folder, "03-08-2026-a.md",
-          "title: A\nstatus: in-progress\narea: ci\nscope: S\nowner: qa")
+    write(folder, "03-08-2026-a.md", "title: A\nstatus: in-progress\narea: ci\nscope: S\nowner: qa")
     got = issues.release(folder, "a")
     assert got.owner is None and got.status is issues.Status.OPEN
     assert [i.slug for i in issues.board(folder).ready] == ["a"]
@@ -191,8 +213,7 @@ def test_close_keeps_the_file_and_demands_a_sha(folder):
 
 
 def test_update_merges_extra_rather_than_replacing_it(folder):
-    write(folder, "03-08-2026-a.md",
-          "title: A\nstatus: open\narea: ci\nscope: S\nregister: G1")
+    write(folder, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\nscope: S\nregister: G1")
     got = issues.update(folder, "a", extra={"scope": "M"})
     assert got.extra["scope"] == "M"
     assert got.extra["register"] == "G1"
@@ -213,21 +234,32 @@ def test_a_list_field_says_it_wants_a_list(folder):
 
     The message has to name the actual problem, because no separator was ever going to work.
     """
-    write(folder, "03-08-2026-a.md",
-          "title: A\nstatus: open\narea: ci\nscope: S\ntags: one, two, three")
+    write(
+        folder,
+        "03-08-2026-a.md",
+        "title: A\nstatus: open\narea: ci\nscope: S\ntags: one, two, three",
+    )
     messages = " ".join(p.message for p in issues.check(folder))
     assert "`tags` is a list — pass a list of values" in messages
-    assert "one, two, three" in messages       # quote what they sent, so it is recognisable
+    assert "one, two, three" in messages  # quote what they sent, so it is recognisable
 
 
 def test_mcp_fields_carry_lists_end_to_end(folder):
     """The fix at the layer that broke: MCP hands us JSON lists; the store keeps tuples."""
     from cabildo import issues_mcp
 
-    assert issues_mcp._fields({"tags": ["a", "b"], "scope": "S"}) == {"tags": ("a", "b"), "scope": "S"}
-    path = issues.file_issue(folder, title="Tagged Thing", area="ci", body="x",
-                             extra=issues_mcp._fields({"scope": "S", "tags": ["one", "two"]}),
-                             today="2026-08-03")
+    assert issues_mcp._fields({"tags": ["a", "b"], "scope": "S"}) == {
+        "tags": ("a", "b"),
+        "scope": "S",
+    }
+    path = issues.file_issue(
+        folder,
+        title="Tagged Thing",
+        area="ci",
+        body="x",
+        extra=issues_mcp._fields({"scope": "S", "tags": ["one", "two"]}),
+        today="2026-08-03",
+    )
     assert "tags:\n  - one\n  - two" in path.read_text()
     assert issues.check(folder) == []
 
@@ -241,6 +273,7 @@ def test_mcp_fields_carry_lists_end_to_end(folder):
 # --------------------------------------------------------------------------- #
 def _tools():
     from cabildo import issues_mcp
+
     return list(issues_mcp.mcp._tool_manager._tools.values())
 
 
@@ -266,7 +299,7 @@ def test_the_tool_schemas_carry_no_generated_titles():
         if isinstance(node, dict):
             found = ["title"] if "title" in node and not isinstance(node["title"], dict) else []
             for key, value in node.items():
-                if key == "properties":          # keys here are parameter names, not keywords
+                if key == "properties":  # keys here are parameter names, not keywords
                     for sub in value.values():
                         found += titles(sub)
                 else:
@@ -283,7 +316,8 @@ def test_the_tool_schemas_carry_no_generated_titles():
 
 def test_show_issue_bounds_a_runaway_file(folder, monkeypatch):
     """One oversized issue should not be able to spend a session's context. The cap sits well above
-    p90 of the real folders, so a normal issue still comes back whole."""
+    p90 of the real folders, so a normal issue still comes back whole.
+    """
     from cabildo import issues_mcp
 
     monkeypatch.setattr(issues_mcp, "_folder", lambda: folder)
@@ -304,8 +338,9 @@ def test_file_issue_rejects_an_undeclared_area(folder):
 def test_file_issue_demands_the_folders_required_fields(folder):
     with pytest.raises(issues.IssueFormatError, match="missing required `scope`"):
         issues.file_issue(folder, title="T", area="ci", body="x")
-    path = issues.file_issue(folder, title="A New One", area="ci", body="x",
-                             extra={"scope": "S"}, today="2026-08-03")
+    path = issues.file_issue(
+        folder, title="A New One", area="ci", body="x", extra={"scope": "S"}, today="2026-08-03"
+    )
     assert path.name == "03-08-2026-a-new-one.md"
 
 
@@ -317,15 +352,18 @@ def test_check_is_clean_on_a_well_formed_folder(folder):
     assert issues.check(folder) == []
 
 
-@pytest.mark.parametrize("front,expected", [
-    ("title: A\nstatus: done\narea: ci\nscope: S", "no `fixed_in`"),
-    ("title: A\nstatus: in-progress\narea: ci\nscope: S", "in-progress with no owner"),
-    ("title: A\nstatus: blocked\narea: ci\nscope: S", "neither an owner nor a `blocked_by`"),
-    ("title: A\nstatus: open\narea: nope\nscope: S", "unknown area"),
-    ("title: A\nstatus: open\narea: ci", "missing required `scope`"),
-    ("title: A\nstatus: open\narea: ci\nscope: XL", "unknown scope"),
-    ("title: A\nstatus: open\narea: ci\nscope: S\nblocked_by:\n  - ghost", "not an issue here"),
-])
+@pytest.mark.parametrize(
+    "front,expected",
+    [
+        ("title: A\nstatus: done\narea: ci\nscope: S", "no `fixed_in`"),
+        ("title: A\nstatus: in-progress\narea: ci\nscope: S", "in-progress with no owner"),
+        ("title: A\nstatus: blocked\narea: ci\nscope: S", "neither an owner nor a `blocked_by`"),
+        ("title: A\nstatus: open\narea: nope\nscope: S", "unknown area"),
+        ("title: A\nstatus: open\narea: ci", "missing required `scope`"),
+        ("title: A\nstatus: open\narea: ci\nscope: XL", "unknown scope"),
+        ("title: A\nstatus: open\narea: ci\nscope: S\nblocked_by:\n  - ghost", "not an issue here"),
+    ],
+)
 def test_check_catches(folder, front, expected):
     write(folder, "03-08-2026-a.md", front)
     assert any(expected in p.message for p in issues.check(folder))
@@ -333,19 +371,26 @@ def test_check_catches(folder, front, expected):
 
 def test_check_catches_a_blocked_by_cycle(folder):
     """A loop means nothing in it is ever ready, and the board goes quietly empty rather than
-    loudly wrong."""
-    write(folder, "03-08-2026-a.md",
-          "title: A\nstatus: open\narea: ci\nscope: S\nblocked_by:\n  - b")
-    write(folder, "03-08-2026-b.md",
-          "title: B\nstatus: open\narea: ci\nscope: S\nblocked_by:\n  - a")
+    loudly wrong.
+    """
+    write(
+        folder, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\nscope: S\nblocked_by:\n  - b"
+    )
+    write(
+        folder, "03-08-2026-b.md", "title: B\nstatus: open\narea: ci\nscope: S\nblocked_by:\n  - a"
+    )
     problems = [p for p in issues.check(folder) if "cycle" in p.message]
     assert len(problems) == 1
     assert issues.board(folder).ready == ()
 
 
 def test_check_catches_a_bad_filename_and_a_broken_link(folder):
-    write(folder, "nonsense.md", "title: A\nstatus: open\narea: ci\nscope: S",
-          body="\nsee [that](./gone.md)\n")
+    write(
+        folder,
+        "nonsense.md",
+        "title: A\nstatus: open\narea: ci\nscope: S",
+        body="\nsee [that](./gone.md)\n",
+    )
     messages = " ".join(p.message for p in issues.check(folder))
     assert "filename must be" in messages
     assert "broken relative link" in messages
@@ -376,34 +421,33 @@ def test_index_can_carry_done_work_and_tag_groups(tmp_path):
     d = tmp_path / "docs" / "issues"
     d.mkdir(parents=True)
     (d / issues.CONFIG_NAME).write_text(
-        'areas = ["ci"]\nindex_done = true\nindex_group_by = "tags"\n\n'
-        "[fields.tags]\nlist = true\n"
+        'areas = ["ci"]\nindex_done = true\nindex_group_by = "tags"\n\n[fields.tags]\nlist = true\n'
     )
     write(d, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\ntags:\n  - marks\n  - solo")
     write(d, "03-08-2026-b.md", "title: B\nstatus: open\narea: ci\ntags:\n  - marks")
     write(d, "03-08-2026-c.md", "title: C\nstatus: done\narea: ci\nfixed_in: abc1234")
     table = issues.render_index(d)
 
-    assert "**`marks`** (2)" in table          # shared tags group...
-    assert "**`solo`**" not in table           # ...a group of one is the flat table again
+    assert "**`marks`** (2)" in table  # shared tags group...
+    assert "**`solo`**" not in table  # ...a group of one is the flat table again
     assert "Single-use: `solo`." in table
-    assert "| [C](03-08-2026-c.md) | ci | `abc1234` |" in table   # done, with what fixed it
+    assert "| [C](03-08-2026-c.md) | ci | `abc1234` |" in table  # done, with what fixed it
     assert "1 done" in table
 
 
 def test_index_shows_open_work_and_counts_the_done(folder):
     write(folder, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\nscope: S")
-    write(folder, "03-08-2026-b.md",
-          "title: B\nstatus: done\narea: ci\nscope: S\nfixed_in: abc123")
+    write(folder, "03-08-2026-b.md", "title: B\nstatus: done\narea: ci\nscope: S\nfixed_in: abc123")
     table = issues.render_index(folder)
     assert "[A](03-08-2026-a.md)" in table
-    assert "[B](" not in table          # done work leaves the board...
-    assert "1 done" in table            # ...but is still counted
+    assert "[B](" not in table  # done work leaves the board...
+    assert "1 done" in table  # ...but is still counted
 
 
 def test_crossref_demands_the_link_in_both_directions(tmp_path):
     """One direction is not enough: a register that names a gap but does not point at the task is
-    how the same gap gets found four times and fixed zero."""
+    how the same gap gets found four times and fixed zero.
+    """
     d = tmp_path / "docs" / "issues"
     d.mkdir(parents=True)
     (d / issues.CONFIG_NAME).write_text(
@@ -444,8 +488,9 @@ def test_crossref_at_a_missing_path_is_the_configs_problem(tmp_path):
     )
     write(d, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\nregister: G1")
     problems = issues.check(d)
-    assert any("does not exist" in p.message and p.path.name == issues.CONFIG_NAME
-               for p in problems)
+    assert any(
+        "does not exist" in p.message and p.path.name == issues.CONFIG_NAME for p in problems
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -463,7 +508,7 @@ values = ["issue", "handoff"]
 """
 
 
-@pytest.fixture()
+@pytest.fixture
 def ordered(tmp_path):
     d = tmp_path / "docs" / "issues"
     d.mkdir(parents=True)
@@ -479,20 +524,20 @@ def test_field_order_is_enforced(ordered):
 
 
 def test_strict_fields_rejects_a_key_the_folder_never_declared(ordered):
-    write(ordered, "03-08-2026-a.md",
-          "title: A\ntype: issue\narea: ci\nstatus: open\nwhatever: hm")
+    write(ordered, "03-08-2026-a.md", "title: A\ntype: issue\narea: ci\nstatus: open\nwhatever: hm")
     assert any("unknown field 'whatever'" in p.message for p in issues.check(ordered))
 
 
 def test_writes_stay_inside_the_declared_schema(ordered):
     """The blocker that stopped crm adopting: a tool that adds `filed:` on every save makes every
-    write fail a strict check, and the agent has no idea why."""
+    write fail a strict check, and the agent has no idea why.
+    """
     write(ordered, "03-08-2026-a.md", "title: A\ntype: issue\narea: ci\nstatus: open")
     issues.claim(ordered, "a", owner="qa")
     text = (ordered / "03-08-2026-a.md").read_text()
-    assert "filed:" not in text          # not in field_order → never written
+    assert "filed:" not in text  # not in field_order → never written
     assert "owner: qa" in text
-    assert issues.check(ordered) == []   # ...and the folder is still clean afterwards
+    assert issues.check(ordered) == []  # ...and the folder is still clean afterwards
 
     issues.close(ordered, "a", fixed_in="deadbee")
     assert issues.check(ordered) == []
@@ -512,22 +557,27 @@ def test_pattern_catches_a_tag_that_will_not_group(tmp_path):
     (d / issues.CONFIG_NAME).write_text(
         'areas = ["ci"]\nindex = false\n\n[fields.tags]\nlist = true\npattern = "kebab"\n'
     )
-    write(d, "03-08-2026-a.md",
-          "title: A\nstatus: open\narea: ci\ntags:\n  - roast-detect\n  - Roast Detect")
+    write(
+        d,
+        "03-08-2026-a.md",
+        "title: A\nstatus: open\narea: ci\ntags:\n  - roast-detect\n  - Roast Detect",
+    )
     problems = issues.check(d)
     assert any("'Roast Detect' does not match kebab" in p.message for p in problems)
     assert not any("roast-detect'" in p.message for p in problems)
 
 
 def test_fixed_in_is_forbidden_on_an_unfinished_issue(folder):
-    write(folder, "03-08-2026-a.md",
-          "title: A\nstatus: open\narea: ci\nscope: S\nfixed_in: abc1234")
+    write(
+        folder, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\nscope: S\nfixed_in: abc1234"
+    )
     assert any("on an issue that is `open`" in p.message for p in issues.check(folder))
 
 
 def test_fixed_in_must_be_a_real_commit_on_the_named_branch(tmp_path):
     """A worktree sha resolves until that worktree is pruned, and then the register points at
-    nothing — while still looking like evidence."""
+    nothing — while still looking like evidence.
+    """
     repo = tmp_path / "repo"
     d = repo / "docs" / "issues"
     d.mkdir(parents=True)
@@ -536,17 +586,22 @@ def test_fixed_in_must_be_a_real_commit_on_the_named_branch(tmp_path):
     )
     run = lambda *a: subprocess.run(a, cwd=repo, capture_output=True, check=True)
     run("git", "init", "-q", "-b", "main")
-    run("git", "config", "user.email", "t@t"); run("git", "config", "user.name", "t")
-    run("git", "add", "-A"); run("git", "commit", "-qm", "one")
-    landed = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo,
-                            capture_output=True, text=True).stdout.strip()
+    run("git", "config", "user.email", "t@t")
+    run("git", "config", "user.name", "t")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "one")
+    landed = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"], cwd=repo, capture_output=True, text=True
+    ).stdout.strip()
 
     # a commit on a side branch — real, resolvable, and NOT on main
     run("git", "checkout", "-qb", "side")
     (repo / "x.txt").write_text("x")
-    run("git", "add", "-A"); run("git", "commit", "-qm", "two")
-    stray = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo,
-                           capture_output=True, text=True).stdout.strip()
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "two")
+    stray = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"], cwd=repo, capture_output=True, text=True
+    ).stdout.strip()
     run("git", "checkout", "-q", "main")
 
     write(d, "03-08-2026-a.md", f"title: A\nstatus: done\narea: ci\nfixed_in: {stray}")
@@ -573,18 +628,30 @@ values = ["issue", "handoff"]
 require = ["Acceptance criteria", "Tests?\\\\b|The test"]
 exempt = "type=handoff"
 """)
-    write(d, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\ntype: issue",
-          body="\njust prose.\n")
+    write(
+        d,
+        "03-08-2026-a.md",
+        "title: A\nstatus: open\narea: ci\ntype: issue",
+        body="\njust prose.\n",
+    )
     msgs = " ".join(p.message for p in issues.check(d))
     assert "Acceptance criteria" in msgs and "The test" in msgs
 
     # a hand-off carries no acceptance criteria of its own — it points at the issues that do
-    write(d, "03-08-2026-b.md", "title: B\nstatus: open\narea: ci\ntype: handoff",
-          body="\nresume order.\n")
+    write(
+        d,
+        "03-08-2026-b.md",
+        "title: B\nstatus: open\narea: ci\ntype: handoff",
+        body="\nresume order.\n",
+    )
     assert not any(p.path.name == "03-08-2026-b.md" for p in issues.check(d))
 
-    write(d, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci\ntype: issue",
-          body="\n## Acceptance criteria\n\nx\n\n## Test\n\ny\n")
+    write(
+        d,
+        "03-08-2026-a.md",
+        "title: A\nstatus: open\narea: ci\ntype: issue",
+        body="\n## Acceptance criteria\n\nx\n\n## Test\n\ny\n",
+    )
     assert issues.check(d) == []
 
 
@@ -592,23 +659,26 @@ def test_a_cited_sha_on_no_branch_is_flagged(tmp_path):
     repo = tmp_path / "repo"
     d = repo / "docs" / "issues"
     d.mkdir(parents=True)
-    (d / issues.CONFIG_NAME).write_text(
-        'areas = ["ci"]\nindex = false\ncheck_body_shas = true\n'
-    )
+    (d / issues.CONFIG_NAME).write_text('areas = ["ci"]\nindex = false\ncheck_body_shas = true\n')
     run = lambda *a: subprocess.run(a, cwd=repo, capture_output=True, check=True)
     run("git", "init", "-q", "-b", "main")
-    run("git", "config", "user.email", "t@t"); run("git", "config", "user.name", "t")
-    run("git", "add", "-A"); run("git", "commit", "-qm", "one")
+    run("git", "config", "user.email", "t@t")
+    run("git", "config", "user.name", "t")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "one")
     run("git", "checkout", "-qb", "doomed")
     (repo / "x.txt").write_text("x")
-    run("git", "add", "-A"); run("git", "commit", "-qm", "two")
-    orphan = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo,
-                            capture_output=True, text=True).stdout.strip()[:8]
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "two")
+    orphan = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
+    ).stdout.strip()[:8]
     run("git", "checkout", "-q", "main")
 
-    write(d, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci",
-          body=f"\nproved by `{orphan}`.\n")
-    assert issues.check(d) == []              # still on `doomed`, so still reachable
+    write(
+        d, "03-08-2026-a.md", "title: A\nstatus: open\narea: ci", body=f"\nproved by `{orphan}`.\n"
+    )
+    assert issues.check(d) == []  # still on `doomed`, so still reachable
 
     run("git", "branch", "-qD", "doomed")
     assert any("on no branch" in p.message for p in issues.check(d))
@@ -621,8 +691,12 @@ def test_git_checks_stay_silent_outside_a_repo(tmp_path):
     (d / issues.CONFIG_NAME).write_text(
         'areas = ["ci"]\nindex = false\nfixed_in_on_branch = "main"\ncheck_body_shas = true\n'
     )
-    write(d, "03-08-2026-a.md", "title: A\nstatus: done\narea: ci\nfixed_in: abc1234",
-          body="\ncites `deadbeef`.\n")
+    write(
+        d,
+        "03-08-2026-a.md",
+        "title: A\nstatus: done\narea: ci\nfixed_in: abc1234",
+        body="\ncites `deadbeef`.\n",
+    )
     assert issues.check(d) == []
 
 
@@ -631,7 +705,8 @@ def test_git_checks_stay_silent_outside_a_repo(tmp_path):
 # --------------------------------------------------------------------------- #
 def test_init_infers_a_config_that_makes_the_folder_valid(tmp_path):
     """Adoption must be non-destructive: a config written from first principles would declare
-    every issue that predates it malformed."""
+    every issue that predates it malformed.
+    """
     d = tmp_path / "docs" / "issues"
     d.mkdir(parents=True)
     write(d, "03-08-2026-a.md", "title: A\nstatus: open\narea: roast-live\npriority: P1")
@@ -654,10 +729,16 @@ def test_scaffold_starts_a_usable_register_from_nothing(tmp_path):
     config = issues.load_config(d)
     assert config.areas == ("asr", "cli")
     assert config.index is True
-    assert issues.check(d) == []          # an empty register is a valid register
+    assert issues.check(d) == []  # an empty register is a valid register
 
-    path = issues.file_issue(d, title="A Thing", area="asr", body="x",
-                             extra={"scope": "S", "verify": "test"}, today="2026-08-03")
+    path = issues.file_issue(
+        d,
+        title="A Thing",
+        area="asr",
+        body="x",
+        extra={"scope": "S", "verify": "test"},
+        today="2026-08-03",
+    )
     assert path.name == "03-08-2026-a-thing.md"
     issues.reindex(d)
     assert "[A Thing](03-08-2026-a-thing.md)" in (d / issues.README_NAME).read_text()
@@ -689,7 +770,8 @@ def test_find_folder_searches_upward_but_stops_at_the_repo(tmp_path):
 
 def test_find_folder_never_adopts_an_ancestor_repos_register(tmp_path):
     """One real project sits inside a journal repo that has its own everything. Filing this repo's
-    work into that queue would be worse than finding nothing."""
+    work into that queue would be worse than finding nothing.
+    """
     outer = tmp_path / "journal"
     (outer / ".git").mkdir(parents=True)
     (outer / "docs" / "issues").mkdir(parents=True)
@@ -700,7 +782,8 @@ def test_find_folder_never_adopts_an_ancestor_repos_register(tmp_path):
 
 def test_find_folder_accepts_the_other_conventional_layouts(tmp_path):
     """A small library often has no docs/ at all, and one project keeps docs/ out of git wholesale.
-    Neither is a reason to be unable to keep a register."""
+    Neither is a reason to be unable to keep a register.
+    """
     for n, parts in enumerate((("issues",), (".issues",))):
         repo = tmp_path / f"repo{n}"
         (repo / ".git").mkdir(parents=True)
@@ -753,8 +836,9 @@ def test_the_written_command_is_one_the_consumer_can_actually_run(tmp_path, monk
     """
     monkeypatch.setattr(mcp_config, "_on_login_path", lambda script: False)
     entry = mcp_config.issues_entry()
-    assert pathlib.Path(entry["command"]).is_absolute(), \
+    assert pathlib.Path(entry["command"]).is_absolute(), (
         "a name the consumer cannot resolve must never be written"
+    )
 
     monkeypatch.setattr(mcp_config, "_on_login_path", lambda script: True)
     assert mcp_config.issues_entry()["command"] == "cabildo-issues-mcp"
@@ -779,7 +863,8 @@ def test_apply_is_idempotent_and_remove_leaves_other_servers_alone(tmp_path):
 # --------------------------------------------------------------------------- #
 def test_the_session_cue_is_silent_without_a_register(tmp_path):
     """Most projects have no register. A banner line that says "0 issues" in all of them is the
-    kind of noise agents learn to skip, which costs the projects that DO have one."""
+    kind of noise agents learn to skip, which costs the projects that DO have one.
+    """
     from cabildo import notify
 
     (tmp_path / ".git").mkdir()
@@ -790,7 +875,8 @@ def test_the_session_cue_is_silent_without_a_register(tmp_path):
 def test_the_session_cue_names_the_top_ranked_item(tmp_path):
     """A count is an invitation; a title is a fact. `board` was described as "start here" and was
     still the least-used tool, because a tool description is read once you are already choosing a
-    tool. This lands before that."""
+    tool. This lands before that.
+    """
     from cabildo import notify
 
     d = tmp_path / "docs" / "issues"
@@ -804,7 +890,7 @@ def test_the_session_cue_names_the_top_ranked_item(tmp_path):
     line = notify.register_line(str(tmp_path))
     assert line is not None
     assert "2 ready" in line
-    assert "next: [P0] Urgent thing — urgent" in line     # ranked, not just first by date
+    assert "next: [P0] Urgent thing — urgent" in line  # ranked, not just first by date
     assert "`board`" in line and "`file_issue`" in line
 
 

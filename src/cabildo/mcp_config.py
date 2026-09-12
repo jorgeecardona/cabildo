@@ -66,18 +66,23 @@ def _on_login_path(script: str) -> bool:
     path, which always works; a false positive is what breaks a folder.
     """
     try:
-        return subprocess.run(
-            ["bash", "-lc", f"command -v {shlex.quote(script)}"],
-            capture_output=True, timeout=10,
-        ).returncode == 0
+        return (
+            subprocess.run(
+                ["bash", "-lc", f"command -v {shlex.quote(script)}"],
+                capture_output=True,
+                timeout=10,
+            ).returncode
+            == 0
+        )
     except (OSError, subprocess.SubprocessError):
-        return bool(shutil.which(script))      # no bash to ask — fall back to the weaker test
+        return bool(shutil.which(script))  # no bash to ask — fall back to the weaker test
 
 
 def _command(script: str, module: str) -> list[str]:
     """How to launch one of our stdio servers: portably when that genuinely works, absolutely when
     it does not. A path that only resolves on this machine is a cost to teammates; a name that
-    resolves nowhere is a cost to everyone, including you."""
+    resolves nowhere is a cost to everyone, including you.
+    """
     if _on_login_path(script):
         return [script]
     sibling = Path(sys.executable).parent / script
@@ -107,7 +112,8 @@ def server_entry(project: str | None = None) -> dict:
 
 def issues_entry() -> dict:
     """The `.mcp.json` value for the per-project issue register. No project env: this server reads
-    the folder it is launched in, and has nothing to say about any other."""
+    the folder it is launched in, and has nothing to say about any other.
+    """
     cmd = issues_command()
     return {"command": cmd[0], "args": cmd[1:]}
 
@@ -123,7 +129,8 @@ def config_path(root: str | os.PathLike) -> Path:
 
 def load(root: str | os.PathLike) -> dict:
     """Existing config, or {}. A malformed file raises — silently overwriting
-    something you hand-edited would be worse than the error."""
+    something you hand-edited would be worse than the error.
+    """
     p = config_path(root)
     if not p.exists():
         return {}
@@ -174,7 +181,8 @@ def apply(
 
 def remove(root: str | os.PathLike) -> tuple[Path, str]:
     """Take our servers back out. Deletes the file only if we'd be leaving behind
-    an empty shell we created — a .mcp.json holding someone else's servers stays."""
+    an empty shell we created — a .mcp.json holding someone else's servers stays.
+    """
     p = config_path(root)
     if not p.exists():
         return p, "absent"
@@ -191,9 +199,7 @@ def remove(root: str | os.PathLike) -> tuple[Path, str]:
     return p, "removed"
 
 
-def preview(
-    root: str | os.PathLike, project: str | None = None, issues: bool | None = None
-) -> str:
+def preview(root: str | os.PathLike, project: str | None = None, issues: bool | None = None) -> str:
     """What `apply` would write, as text — for `--print`."""
     data = load(root)
     servers = data.setdefault("mcpServers", {})

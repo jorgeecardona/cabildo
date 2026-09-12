@@ -49,9 +49,7 @@ def _me(conn) -> str:
         cwd = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
         root, name = git_project(cwd)
         sid = f"pid-{pid or os.getpid()}"
-        store.register_session(
-            conn, sid, cwd=cwd, project=root, project_name=name, claude_pid=pid
-        )
+        store.register_session(conn, sid, cwd=cwd, project=root, project_name=name, claude_pid=pid)
     store.touch(conn, sid)
     return sid
 
@@ -96,7 +94,8 @@ def _visible_projects(conn, sid: str) -> set[str] | None:
 def _proj_topic_name(topic: str | None) -> str | None:
     """If `topic` is a per-project channel (proj:<name>), return <name> lowered,
     else None. The proj:<name> channel is a project's private space, so it's the
-    unit Dial A gates on."""
+    unit Dial A gates on.
+    """
     t = (topic or "").lstrip("#").strip()
     if t.startswith("proj:"):
         return t[len("proj:") :].strip().lower()
@@ -109,7 +108,8 @@ def _proj_topic_name(topic: str | None) -> str | None:
 @mcp.tool()
 def whoami() -> dict[str, Any]:
     """Who am I in the cabildo bus: my session id, handle, project, the
-    channels I'm subscribed to, and my unread count."""
+    channels I'm subscribed to, and my unread count.
+    """
     with store.connect() as conn:
         sid = _me(conn)
         row = store.get_session(conn, sid)
@@ -125,7 +125,8 @@ def whoami() -> dict[str, Any]:
 @mcp.tool()
 def set_handle(handle: str) -> dict[str, Any]:
     """Set a friendly handle for this session (e.g. 'backend-refactor') so other
-    agents can address and recognize you instead of a raw session id."""
+    agents can address and recognize you instead of a raw session id.
+    """
     with store.connect() as conn:
         sid = _me(conn)
         store.set_handle(conn, sid, handle)
@@ -137,17 +138,15 @@ def list_agents(all_projects: bool = False) -> list[dict[str, Any]]:
     """List other active agents. By default only agents on the SAME project
     (git repo) as you; set all_projects=True to also see agents on projects
     LINKED to yours. Projects are isolated on the bus, so you never see a
-    project you haven't linked (`cabildo project <yours> --link <other>`)."""
+    project you haven't linked (`cabildo project <yours> --link <other>`).
+    """
     with store.connect() as conn:
         sid = _me(conn)
         visible = _visible_projects(conn, sid)
         project = None if all_projects else _project(conn, sid)
         rows = store.active_sessions(conn, project=project, exclude=sid)
         if visible is not None:
-            rows = [
-                r for r in rows
-                if (r["project_name"] or "").strip().lower() in visible
-            ]
+            rows = [r for r in rows if (r["project_name"] or "").strip().lower() in visible]
         return [
             {
                 "session_id": r["session_id"],
@@ -174,22 +173,24 @@ def list_topics() -> list[dict[str, Any]]:
 @mcp.tool()
 def join_topic(topic: str) -> dict[str, Any]:
     """Subscribe to a topic/channel so you receive its messages. Creates it if
-    it doesn't exist. Use topics to organize coordination by idea/thread."""
+    it doesn't exist. Use topics to organize coordination by idea/thread.
+    """
     topic = topic.lstrip("#")
     with store.connect() as conn:
         sid = _me(conn)
         visible = _visible_projects(conn, sid)
         pj = _proj_topic_name(topic)
         if visible is not None and pj is not None and pj not in visible:
-            return {"ok": False,
-                    "error": f"#{topic} is project '{pj}'s private channel, "
-                             f"not linked to yours — `cabildo project <yours> "
-                             f"--link {pj}` to allow"}
+            return {
+                "ok": False,
+                "error": f"#{topic} is project '{pj}'s private channel, "
+                f"not linked to yours — `cabildo project <yours> "
+                f"--link {pj}` to allow",
+            }
         store.ensure_topic(conn, topic, created_by=sid)
         store.subscribe(conn, sid, topic)
         conn.commit()
-        return {"ok": True, "topic": topic,
-                "subscriptions": store.subscriptions_of(conn, sid)}
+        return {"ok": True, "topic": topic, "subscriptions": store.subscriptions_of(conn, sid)}
 
 
 @mcp.tool()
@@ -200,8 +201,7 @@ def leave_topic(topic: str) -> dict[str, Any]:
         sid = _me(conn)
         store.unsubscribe(conn, sid, topic)
         conn.commit()
-        return {"ok": True, "topic": topic,
-                "subscriptions": store.subscriptions_of(conn, sid)}
+        return {"ok": True, "topic": topic, "subscriptions": store.subscriptions_of(conn, sid)}
 
 
 # --------------------------------------------------------------------------- #
@@ -238,8 +238,7 @@ def send(
             row = store.get_session(conn, sid)
             pname = row["project_name"] if row else None
             if not pname:
-                return {"ok": False,
-                        "error": "no project channel; specify `to` or `topic`"}
+                return {"ok": False, "error": "no project channel; specify `to` or `topic`"}
             topic = store.project_topic(pname)
 
         # Dial A: projects are isolated. You may DM an agent, or post to a
@@ -250,17 +249,21 @@ def send(
                 trow = store.get_session(conn, to_session)
                 tname = ((trow["project_name"] if trow else "") or "").strip().lower()
                 if tname and tname not in visible:
-                    return {"ok": False,
-                            "error": f"'{to}' is on project '{tname}', not linked "
-                                     f"to yours — `cabildo project <yours> --link "
-                                     f"{tname}` to allow"}
+                    return {
+                        "ok": False,
+                        "error": f"'{to}' is on project '{tname}', not linked "
+                        f"to yours — `cabildo project <yours> --link "
+                        f"{tname}` to allow",
+                    }
             else:
                 pj = _proj_topic_name(topic)
                 if pj is not None and pj not in visible:
-                    return {"ok": False,
-                            "error": f"#{topic} is project '{pj}'s channel, not "
-                                     f"linked to yours — `cabildo project <yours> "
-                                     f"--link {pj}` to allow"}
+                    return {
+                        "ok": False,
+                        "error": f"#{topic} is project '{pj}'s channel, not "
+                        f"linked to yours — `cabildo project <yours> "
+                        f"--link {pj}` to allow",
+                    }
 
         mid = store.post_message(
             conn,
@@ -279,7 +282,8 @@ def send(
 def _resolve_recipient(conn, to: str) -> str | None:
     """Resolve `to` to a session_id. Accepts an exact session id, a 'pid-...'
     id, a @handle / handle, or a short session-id prefix as shown by
-    `list_agents` and message senders (most-recently-seen active match wins)."""
+    `list_agents` and message senders (most-recently-seen active match wins).
+    """
     to = to.lstrip("@")
     row = store.get_session(conn, to)
     if row is not None:
@@ -318,8 +322,8 @@ def _resolve_recipient(conn, to: str) -> str | None:
 # an agent that comes back to a busy channel pays the whole backlog at once. So
 # the budget is on the WHOLE response, and the previews shrink to fit it.
 PREVIEW_CHARS = 280
-MIN_PREVIEW_CHARS = 90          # below this a preview stops being informative
-INBOX_BUDGET_CHARS = 2000       # ~500 tokens for a full inbox call
+MIN_PREVIEW_CHARS = 90  # below this a preview stops being informative
+INBOX_BUDGET_CHARS = 2000  # ~500 tokens for a full inbox call
 DEFAULT_INBOX_LIMIT = 15
 # id/from/to/at/urgent/truncated + JSON punctuation, per message. Budgeting only
 # the bodies would blow the ceiling by ~60% on a crowded inbox, which is the
@@ -368,7 +372,8 @@ def inbox(
     so a busy channel can't flood your context — previews shrink when many
     messages are waiting. `more` counts what didn't fit; call again after
     reading. full=True returns complete bodies and ignores the budget: use it
-    when you already know the inbox is small."""
+    when you already know the inbox is small.
+    """
     with store.connect() as conn:
         sid = _me(conn)
         limit = max(1, limit)
@@ -378,8 +383,7 @@ def inbox(
         more = max(0, store.inbox_count(conn, sid, unread_only=unread_only) - len(msgs))
 
         usable = max(0, budget_chars - ENVELOPE_CHARS * len(msgs))
-        share = PREVIEW_CHARS if full else _preview_budget(
-            [m["body"] or "" for m in msgs], usable)
+        share = PREVIEW_CHARS if full else _preview_budget([m["body"] or "" for m in msgs], usable)
         out: list[dict[str, Any]] = []
         for m in msgs:
             item = {
@@ -389,7 +393,7 @@ def inbox(
                 "at": m["created_at"],
             }
             if m["urgent"]:
-                item["urgent"] = True          # false is the norm; don't spend on it
+                item["urgent"] = True  # false is the norm; don't spend on it
             if not unread_only and m["read"]:
                 item["read"] = True
             if full:
@@ -398,7 +402,7 @@ def inbox(
                 preview, truncated = _preview(m["body"] or "", share)
                 item["body"] = preview
                 if truncated:
-                    item["truncated"] = True   # get_message(id) for the rest
+                    item["truncated"] = True  # get_message(id) for the rest
             out.append(item)
         return {"messages": out, "more": more}
 
@@ -406,7 +410,8 @@ def inbox(
 @mcp.tool()
 def get_message(message_id: int) -> dict[str, Any] | None:
     """Fetch one message's full body by id (from an `inbox` preview). Returns
-    null if that message is not in your inbox. Does NOT mark it read."""
+    null if that message is not in your inbox. Does NOT mark it read.
+    """
     with store.connect() as conn:
         sid = _me(conn)
         m = store.get_message(conn, sid, message_id)
@@ -431,7 +436,8 @@ def read(
 ) -> dict[str, Any]:
     """Explicitly mark messages as read (they are never auto-read). Pass
     specific `message_ids`, or a `topic` to clear a channel, or all=True to
-    clear your whole inbox. Returns how many were newly marked."""
+    clear your whole inbox. Returns how many were newly marked.
+    """
     with store.connect() as conn:
         sid = _me(conn)
         n = store.mark_read(
@@ -451,7 +457,8 @@ def history(
 ) -> list[dict[str, Any]]:
     """Browse a conversation regardless of read state. Pass `topic` for a
     channel's history, or `with_agent` (session id / @handle) for a direct-
-    message thread with that agent."""
+    message thread with that agent.
+    """
     with store.connect() as conn:
         sid = _me(conn)
         visible = _visible_projects(conn, sid)
@@ -523,7 +530,8 @@ def release(resource: str) -> dict[str, Any]:
 def claims(all_projects: bool = False) -> list[dict[str, Any]]:
     """List active advisory locks. Defaults to your project; set
     all_projects=True for every lock on the bus. Check this before a shared
-    action (like pushing) to see if another agent has claimed it."""
+    action (like pushing) to see if another agent has claimed it.
+    """
     with store.connect() as conn:
         sid = _me(conn)
         project = None if all_projects else _project(conn, sid)
@@ -552,24 +560,30 @@ def conditions() -> dict[str, Any]:
 
     Read-only. Conditions are raised by the daemon, which measures, and by the
     human, who knows things it cannot — not by agents. Anything you want to tell
-    the fleet yourself is a `send`."""
+    the fleet yourself is a `send`.
+    """
     with store.connect() as conn:
         sid = _me(conn)
         out = []
         for c in store.active_conditions(conn):
             mine = (c["data"].get("by_session") or {}).get(sid)
-            out.append({
-                "key": c["key"],
-                "level": c["level"],
-                "headline": c["headline"],
-                "advice": c["advice"],
-                "mine": mine,
-                "raised_ago": round(c["age"]),
-                "source": c["source"],
-                "details": {k: v for k, v in c["data"].items() if k != "by_session"},
-            })
-        return {"host": store.hostname(), "conditions": out,
-                "note": "nothing raised — the machine is fine" if not out else None}
+            out.append(
+                {
+                    "key": c["key"],
+                    "level": c["level"],
+                    "headline": c["headline"],
+                    "advice": c["advice"],
+                    "mine": mine,
+                    "raised_ago": round(c["age"]),
+                    "source": c["source"],
+                    "details": {k: v for k, v in c["data"].items() if k != "by_session"},
+                }
+            )
+        return {
+            "host": store.hostname(),
+            "conditions": out,
+            "note": "nothing raised — the machine is fine" if not out else None,
+        }
 
 
 # --------------------------------------------------------------------------- #
@@ -621,29 +635,36 @@ def request(action: str, params: dict[str, Any] | None = None) -> dict[str, Any]
             action=action,
             params=p,
         )
-        return {"ok": True, "intent_id": iid, "status": "pending",
-                "note": "queued — the daemon will DM you the result"}
+        return {
+            "ok": True,
+            "intent_id": iid,
+            "status": "pending",
+            "note": "queued — the daemon will DM you the result",
+        }
 
 
 @mcp.tool()
 def intents(status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
     """Look at the control queue: what's been asked of the daemon and how it
-    went. Optionally filter by status (pending/running/done/failed/rejected)."""
+    went. Optionally filter by status (pending/running/done/failed/rejected).
+    """
     with store.connect() as conn:
         _me(conn)
         out = []
         for i in store.list_intents(conn, status=status, limit=limit):
             r = i.get("result") or {}
-            out.append({
-                "id": i["id"],
-                "action": i["action"],
-                "status": i["status"],
-                "by": i["from_handle"] or names.robot_name(i["from_session"]),
-                "params": i["params"],
-                "reason": r.get("reason"),
-                "landed": r.get("landed"),
-                "gate": r.get("gate"),
-            })
+            out.append(
+                {
+                    "id": i["id"],
+                    "action": i["action"],
+                    "status": i["status"],
+                    "by": i["from_handle"] or names.robot_name(i["from_session"]),
+                    "params": i["params"],
+                    "reason": r.get("reason"),
+                    "landed": r.get("landed"),
+                    "gate": r.get("gate"),
+                }
+            )
         return out
 
 

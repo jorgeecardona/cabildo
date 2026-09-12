@@ -16,7 +16,6 @@ Three jobs, all cheap:
 
 from __future__ import annotations
 
-
 from cabildo.hooks._common import emit_context, read_input
 
 
@@ -38,4 +37,3 @@ def main() -> None:
     finally:
         conn.close()
     emit_context("PostToolUse", text)
-

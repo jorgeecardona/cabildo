@@ -15,8 +15,9 @@ import os
 import socket
 import sqlite3
 import time
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from . import names
 
@@ -286,8 +287,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
     have = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
     if "origin" not in have:
-        conn.execute(
-            "ALTER TABLE messages ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'")
+        conn.execute("ALTER TABLE messages ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'")
     conn.commit()
 
 
@@ -298,11 +298,11 @@ def _now() -> float:
 # --------------------------------------------------------------------------- #
 # Sessions
 # --------------------------------------------------------------------------- #
-def ensure_topic(conn: sqlite3.Connection, name: str, project: str | None = None,
-                 created_by: str | None = None) -> None:
+def ensure_topic(
+    conn: sqlite3.Connection, name: str, project: str | None = None, created_by: str | None = None
+) -> None:
     conn.execute(
-        "INSERT OR IGNORE INTO topics(name, project, created_by, created_at) "
-        "VALUES (?,?,?,?)",
+        "INSERT OR IGNORE INTO topics(name, project, created_by, created_at) VALUES (?,?,?,?)",
         (name, project, created_by, _now()),
     )
 
@@ -315,9 +315,7 @@ def subscribe(conn: sqlite3.Connection, session_id: str, topic: str) -> None:
 
 
 def unsubscribe(conn: sqlite3.Connection, session_id: str, topic: str) -> None:
-    conn.execute(
-        "DELETE FROM subscriptions WHERE session_id=? AND topic=?", (session_id, topic)
-    )
+    conn.execute("DELETE FROM subscriptions WHERE session_id=? AND topic=?", (session_id, topic))
 
 
 def project_topic(project_name: str) -> str:
@@ -336,7 +334,8 @@ def register_session(
 ) -> None:
     """Idempotent upsert of a session + its default subscriptions. Called from
     the SessionStart hook (authoritative session_id) and, defensively, from the
-    MCP server. Only overwrites columns we were actually given."""
+    MCP server. Only overwrites columns we were actually given.
+    """
     now = _now()
     row = conn.execute(
         "SELECT session_id FROM sessions WHERE session_id=?", (session_id,)
@@ -410,15 +409,14 @@ def set_handle(conn: sqlite3.Connection, session_id: str, handle: str) -> None:
 
 
 def get_session(conn: sqlite3.Connection, session_id: str) -> sqlite3.Row | None:
-    return conn.execute(
-        "SELECT * FROM sessions WHERE session_id=?", (session_id,)
-    ).fetchone()
+    return conn.execute("SELECT * FROM sessions WHERE session_id=?", (session_id,)).fetchone()
 
 
 def session_for_tag(conn: sqlite3.Connection, tag: str) -> str | None:
     """Resolve identity from the env tag a spawned agent was born with. Exact,
     unlike the PID walk: a spawned `claude -p` is not a terminal's descendant,
-    and the ancestor search happily finds somebody else's claude."""
+    and the ancestor search happily finds somebody else's claude.
+    """
     if not tag:
         return None
     row = conn.execute(
@@ -430,12 +428,12 @@ def session_for_tag(conn: sqlite3.Connection, tag: str) -> str | None:
 
 def session_for_pid(conn: sqlite3.Connection, claude_pid: int) -> str | None:
     """Reverse the rendezvous: given the resolved claude PID, return the
-    session_id the SessionStart hook bound to it (most-recently-seen wins)."""
+    session_id the SessionStart hook bound to it (most-recently-seen wins).
+    """
     if not claude_pid:
         return None
     row = conn.execute(
-        "SELECT session_id FROM sessions WHERE claude_pid=? ORDER BY last_seen_at DESC "
-        "LIMIT 1",
+        "SELECT session_id FROM sessions WHERE claude_pid=? ORDER BY last_seen_at DESC LIMIT 1",
         (claude_pid,),
     ).fetchone()
     return row["session_id"] if row else None
@@ -461,7 +459,8 @@ def display_name(row: sqlite3.Row | None, session_id: str | None = None) -> str:
     """Human label for a session: @handle if set, else its robot codename.
 
     The codename (BENDER-8F) is a deterministic function of the session_id, so
-    it doubles as the id — and it's what replaced the old bland session_id[:8]."""
+    it doubles as the id — and it's what replaced the old bland session_id[:8].
+    """
     if row is not None:
         if row["handle"]:
             return f"@{row['handle']}"
@@ -474,11 +473,11 @@ def session_for_robot_name(conn: sqlite3.Connection, name: str) -> str | None:
 
     Deterministic names mean no lookup table: recompute the name over active
     sessions and match case-insensitively. Most-recently-seen wins on the
-    (rare) collision, mirroring the short-id resolver."""
+    (rare) collision, mirroring the short-id resolver.
+    """
     want = name.lstrip("@").upper()
     for r in conn.execute(
-        "SELECT session_id FROM sessions WHERE status='active' "
-        "ORDER BY last_seen_at DESC"
+        "SELECT session_id FROM sessions WHERE status='active' ORDER BY last_seen_at DESC"
     ):
         if names.robot_name(r["session_id"]).upper() == want:
             return r["session_id"]
@@ -488,9 +487,7 @@ def session_for_robot_name(conn: sqlite3.Connection, name: str) -> str | None:
 def subscriptions_of(conn: sqlite3.Connection, session_id: str) -> list[str]:
     return [
         r["topic"]
-        for r in conn.execute(
-            "SELECT topic FROM subscriptions WHERE session_id=?", (session_id,)
-        )
+        for r in conn.execute("SELECT topic FROM subscriptions WHERE session_id=?", (session_id,))
     ]
 
 
@@ -514,8 +511,17 @@ def post_message(
     cur = conn.execute(
         "INSERT INTO messages(created_at, from_session, from_handle, topic, to_session, "
         "project, body, urgent, origin) VALUES (?,?,?,?,?,?,?,?,?)",
-        (_now(), from_session, from_handle, topic, to_session, project, body,
-         1 if urgent else 0, origin),
+        (
+            _now(),
+            from_session,
+            from_handle,
+            topic,
+            to_session,
+            project,
+            body,
+            1 if urgent else 0,
+            origin,
+        ),
     )
     conn.commit()
     return int(cur.lastrowid or 0)
@@ -529,7 +535,8 @@ def _inbox_where(session_id: str) -> tuple[str, list[Any]]:
     The joined_at bound is what keeps a fresh session from inheriting a
     channel's entire backlog as unread: subscribing to #proj:paas with 100
     prior messages must not hand the new agent 100 unread (~50k tokens of
-    context) the moment it starts. A DM is always yours regardless of timing."""
+    context) the moment it starts. A DM is always yours regardless of timing.
+    """
     return (
         "(m.to_session=? OR EXISTS (SELECT 1 FROM subscriptions s "
         "WHERE s.session_id=? AND s.topic=m.topic AND m.created_at >= s.joined_at)) "
@@ -559,11 +566,10 @@ def inbox(
     return [_msg_dict(r) for r in conn.execute(q, args)]
 
 
-def inbox_count(
-    conn: sqlite3.Connection, session_id: str, *, unread_only: bool = True
-) -> int:
+def inbox_count(conn: sqlite3.Connection, session_id: str, *, unread_only: bool = True) -> int:
     """How many messages the inbox would return with no limit. Lets a capped
-    `inbox` say how much it is holding back instead of just "there is more"."""
+    `inbox` say how much it is holding back instead of just "there is more".
+    """
     where, args = _inbox_where(session_id)
     q = (
         "SELECT COUNT(*) AS n FROM messages m "
@@ -606,7 +612,8 @@ def get_message(
     """Full record of a single message, but only if it is actually in this
     session's inbox. This is the companion to the previews `inbox` returns: the
     agent reads compact previews, then fetches the full body of the one it cares
-    about by id — instead of every full body flooding context up front."""
+    about by id — instead of every full body flooding context up front.
+    """
     where, args = _inbox_where(session_id)
     row = conn.execute(
         "SELECT m.*, r.read_at AS read_at FROM messages m "
@@ -626,7 +633,8 @@ def mark_read(
     all_unread: bool = False,
 ) -> int:
     """Explicitly mark messages read. Returns number newly marked. Only ever
-    marks messages that are actually in this session's inbox."""
+    marks messages that are actually in this session's inbox.
+    """
     where, args = _inbox_where(session_id)
     q = f"SELECT m.id FROM messages m WHERE {where}"
     if message_ids is not None:
@@ -657,7 +665,8 @@ def undelivered_urgent(
     conn: sqlite3.Connection, session_id: str, *, limit: int = 10
 ) -> list[dict[str, Any]]:
     """Unread URGENT messages that no mid-turn hook has surfaced yet. The
-    PostToolUse hook injects these once and records them in `deliveries`."""
+    PostToolUse hook injects these once and records them in `deliveries`.
+    """
     where, args = _inbox_where(session_id)
     q = (
         "SELECT m.*, r.read_at AS read_at FROM messages m "
@@ -669,13 +678,10 @@ def undelivered_urgent(
     return [_msg_dict(r) for r in conn.execute(q, [session_id, session_id, *args, limit])]
 
 
-def mark_delivered(
-    conn: sqlite3.Connection, session_id: str, message_ids: Iterable[int]
-) -> None:
+def mark_delivered(conn: sqlite3.Connection, session_id: str, message_ids: Iterable[int]) -> None:
     now = _now()
     conn.executemany(
-        "INSERT OR IGNORE INTO deliveries(message_id, session_id, delivered_at) "
-        "VALUES (?,?,?)",
+        "INSERT OR IGNORE INTO deliveries(message_id, session_id, delivered_at) VALUES (?,?,?)",
         [(mid, session_id, now) for mid in message_ids],
     )
     conn.commit()
@@ -689,7 +695,8 @@ def history(
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     """Browse a conversation regardless of read state. `between` is an ordered
-    pair of session_ids for a DM thread."""
+    pair of session_ids for a DM thread.
+    """
     if topic is not None:
         rows = conn.execute(
             "SELECT * FROM messages WHERE topic=? ORDER BY created_at DESC LIMIT ?",
@@ -712,8 +719,10 @@ def history(
 def _msg_dict(r: sqlite3.Row) -> dict[str, Any]:
     d = dict(r)
     d["urgent"] = bool(d.get("urgent"))
-    d["from_display"] = f"@{r['from_handle']}" if r["from_handle"] else names.robot_name(r["from_session"])
-    d["read"] = ("read_at" in d.keys()) and d.get("read_at") is not None
+    d["from_display"] = (
+        f"@{r['from_handle']}" if r["from_handle"] else names.robot_name(r["from_session"])
+    )
+    d["read"] = ("read_at" in d) and d.get("read_at") is not None
     return d
 
 
@@ -744,15 +753,17 @@ def acquire_claim(
     note: str | None,
 ) -> dict[str, Any]:
     """Try to take an exclusive lease on `resource`. Succeeds if free, expired,
-    or already held by us (in which case the lease is refreshed)."""
+    or already held by us (in which case the lease is refreshed).
+    """
     now = _now()
     row = conn.execute("SELECT * FROM claims WHERE resource=?", (resource,)).fetchone()
     if row and row["expires_at"] > now and row["holder_session"] != holder_session:
         return {
             "ok": False,
             "resource": resource,
-            "held_by": display_name(get_session(conn, row["holder_session"]),
-                                    row["holder_session"]),
+            "held_by": display_name(
+                get_session(conn, row["holder_session"]), row["holder_session"]
+            ),
             "held_by_session": row["holder_session"],
             "note": row["note"],
             "expires_in": round(row["expires_at"] - now, 1),
@@ -800,8 +811,7 @@ def record_spawn(
     conn.execute(
         "INSERT INTO spawns(tag, parent_session, role, task, model, depth, pid, "
         "worktree, branch, log, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (tag, parent_session, role, task, model, depth, pid, worktree, branch,
-         log, _now()),
+        (tag, parent_session, role, task, model, depth, pid, worktree, branch, log, _now()),
     )
     conn.commit()
 
@@ -824,7 +834,8 @@ def spawn_depth_of(conn: sqlite3.Connection, session_id: str | None) -> int:
     """How deep in the spawn tree this session sits. 0 for anything that was
     not spawned (a human terminal session, the daemon, @jorge). Read from the
     ledger, never from a caller's claim: an agent must not be able to present
-    itself shallower than it is."""
+    itself shallower than it is.
+    """
     if not session_id:
         return 0
     row = conn.execute(
@@ -836,10 +847,10 @@ def spawn_depth_of(conn: sqlite3.Connection, session_id: str | None) -> int:
 
 def live_spawns(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Rows that claim to be running. Claim only — callers who need the truth
-    must check the PID (see actions._reconcile_live)."""
+    must check the PID (see actions._reconcile_live).
+    """
     return conn.execute(
-        "SELECT * FROM spawns WHERE status IN ('launched','registered') "
-        "ORDER BY created_at"
+        "SELECT * FROM spawns WHERE status IN ('launched','registered') ORDER BY created_at"
     ).fetchall()
 
 
@@ -855,7 +866,8 @@ def list_spawns(conn: sqlite3.Connection, *, limit: int = 30) -> list[dict[str, 
         )
         d["agent_display"] = (
             display_name(get_session(conn, r["session_id"]), r["session_id"])
-            if r["session_id"] else None
+            if r["session_id"]
+            else None
         )
         out.append(d)
     return out
@@ -942,14 +954,13 @@ def list_intents(
 
 
 def get_intent(conn: sqlite3.Connection, intent_id: int) -> dict[str, Any] | None:
-    return intent_dict(
-        conn.execute("SELECT * FROM intents WHERE id=?", (intent_id,)).fetchone()
-    )
+    return intent_dict(conn.execute("SELECT * FROM intents WHERE id=?", (intent_id,)).fetchone())
 
 
 def _pid_alive(pid: int) -> bool:
     """True if `pid` names a live process. PermissionError means it exists but
-    isn't ours (still alive); ProcessLookupError / bad pid means gone."""
+    isn't ours (still alive); ProcessLookupError / bad pid means gone.
+    """
     if not pid or pid <= 1:
         return False
     try:
@@ -973,7 +984,8 @@ def reap_dead_sessions(conn: sqlite3.Connection, is_alive=None) -> int:
     process is ended via end_session (which also releases its claims and closes
     its spawn rows). Under-reaps by design: a recycled PID that now belongs to
     some other live process just isn't reaped, which is the safe direction.
-    Sessions with no recorded pid are left to last_seen aging."""
+    Sessions with no recorded pid are left to last_seen aging.
+    """
     alive = is_alive or _pid_alive
     rows = conn.execute(
         "SELECT session_id, claude_pid FROM sessions WHERE status='active'"
@@ -996,7 +1008,8 @@ def record_hook_metric(
     elapsed_ms: float | None,
 ) -> None:
     """Append one cost-telemetry row for a hook fire. Best-effort: callers wrap
-    this so a metrics write never propagates an error into the user's session."""
+    this so a metrics write never propagates an error into the user's session.
+    """
     conn.execute(
         "INSERT INTO hook_metrics(at, session_id, event, injected_chars, elapsed_ms) "
         "VALUES (?,?,?,?,?)",
@@ -1006,11 +1019,14 @@ def record_hook_metric(
 
 
 def hook_metrics_summary(
-    conn: sqlite3.Connection, *, since: float | None = None,
+    conn: sqlite3.Connection,
+    *,
+    since: float | None = None,
     session_id: str | None = None,
 ) -> dict[str, Any]:
     """Aggregate hook cost telemetry, optionally since a timestamp / for one
-    session. Returns overall totals plus a per-event breakdown."""
+    session. Returns overall totals plus a per-event breakdown.
+    """
     where = "1=1"
     args: list[Any] = []
     if since is not None:
@@ -1021,7 +1037,8 @@ def hook_metrics_summary(
         args.append(session_id)
 
     per_event = [
-        dict(r) for r in conn.execute(
+        dict(r)
+        for r in conn.execute(
             f"SELECT event, COUNT(*) AS fires, "
             f"COALESCE(SUM(injected_chars),0) AS chars, "
             f"COALESCE(SUM(CASE WHEN injected_chars>0 THEN 1 ELSE 0 END),0) AS injections, "
@@ -1040,13 +1057,12 @@ def hook_metrics_summary(
     return {"total": dict(total), "per_event": per_event}
 
 
-def count_pending_intents(
-    conn: sqlite3.Connection, *, older_than: float = 0.0
-) -> int:
+def count_pending_intents(conn: sqlite3.Connection, *, older_than: float = 0.0) -> int:
     """How many intents are waiting — all of them, or only those queued more than
     `older_than` seconds ago. The daemon says this out loud at startup: a backlog
     it is about to refuse is worth one line, and a backlog it is about to RUN is
-    worth even more."""
+    worth even more.
+    """
     q = "SELECT COUNT(*) AS n FROM intents WHERE status='pending'"
     a: list[Any] = []
     if older_than:
@@ -1057,7 +1073,8 @@ def count_pending_intents(
 
 def reap_stale_intents(conn: sqlite3.Connection, older_than: float) -> int:
     """A daemon killed mid-action leaves rows stuck in 'running' forever. Fail
-    them loudly rather than leaving a queue that silently never drains."""
+    them loudly rather than leaving a queue that silently never drains.
+    """
     cutoff = _now() - older_than
     cur = conn.execute(
         "UPDATE intents SET status='failed', finished_at=?, "
@@ -1069,9 +1086,7 @@ def reap_stale_intents(conn: sqlite3.Connection, older_than: float) -> int:
     return cur.rowcount
 
 
-def list_claims(
-    conn: sqlite3.Connection, *, project: str | None = None
-) -> list[dict[str, Any]]:
+def list_claims(conn: sqlite3.Connection, *, project: str | None = None) -> list[dict[str, Any]]:
     now = _now()
     q = "SELECT * FROM claims WHERE expires_at>?"
     args: list[Any] = [now]
@@ -1082,8 +1097,7 @@ def list_claims(
     out = []
     for r in conn.execute(q, args):
         d = dict(r)
-        d["holder"] = display_name(get_session(conn, r["holder_session"]),
-                                   r["holder_session"])
+        d["holder"] = display_name(get_session(conn, r["holder_session"]), r["holder_session"])
         d["expires_in"] = round(r["expires_at"] - now, 1)
         out.append(d)
     return out
@@ -1146,18 +1160,19 @@ def raise_condition(
     Refreshing an unchanged condition is deliberately silent — a producer
     sampling every 30 seconds must not re-announce "RAM is low" 120 times an
     hour. The level *changing* is the news, in either direction: an agent told
-    to stop starting builds is owed the update when it drops back to a warning."""
+    to stop starting builds is owed the update when it drops back to a warning.
+    """
     host = host or hostname()
     now = _now()
-    row = conn.execute(
-        "SELECT * FROM conditions WHERE host=? AND key=?", (host, key)
-    ).fetchone()
+    row = conn.execute("SELECT * FROM conditions WHERE host=? AND key=?", (host, key)).fetchone()
 
     lost = bool(row) and row["expires_at"] < now - _LOST_AFTER
     fresh = row is None or row["state"] != "raised" or lost
-    announced = fresh or row["level"] != level
+    announced = fresh or (row is not None and row["level"] != level)
     episode = (row["episode"] + 1) if (row and announced) else (row["episode"] if row else 1)
-    raised_at = now if fresh else row["raised_at"]
+    # `not fresh` already implies row is not None (fresh includes `row is None`), but the
+    # type checker can't narrow through the intermediate bool — guard row explicitly.
+    raised_at = row["raised_at"] if (row is not None and not fresh) else now
 
     conn.execute(
         "INSERT INTO conditions(host, key, state, level, headline, advice, data, "
@@ -1168,13 +1183,24 @@ def raise_condition(
         "advice=excluded.advice, data=excluded.data, source=excluded.source, "
         "episode=excluded.episode, raised_at=excluded.raised_at, "
         "updated_at=excluded.updated_at, expires_at=excluded.expires_at",
-        (host, key, level, headline, advice,
-         json.dumps(data) if data else None, source, episode,
-         raised_at, now, now + ttl_seconds),
+        (
+            host,
+            key,
+            level,
+            headline,
+            advice,
+            json.dumps(data) if data else None,
+            source,
+            episode,
+            raised_at,
+            now,
+            now + ttl_seconds,
+        ),
     )
     conn.commit()
-    out = _condition_dict(conn.execute(
-        "SELECT * FROM conditions WHERE host=? AND key=?", (host, key)).fetchone())
+    out = _condition_dict(
+        conn.execute("SELECT * FROM conditions WHERE host=? AND key=?", (host, key)).fetchone()
+    )
     out["announced"] = announced
     return out
 
@@ -1191,7 +1217,8 @@ def clear_condition(
 
     The row is kept, cleared, for CLEARED_GRACE — that is what lets the all-clear
     be delivered. Only sessions that were told about the raise get told about the
-    recovery; announcing good news about a problem you never heard of is noise."""
+    recovery; announcing good news about a problem you never heard of is noise.
+    """
     host = host or hostname()
     now = _now()
     row = conn.execute(
@@ -1230,7 +1257,8 @@ def undelivered_conditions(
 
     The `d.episode IS NOT NULL` guard on cleared rows is what keeps a fresh
     session from being handed the tail end of a story it never heard: you are
-    only told a condition recovered if you were told it existed."""
+    only told a condition recovered if you were told it existed.
+    """
     host = host or hostname()
     rows = conn.execute(
         "SELECT c.* FROM conditions c "
@@ -1261,7 +1289,8 @@ def mark_conditions_delivered(
 
 def prune_conditions(conn: sqlite3.Connection) -> int:
     """Drop conditions past their expiry, and delivery receipts for conditions
-    that no longer exist. Called on the producer's sweep."""
+    that no longer exist. Called on the producer's sweep.
+    """
     cur = conn.execute("DELETE FROM conditions WHERE expires_at<?", (_now(),))
     conn.execute(
         "DELETE FROM condition_deliveries WHERE NOT EXISTS "

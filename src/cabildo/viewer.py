@@ -22,7 +22,7 @@ import argparse
 import json
 import time
 import webbrowser
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -32,7 +32,7 @@ from . import store
 def _iso(epoch: float | None) -> str | None:
     if not epoch:
         return None
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(epoch, tz=UTC).isoformat()
 
 
 def _state() -> dict[str, Any]:
@@ -108,7 +108,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_GET(self) -> None:  # noqa: N802  (http.server API)
+    def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
         if path == "/":
             self._send(200, _PAGE.encode("utf-8"), "text/html; charset=utf-8")

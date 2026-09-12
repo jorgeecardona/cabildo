@@ -78,8 +78,8 @@ def test_p_prefixed_speech_still_posts():
 
 def test_resolve_topic_maps_bare_name_to_project_channel():
     existing = {"proj:paas", "general", "proj:agent-chat"}
-    assert resolve_topic("paas", existing) == "proj:paas"       # bare -> project
-    assert resolve_topic("#paas", existing) == "proj:paas"      # hash stripped
-    assert resolve_topic("general", existing) == "general"      # exact match wins
+    assert resolve_topic("paas", existing) == "proj:paas"  # bare -> project
+    assert resolve_topic("#paas", existing) == "proj:paas"  # hash stripped
+    assert resolve_topic("general", existing) == "general"  # exact match wins
     assert resolve_topic("proj:paas", existing) == "proj:paas"  # already qualified
     assert resolve_topic("brand-new", existing) == "brand-new"  # unknown -> verbatim

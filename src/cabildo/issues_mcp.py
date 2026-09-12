@@ -32,8 +32,8 @@ from . import issues
 
 mcp = FastMCP("issues")
 
-CLAIM_TTL = 3600.0          # an hour: long enough to hold a task, short enough that a crash frees it
-SHOW_LIMIT = 12_000         # chars. p90 of the issues in these repos is 7.4k, so this only bites runaways
+CLAIM_TTL = 3600.0  # an hour: long enough to hold a task, short enough that a crash frees it
+SHOW_LIMIT = 12_000  # chars. p90 of the issues in these repos is 7.4k, so this only bites runaways
 
 
 # --------------------------------------------------------------------------- #
@@ -70,7 +70,8 @@ def _identity() -> tuple[str | None, str | None]:
 
 def _lease(slug: str, *, take: bool) -> str:
     """Take or drop the bus lease that backs an issue claim. Best-effort by design: the markdown
-    write is the real thing, and a missing bus must not stop work."""
+    write is the real thing, and a missing bus must not stop work.
+    """
     try:
         from . import store
 
@@ -154,7 +155,8 @@ def board(status: str = "", area: str = "", owner: str = "", limit: int = 10) ->
     if status or area or owner:
         found, broken = issues.load_all(folder)
         rows = [
-            i for i in found
+            i
+            for i in found
             if (status == "done" or i.open)
             and (not status or i.status == status)
             and (not area or i.area == area)
@@ -216,7 +218,8 @@ def file_issue(
 
     `blocked_by` = slugs that must close first. `fields` = whatever config.toml requires (scope,
     verify, priority …); a list-valued field like `tags` takes a real list, never a delimited
-    string. `check_issues` names what you missed."""
+    string. `check_issues` names what you missed.
+    """
     folder = _folder()
     path = issues.file_issue(
         folder,
@@ -235,12 +238,14 @@ def update_issue(
     title: str = "",
     status: str = "",
     area: str = "",
-    blocked_by: list[str] | None = None,   # stays optional: None leaves blockers alone, [] clears them
+    blocked_by: list[str]
+    | None = None,  # stays optional: None leaves blockers alone, [] clears them
     fields: dict[str, str | list[str]] = {},
 ) -> str:
     """Change an issue's front matter. Only what you pass is touched; `fields` merges, so setting
     one project field cannot drop the others. Set `blocked_by` when you find a real ordering — it
-    is what moves work off `ready` for everyone, not just you."""
+    is what moves work off `ready` for everyone, not just you.
+    """
     folder = _folder()
     changes: dict = {}
     if title:
@@ -267,7 +272,8 @@ def claim_issue(name: str, release: bool = False, force: bool = False) -> str:
     bus lease so another agent here cannot start the same work.
 
     `release=True` hands it back: the honest move when you stop, so it stops looking taken. Refuses
-    to steal a named owner unless you pass force."""
+    to steal a named owner unless you pass force.
+    """
     folder = _folder()
     if release:
         updated = issues.release(folder, name)
@@ -275,8 +281,10 @@ def claim_issue(name: str, release: bool = False, force: bool = False) -> str:
         return f"released {updated.path.name} — back on the board"
     handle, _ = _identity()
     if not handle:
-        return ("cannot tell who you are — the cabildo bus is not reachable, so there is no handle "
-                "to write. Use `update_issue(name, fields={'owner': ...})`.")
+        return (
+            "cannot tell who you are — the cabildo bus is not reachable, so there is no handle "
+            "to write. Use `update_issue(name, fields={'owner': ...})`."
+        )
     updated = issues.claim(folder, name, owner=handle, force=force)
     return f"claimed {updated.path.name} as @{handle}" + _lease(updated.slug, take=True)
 
@@ -285,7 +293,8 @@ def claim_issue(name: str, release: bool = False, force: bool = False) -> str:
 def close_issue(name: str, fixed_in: str) -> str:
     """Mark a follow-up done. The file stays, carrying `fixed_in`, so the folder records what was
     fixed by what. Use the sha on the MAINLINE — the land path re-commits, and a worktree sha
-    resolves only until that worktree is pruned."""
+    resolves only until that worktree is pruned.
+    """
     folder = _folder()
     updated = issues.close(folder, name, fixed_in=fixed_in)
     _lease(updated.slug, take=False)
@@ -298,7 +307,8 @@ def check_issues() -> str:
     """Grade the folder against its own config.toml — front matter, filenames, `done` without a
     sha, blocked_by cycles, broken links, a stale index, and whatever else that config demands.
     Run it after editing issues by hand. Same module as `cabildo issues check` and the repo's gate,
-    so a green here is a green there."""
+    so a green here is a green there.
+    """
     folder = _folder()
     problems = issues.check(folder)
     if not problems:
@@ -341,7 +351,7 @@ def _slim(schema: dict) -> dict:
 try:
     for _t in mcp._tool_manager._tools.values():
         _slim(_t.parameters)
-except Exception:       # private attribute: if a FastMCP bump moves it we just ship fatter schemas
+except Exception:  # private attribute: if a FastMCP bump moves it we just ship fatter schemas
     pass
 
 

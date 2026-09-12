@@ -29,10 +29,10 @@ import time
 from . import store
 from .store import HUMAN_HANDLE, HUMAN_SESSION
 
-SIDEBAR_W = 24          # hidden when the terminal is too narrow to afford it
+SIDEBAR_W = 24  # hidden when the terminal is too narrow to afford it
 MIN_COLS_FOR_SIDEBAR = 72
-POLL_MS = 200           # input timeout doubles as the DB poll interval
-ROSTER_EVERY = 2.0      # seconds between roster/claims refreshes
+POLL_MS = 200  # input timeout doubles as the DB poll interval
+ROSTER_EVERY = 2.0  # seconds between roster/claims refreshes
 HINT = "@name=DM · /u=urgent · /p <project>=go · /t topic · PgUp/PgDn · /q=quit"
 
 
@@ -40,7 +40,8 @@ def resolve_topic(name: str, existing: set[str]) -> str:
     """Map a typed target to a real channel. A bare project name resolves to
     its #proj:<name> channel when that exists, so `/t paas` (or `/p paas`) just
     works instead of forcing the full `/t proj:paas`. An exact match wins; an
-    unknown name is used verbatim (creating a new channel, the old behavior)."""
+    unknown name is used verbatim (creating a new channel, the old behavior).
+    """
     name = name.lstrip("#")
     if name in existing:
         return name
@@ -98,24 +99,32 @@ class Chat:
         self.scr = stdscr
         self.conn = store.connect()
         from .cli import ensure_human  # late import: cli imports us too
+
         ensure_human(self.conn)
 
         self.dest = (topic or store.DEFAULT_TOPIC).lstrip("#")  # where plain lines go
-        self.msgs: list[dict] = []       # raw message dicts, oldest first
-        self.lines: list[list] = []      # wrapped [(text, attr), ...] segments per row
-        self.buf = ""                    # input buffer
-        self.offset = 0                  # scrollback: rows up from the bottom
+        self.msgs: list[dict] = []  # raw message dicts, oldest first
+        self.lines: list[list] = []  # wrapped [(text, attr), ...] segments per row
+        self.buf = ""  # input buffer
+        self.offset = 0  # scrollback: rows up from the bottom
         self.last_id = 0
         self.roster: list = []
         self.claims: list = []
         self.roster_at = 0.0
-        self.notice: str | None = None   # transient local status (errors, sends)
+        self.notice: str | None = None  # transient local status (errors, sends)
 
         curses.curs_set(1)
         curses.use_default_colors()
         for i, c in enumerate(
-            (curses.COLOR_CYAN, curses.COLOR_GREEN, curses.COLOR_MAGENTA,
-             curses.COLOR_BLUE, curses.COLOR_YELLOW, curses.COLOR_RED), start=1,
+            (
+                curses.COLOR_CYAN,
+                curses.COLOR_GREEN,
+                curses.COLOR_MAGENTA,
+                curses.COLOR_BLUE,
+                curses.COLOR_YELLOW,
+                curses.COLOR_RED,
+            ),
+            start=1,
         ):
             curses.init_pair(i, c, -1)
         self.RED = curses.color_pair(6)
@@ -129,10 +138,12 @@ class Chat:
 
     # ---- data ------------------------------------------------------------- #
     def _fetch(self, after: int, limit: int) -> list[dict]:
-        rows = list(self.conn.execute(
-            "SELECT * FROM messages WHERE id > ? ORDER BY id DESC LIMIT ?",
-            (after, limit),
-        ))
+        rows = list(
+            self.conn.execute(
+                "SELECT * FROM messages WHERE id > ? ORDER BY id DESC LIMIT ?",
+                (after, limit),
+            )
+        )
         return [store._msg_dict(r) for r in reversed(rows)]
 
     def _sender_attr(self, name: str) -> int:
@@ -157,8 +168,11 @@ class Chat:
             s = store.get_session(self.conn, m["to_session"])
             dest = store.display_name(s, m["to_session"])
         clock = time.strftime("%H:%M:%S", time.localtime(m["created_at"]))
-        head = [(clock + " ", curses.A_DIM), (who, self._sender_attr(who)),
-                (" → " + (dest or "?"), curses.A_DIM)]
+        head = [
+            (clock + " ", curses.A_DIM),
+            (who, self._sender_attr(who)),
+            (" → " + (dest or "?"), curses.A_DIM),
+        ]
         if m["urgent"]:
             head.append((" ⚠ URGENT", self.RED | curses.A_BOLD))
         out = [head]
@@ -196,14 +210,18 @@ class Chat:
         # header
         title = f" cabildo · viewing all · you talk to #{self.dest} "
         self._put(0, 0, title[: w - 1], curses.A_REVERSE)
-        self._put(0, max(0, w - 20), f" {len(self.roster)} agents on bus "[: 19],
-                  curses.A_REVERSE | curses.A_DIM)
+        self._put(
+            0,
+            max(0, w - 20),
+            f" {len(self.roster)} agents on bus "[:19],
+            curses.A_REVERSE | curses.A_DIM,
+        )
 
         # messages
         total = len(self.lines)
         self.offset = max(0, min(self.offset, total - pane_h)) if total > pane_h else 0
         start = max(0, total - pane_h - self.offset)
-        for row, segs in enumerate(self.lines[start: start + pane_h], start=1):
+        for row, segs in enumerate(self.lines[start : start + pane_h], start=1):
             x = 0
             for text, attr in segs:
                 if x >= pane_w:
@@ -227,8 +245,7 @@ class Chat:
                 name = store.display_name(r)
                 self._put(row, x0, name[: SIDEBAR_W - 1], self._sender_attr(name))
                 row += 1
-                self._put(row, x0, f" {r['project_name'] or '-'}"[: SIDEBAR_W - 1],
-                          curses.A_DIM)
+                self._put(row, x0, f" {r['project_name'] or '-'}"[: SIDEBAR_W - 1], curses.A_DIM)
                 row += 1
             if self.claims and row < h - 4:
                 self._put(row + 1, x0, "claims", curses.A_BOLD)
@@ -240,8 +257,12 @@ class Chat:
                     row += 1
 
         # hint / notice, then input
-        self._put(h - 2, 0, (self.notice or HINT)[: w - 1],
-                  (self.RED if self.notice else 0) | curses.A_DIM)
+        self._put(
+            h - 2,
+            0,
+            (self.notice or HINT)[: w - 1],
+            (self.RED if self.notice else 0) | curses.A_DIM,
+        )
         prompt = f"#{self.dest} ❯ "
         avail = w - len(prompt) - 2
         shown = self.buf[-avail:] if avail > 0 else ""
@@ -261,13 +282,14 @@ class Chat:
             return True
         if kind == "projects":
             projs = sorted(
-                t["name"][len("proj:"):]
+                t["name"][len("proj:") :]
                 for t in store.list_topics(self.conn)
                 if t["name"].startswith("proj:")
             )
             self.notice = (
                 "projects (use /p <name>): " + ", ".join(projs)
-                if projs else "no project channels yet"
+                if projs
+                else "no project channels yet"
             )
             return True
         if kind == "switch":
@@ -278,6 +300,7 @@ class Chat:
         to_session = None
         if p["to"]:
             from .cli import _resolve
+
             to_session = _resolve(self.conn, p["to"])
             if to_session is None:
                 self.notice = f"no agent matches '@{p['to']}' — see sidebar"
@@ -299,9 +322,9 @@ class Chat:
                 return self.submit()
             if ch in ("\x7f", "\b"):
                 self.buf = self.buf[:-1]
-            elif ch == "\x15":            # ctrl-u
+            elif ch == "\x15":  # ctrl-u
                 self.buf = ""
-            elif ch == "\x04" and not self.buf:   # ctrl-d on empty line
+            elif ch == "\x04" and not self.buf:  # ctrl-d on empty line
                 return False
             elif ch.isprintable():
                 self.buf += ch
@@ -329,7 +352,7 @@ class Chat:
             self.draw()
             try:
                 ch = self.scr.get_wch()
-            except curses.error:      # timeout: no key this tick
+            except curses.error:  # timeout: no key this tick
                 continue
             if not self.handle(ch):
                 return 0

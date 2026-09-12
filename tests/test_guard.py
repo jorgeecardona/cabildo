@@ -1,5 +1,6 @@
 """PreToolUse guard: auto-claim on edit, file-lease enforcement, and denial of
-tree-destroying git ops when other agents share the working tree."""
+tree-destroying git ops when other agents share the working tree.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ from cabildo import guard, store
 from tests.conftest import make_session
 
 
-@pytest.fixture()
+@pytest.fixture
 def clock(monkeypatch):
     state = {"t": 1_000.0}
     monkeypatch.setattr(store.time, "time", lambda: state["t"])
@@ -34,7 +35,7 @@ def _bash(conn, sid, command):
 def test_editing_a_file_auto_claims_it(conn, clock):
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
     res = guard.autoclaim_on_edit(conn, "a", "Edit", {"file_path": f"{ALPHA}/src/x.py"})
-    assert res == "file:src/x.py"                      # repo-relative
+    assert res == "file:src/x.py"  # repo-relative
     claims = store.list_claims(conn, project=ALPHA)
     assert claims[0]["resource"] == "file:src/x.py"
     assert claims[0]["holder"] == "@alice"
@@ -67,8 +68,8 @@ def test_autoclaim_lease_expires(conn, clock):
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
     make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
     guard.autoclaim_on_edit(conn, "a", "Edit", {"file_path": f"{ALPHA}/src/x.py"})
-    clock["t"] += guard.AUTOCLAIM_TTL + 1          # alice moved on
-    assert _edit(conn, "b", f"{ALPHA}/src/x.py") is None   # bob is free to take it
+    clock["t"] += guard.AUTOCLAIM_TTL + 1  # alice moved on
+    assert _edit(conn, "b", f"{ALPHA}/src/x.py") is None  # bob is free to take it
 
 
 def test_autoclaim_absolute_path_outside_project(conn, clock):
@@ -123,7 +124,7 @@ def test_destructive_git_denied_when_peer_active(conn, clock, command):
 @pytest.mark.parametrize("command", DESTRUCTIVE)
 def test_destructive_git_allowed_when_alone(conn, clock, command):
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
-    assert _bash(conn, "a", command) is None       # no peers -> no block
+    assert _bash(conn, "a", command) is None  # no peers -> no block
 
 
 @pytest.mark.parametrize("command", SAFE)
@@ -137,8 +138,15 @@ def test_push_lock_still_enforced(conn, clock):
     # Regression: routing destructive-git alongside push must not break push.
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
     make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
-    store.acquire_claim(conn, resource="push:alpha", holder_session="b",
-                        holder_handle="bob", project=ALPHA, ttl_seconds=600, note=None)
+    store.acquire_claim(
+        conn,
+        resource="push:alpha",
+        holder_session="b",
+        holder_handle="bob",
+        project=ALPHA,
+        ttl_seconds=600,
+        note=None,
+    )
     reason = _bash(conn, "a", "git push origin main")
     assert reason is not None and "push:alpha" in reason
 
@@ -152,7 +160,7 @@ def test_push_denied_when_peer_live_without_any_lock(conn, clock):
     reason = _bash(conn, "a", "git push origin main")
     assert reason is not None
     assert "@bob" in reason
-    assert "land" in reason               # names the ordered path through
+    assert "land" in reason  # names the ordered path through
 
 
 def test_push_allowed_when_alone(conn, clock):
@@ -163,9 +171,16 @@ def test_push_allowed_when_alone(conn, clock):
 def test_holding_the_push_lock_is_the_escape_hatch(conn, clock):
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
     make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
-    store.acquire_claim(conn, resource="push:alpha", holder_session="a",
-                        holder_handle="alice", project=ALPHA, ttl_seconds=600, note=None)
-    assert _bash(conn, "a", "git push origin main") is None      # alice may push
+    store.acquire_claim(
+        conn,
+        resource="push:alpha",
+        holder_session="a",
+        holder_handle="alice",
+        project=ALPHA,
+        ttl_seconds=600,
+        note=None,
+    )
+    assert _bash(conn, "a", "git push origin main") is None  # alice may push
     assert _bash(conn, "b", "git push origin main") is not None  # bob may not
 
 
@@ -173,8 +188,15 @@ def test_push_denial_survives_an_expired_lease(conn, clock):
     # The lease lapsing must not turn into a free-for-all: peers are still here.
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
     make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
-    store.acquire_claim(conn, resource="push:alpha", holder_session="a",
-                        holder_handle="alice", project=ALPHA, ttl_seconds=60, note=None)
+    store.acquire_claim(
+        conn,
+        resource="push:alpha",
+        holder_session="a",
+        holder_handle="alice",
+        project=ALPHA,
+        ttl_seconds=60,
+        note=None,
+    )
     clock["t"] += 61
     assert _bash(conn, "a", "git push origin main") is not None
 
@@ -199,7 +221,7 @@ TARGETED = [
     "git add src/x.py tests/test_x.py",
     "git commit -m 'x'",
     "git commit --amend --no-edit",
-    "git commit -m 'add -A support to the parser'",   # a flag inside a message
+    "git commit -m 'add -A support to the parser'",  # a flag inside a message
     "git status",
     "git diff",
 ]
@@ -230,18 +252,21 @@ def test_blanket_stage_allowed_when_alone(conn, clock, command):
 def test_blanket_stage_allowed_in_your_own_worktree(conn, clock, tmp_path):
     """The peer is on the same project but a different checkout: separate index,
     no collision, no deny. This is the behaviour that makes `git worktree add`
-    an actual answer rather than advice."""
+    an actual answer rather than advice.
+    """
     main = tmp_path / "repo"
     (main / ".git").mkdir(parents=True)
     wt = tmp_path / "wt-bob"
     wt.mkdir()
     (wt / ".git").write_text(f"gitdir: {main}/.git/worktrees/bob\n")
 
-    store.register_session(conn, "a", cwd=str(main), project=str(main),
-                           project_name="alpha", claude_pid=1000)
+    store.register_session(
+        conn, "a", cwd=str(main), project=str(main), project_name="alpha", claude_pid=1000
+    )
     store.set_handle(conn, "a", "alice")
-    store.register_session(conn, "b", cwd=str(wt), project=str(main),
-                           project_name="alpha", claude_pid=1001)
+    store.register_session(
+        conn, "b", cwd=str(wt), project=str(main), project_name="alpha", claude_pid=1001
+    )
     store.set_handle(conn, "b", "bob")
 
     assert _bash(conn, "a", "git add -A") is None
@@ -254,17 +279,20 @@ def test_blanket_stage_allowed_in_your_own_worktree(conn, clock, tmp_path):
 def test_branch_switch_denied_when_another_agent_shares_the_checkout(conn):
     """A checkout has one HEAD. Switching it moves everyone standing in that directory, silently,
     and the next of them commits onto a branch it never chose. Happened three times on 2026-08-03;
-    in crm an agent landed three commits of unrelated work onto somebody else's feature branch."""
+    in crm an agent landed three commits of unrelated work onto somebody else's feature branch.
+    """
     make_session(conn, "a", handle="mine", project="/repo/x", project_name="x")
     make_session(conn, "b", handle="other", project="/repo/x", project_name="x")
 
-    for cmd in ("git checkout -b adopt-cabildo-issues",
-                "git checkout main",
-                "git switch -c feature",
-                "git branch -f main HEAD"):
+    for cmd in (
+        "git checkout -b adopt-cabildo-issues",
+        "git checkout main",
+        "git switch -c feature",
+        "git branch -f main HEAD",
+    ):
         reason = guard.deny_reason(conn, "a", "Bash", {"command": cmd})
         assert reason and "other agent" in reason, cmd
-        assert "worktree add" in reason        # name the way out, not just the refusal
+        assert "worktree add" in reason  # name the way out, not just the refusal
 
 
 def test_branch_switch_is_fine_when_alone(conn):
@@ -274,7 +302,8 @@ def test_branch_switch_is_fine_when_alone(conn):
 
 def test_branch_switch_is_fine_from_your_own_worktree(conn):
     """A worktree has its own HEAD, so switching it moves nobody. That is also the escape hatch the
-    denial points at, so it had better actually be allowed."""
+    denial points at, so it had better actually be allowed.
+    """
     make_session(conn, "a", handle="mine", project="/repo/y", project_name="y")
     make_session(conn, "wt", handle="peer", project="/repo/y", project_name="y")
     conn.execute("UPDATE sessions SET cwd=? WHERE session_id=?", ("/repo/y", "a"))
@@ -285,7 +314,8 @@ def test_branch_switch_is_fine_from_your_own_worktree(conn):
 
 def test_reading_and_restoring_are_not_branch_switches(conn):
     """`git checkout -- file` is a discard with its own denial and its own reason; bare `checkout`
-    prints. Neither should be reported as moving the branch."""
+    prints. Neither should be reported as moving the branch.
+    """
     make_session(conn, "a", handle="mine", project="/repo/x", project_name="x")
     make_session(conn, "b", handle="other", project="/repo/x", project_name="x")
     for cmd in ("git status", "git branch", "git checkout", "git log --oneline"):

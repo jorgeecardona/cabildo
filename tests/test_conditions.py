@@ -53,7 +53,8 @@ def test_delivered_once_per_episode(conn):
 def test_reaches_a_session_that_did_not_exist_yet(conn):
     """The whole reason this isn't a message. Channel unread starts at join, so
     a message about memory is invisible to the session most likely to make it
-    worse: the one that just started."""
+    worse: the one that just started.
+    """
     _raise(conn)
     make_session(conn, "late", claude_pid=999)
     assert [c["key"] for c in _undelivered(conn, "late")] == ["mem"]
@@ -89,7 +90,7 @@ def test_reraise_after_clear_is_a_new_episode(conn):
     _raise(conn)
     _deliver(conn, "a" * 8)
     store.clear_condition(conn, key="mem", host="box")
-    _deliver(conn, "a" * 8)                       # the all-clear
+    _deliver(conn, "a" * 8)  # the all-clear
 
     _raise(conn)
     assert [c["state"] for c in _undelivered(conn, "a" * 8)] == ["raised"]
@@ -97,7 +98,8 @@ def test_reraise_after_clear_is_a_new_episode(conn):
 
 def test_expired_condition_stops_being_injected(conn):
     """A dead producer must not leave an alarm ringing. Expiry is silent: we
-    stopped looking, which is not evidence the machine recovered."""
+    stopped looking, which is not evidence the machine recovered.
+    """
     make_session(conn, "a" * 8)
     _raise(conn, ttl_seconds=-1)
     assert _undelivered(conn, "a" * 8) == []
@@ -106,14 +108,14 @@ def test_expired_condition_stops_being_injected(conn):
 
 def test_refresh_after_a_long_blackout_re_announces(conn):
     """Same level, but the row went stale — the daemon was down. We know nothing
-    about the gap, so the honest move is to say it again."""
+    about the gap, so the honest move is to say it again.
+    """
     make_session(conn, "a" * 8)
     first = _raise(conn)
-    assert len(_deliver(conn, "a" * 8)) == 1            # receipt at episode 1
+    assert len(_deliver(conn, "a" * 8)) == 1  # receipt at episode 1
 
     def age_by(seconds: float) -> None:
-        conn.execute("UPDATE conditions SET expires_at=expires_at-? WHERE key='mem'",
-                     (seconds,))
+        conn.execute("UPDATE conditions SET expires_at=expires_at-? WHERE key='mem'", (seconds,))
         conn.commit()
 
     # A refresh that merely arrives late is the same episode continuing.
@@ -139,7 +141,8 @@ def test_prune_drops_expired_rows_and_their_receipts(conn):
 
 def test_hosts_do_not_hear_each_others_alarms(conn):
     """The bus is a shared filesystem; one laptop's memory is not news on
-    another."""
+    another.
+    """
     make_session(conn, "a" * 8)
     store.raise_condition(conn, host="other-box", key="mem", headline="4% RAM")
     assert _undelivered(conn, "a" * 8) == []
@@ -158,14 +161,26 @@ def test_injection_names_the_agent_actually_holding_the_memory(conn, monkeypatch
     monkeypatch.setattr(store, "hostname", lambda: "box")
     make_session(conn, "hog")
     make_session(conn, "bystander", claude_pid=2)
-    _raise(conn, level="critical", advice="stop starting things", data={
-        "by_session": {"hog": {"rss_mb": 8192, "count": 2,
-                               "procs": [{"pid": 1, "rss_mb": 8000, "what": "pytest -q"}]}},
-    })
+    _raise(
+        conn,
+        level="critical",
+        advice="stop starting things",
+        data={
+            "by_session": {
+                "hog": {
+                    "rss_mb": 8192,
+                    "count": 2,
+                    "procs": [{"pid": 1, "rss_mb": 8000, "what": "pytest -q"}],
+                }
+            },
+        },
+    )
 
     mine = notify.condition_text(conn, "hog")
+    assert mine is not None
     assert "YOU are holding 8.0G" in mine and "pytest -q" in mine
     theirs = notify.condition_text(conn, "bystander")
+    assert theirs is not None
     assert "4% RAM" not in theirs or "YOU are holding" not in theirs
     assert "YOU are holding" not in theirs
 
@@ -178,15 +193,16 @@ def test_injection_marks_delivered_only_when_asked(conn, monkeypatch):
     make_session(conn, "a" * 8)
     _raise(conn)
     assert notify.condition_text(conn, "a" * 8, mark=False) is not None
-    assert notify.condition_text(conn, "a" * 8) is not None    # still pending
-    assert notify.condition_text(conn, "a" * 8) is None        # now it isn't
+    assert notify.condition_text(conn, "a" * 8) is not None  # still pending
+    assert notify.condition_text(conn, "a" * 8) is None  # now it isn't
 
 
 # --------------------------------------------------------------------------- #
 # Thresholds and hysteresis
 # --------------------------------------------------------------------------- #
-def _snap(avail_pct: float, *, total_gb: float = 32.0, stall: float = 0.0,
-          procs_=()) -> procs.Snapshot:
+def _snap(
+    avail_pct: float, *, total_gb: float = 32.0, stall: float = 0.0, procs_=()
+) -> procs.Snapshot:
     total = int(total_gb * 1048576)
     return procs.Snapshot(
         memory=procs.Memory(total_kb=total, available_kb=int(total * avail_pct / 100)),
@@ -205,12 +221,12 @@ def test_level_follows_available_memory(avail, expected):
 
 def test_recovery_must_clear_the_threshold_by_a_margin(conn):
     """Without this a box hovering at the line flaps warn/clear/warn every
-    sweep, and every flap costs every session an injection."""
-    just_over = TH.warn_pct + 1                       # 16% — over the raw threshold
+    sweep, and every flap costs every session an injection.
+    """
+    just_over = TH.warn_pct + 1  # 16% — over the raw threshold
     assert monitor.level_for(_snap(just_over), TH) is None
     assert monitor.level_for(_snap(just_over), TH, sticky="warn") == "warn"
-    assert monitor.level_for(_snap(TH.warn_pct + TH.clear_margin + 1), TH,
-                             sticky="warn") is None
+    assert monitor.level_for(_snap(TH.warn_pct + TH.clear_margin + 1), TH, sticky="warn") is None
 
 
 def test_stalling_outranks_a_comfortable_percentage():
@@ -234,32 +250,47 @@ def test_no_meminfo_says_nothing(monkeypatch):
 # Loose processes
 # --------------------------------------------------------------------------- #
 def _proc(pid, rss_mb, *, session_id=None, claude_pid=0, via="", cmd="python x.py"):
-    return procs.Proc(pid=pid, ppid=1, comm="python", rss_kb=rss_mb * 1024,
-                      started_at=0.0, cmdline=cmd, session_id=session_id,
-                      claude_pid=claude_pid, via=via)
+    return procs.Proc(
+        pid=pid,
+        ppid=1,
+        comm="python",
+        rss_kb=rss_mb * 1024,
+        started_at=0.0,
+        cmdline=cmd,
+        session_id=session_id,
+        claude_pid=claude_pid,
+        via=via,
+    )
 
 
 def test_loose_is_a_process_whose_agent_is_gone():
     live = {"alive"}
-    snap = _snap(50, procs_=[
-        _proc(1, 900, session_id="alive", via="path"),     # its agent is working
-        _proc(2, 900, session_id="ended", via="path"),     # nobody is waiting
-    ])
+    snap = _snap(
+        50,
+        procs_=[
+            _proc(1, 900, session_id="alive", via="path"),  # its agent is working
+            _proc(2, 900, session_id="ended", via="path"),  # nobody is waiting
+        ],
+    )
     assert [p.pid for p in procs.loose(snap, live)] == [2]
 
 
 def test_unattributable_processes_are_never_called_loose():
     """One nudge about somebody's browser costs more trust than ten correct ones
-    earn, so anything we cannot tie to an agent is left alone."""
+    earn, so anything we cannot tie to an agent is left alone.
+    """
     snap = _snap(50, procs_=[_proc(9, 4000, cmd="/usr/lib/chrome")])
     assert procs.loose(snap, set()) == []
 
 
 def test_ancestry_attribution_defers_to_a_live_claude():
-    snap = _snap(50, procs_=[
-        _proc(3, 900, claude_pid=100, via="ancestry"),
-        _proc(4, 900, claude_pid=200, via="ancestry"),
-    ])
+    snap = _snap(
+        50,
+        procs_=[
+            _proc(3, 900, claude_pid=100, via="ancestry"),
+            _proc(4, 900, claude_pid=200, via="ancestry"),
+        ],
+    )
     loose = procs.loose(snap, set(), alive=lambda pid: pid == 100)
     assert [p.pid for p in loose] == [4]
 

@@ -25,10 +25,10 @@ ICON_URGENT = "dialog-warning"
 
 def available() -> bool:
     """A session bus and a client to talk to it. Both absent under systemd
-    without an explicit DBUS_SESSION_BUS_ADDRESS, and over plain ssh."""
+    without an explicit DBUS_SESSION_BUS_ADDRESS, and over plain ssh.
+    """
     return bool(shutil.which("notify-send")) and bool(
-        os.environ.get("DBUS_SESSION_BUS_ADDRESS")
-        or os.path.exists(f"/run/user/{os.getuid()}/bus")
+        os.environ.get("DBUS_SESSION_BUS_ADDRESS") or os.path.exists(f"/run/user/{os.getuid()}/bus")
     )
 
 
@@ -43,11 +43,15 @@ def notify(summary: str, body: str, *, urgent: bool = False, timeout_ms: int = 1
         return False
     args = [
         "notify-send",
-        "--app-name", APP_NAME,
-        "--icon", ICON_URGENT if urgent else ICON,
-        "--urgency", "critical" if urgent else "normal",
+        "--app-name",
+        APP_NAME,
+        "--icon",
+        ICON_URGENT if urgent else ICON,
+        "--urgency",
+        "critical" if urgent else "normal",
         # Critical notifications ignore timeouts by spec; harmless to pass.
-        "--expire-time", str(timeout_ms),
+        "--expire-time",
+        str(timeout_ms),
         summary,
         # notify-send renders a small HTML subset, so a body containing < or &
         # would silently vanish or mangle the rest of the message.
@@ -76,16 +80,19 @@ def ask(summary: str, body: str, options: list[str], *, timeout_ms: int = 0) -> 
     """
     if not available() or not options:
         return None
-    args = ["notify-send", "--app-name", APP_NAME, "--icon", ICON_URGENT,
-            "--urgency", "critical"]
+    args = ["notify-send", "--app-name", APP_NAME, "--icon", ICON_URGENT, "--urgency", "critical"]
     if timeout_ms:
         args += ["--expire-time", str(timeout_ms)]
     for o in options:
         args += ["--action", f"{o}={o}"]
     args += [summary, _clip(html.escape(body), 700)]
     try:
-        p = subprocess.run(args, capture_output=True, text=True,
-                           timeout=(timeout_ms / 1000 + 30) if timeout_ms else None)
+        p = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=(timeout_ms / 1000 + 30) if timeout_ms else None,
+        )
     except Exception:
         return None
     choice = (p.stdout or "").strip()
@@ -113,7 +120,7 @@ def _headline(body: str) -> tuple[str, str]:
         if _NOISE.match(ln):
             detail += 1
         elif detail:
-            break                       # prose after the dump is a new thought; leave it
+            break  # prose after the dump is a new thought; leave it
         else:
             lead.append(ln)
     head = " ".join(" ".join(lead).split())

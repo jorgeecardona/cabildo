@@ -21,12 +21,17 @@ def read_input() -> dict:
 
 def emit_context(event_name: str, text: str | None) -> None:
     """Emit additionalContext for an injecting hook (UserPromptSubmit /
-    SessionStart / PostToolUse). Silence (no output) when text is falsy."""
+    SessionStart / PostToolUse). Silence (no output) when text is falsy.
+    """
     if not text:
         return
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": event_name,
-            "additionalContext": text,
-        }
-    }))
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": event_name,
+                    "additionalContext": text,
+                }
+            }
+        )
+    )

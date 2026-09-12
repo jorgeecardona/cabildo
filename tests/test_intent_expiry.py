@@ -21,11 +21,16 @@ def queue(conn, *, age_h: float, action: str = "land", session: str = "s1") -> i
     """An intent that was queued `age_h` hours ago."""
     make_session(conn, session, handle="worker")
     intent_id = store.request_intent(
-        conn, from_session=session, from_handle="worker", project=None,
-        action=action, params={"cwd": "/nope", "target": "main"},
+        conn,
+        from_session=session,
+        from_handle="worker",
+        project=None,
+        action=action,
+        params={"cwd": "/nope", "target": "main"},
     )
-    conn.execute("UPDATE intents SET created_at=? WHERE id=?",
-                 (time.time() - age_h * 3600, intent_id))
+    conn.execute(
+        "UPDATE intents SET created_at=? WHERE id=?", (time.time() - age_h * 3600, intent_id)
+    )
     conn.commit()
     return intent_id
 
@@ -51,7 +56,7 @@ def test_a_stale_intent_is_refused_not_run(conn, monkeypatch):
     row = store.list_intents(conn)[0]
     assert row["status"] == "expired"
     assert row["result"]["expired"] is True
-    assert "190" in row["result"]["reason"]     # says how old, so it's arguable
+    assert "190" in row["result"]["reason"]  # says how old, so it's arguable
     assert "ceiling" in row["result"]["reason"]
 
 
@@ -79,13 +84,13 @@ def test_the_ceiling_can_be_switched_off(conn, monkeypatch):
 def test_expiry_is_reported_to_the_requester_but_not_urgent(conn):
     """A failed land blocks its agent, so it earns an urgent DM — which also pops
     a desktop notification for the human. A week-old request nobody is waiting on
-    must not buy itself a popup."""
+    must not buy itself a popup.
+    """
     queue(conn, age_h=100, session="s1")
 
     drain(conn, ctx(max_intent_age=2 * 3600))
 
-    msgs = [m for m in store.history(conn, limit=10)
-            if m["from_session"] == daemon.DAEMON_SESSION]
+    msgs = [m for m in store.history(conn, limit=10) if m["from_session"] == daemon.DAEMON_SESSION]
     assert len(msgs) == 1
     assert msgs[0]["to_session"] == "s1"
     assert msgs[0]["urgent"] == 0
@@ -94,14 +99,14 @@ def test_expiry_is_reported_to_the_requester_but_not_urgent(conn):
 
 def test_failures_are_still_urgent(conn, monkeypatch):
     """The change to urgency must not have quietly muted real failures."""
-    monkeypatch.setitem(actions.ACTIONS, "land",
-                        lambda p, c: {"ok": False, "reason": "push rejected"})
+    monkeypatch.setitem(
+        actions.ACTIONS, "land", lambda p, c: {"ok": False, "reason": "push rejected"}
+    )
     queue(conn, age_h=0.1, session="s1")
 
     drain(conn, ctx(max_intent_age=2 * 3600))
 
-    msgs = [m for m in store.history(conn, limit=10)
-            if m["from_session"] == daemon.DAEMON_SESSION]
+    msgs = [m for m in store.history(conn, limit=10) if m["from_session"] == daemon.DAEMON_SESSION]
     assert msgs[0]["urgent"] == 1
 
 
@@ -116,10 +121,11 @@ def test_count_pending_intents_splits_the_backlog(conn):
 
 def test_an_expired_intent_leaves_the_queue(conn):
     """It must not come back on the next poll: a queue that never drains is
-    exactly the failure this replaced."""
+    exactly the failure this replaced.
+    """
     queue(conn, age_h=190)
     c = ctx(max_intent_age=2 * 3600)
     drain(conn, c)
     assert store.count_pending_intents(conn) == 0
-    drain(conn, c)      # second pass finds nothing
+    drain(conn, c)  # second pass finds nothing
     assert store.count_pending_intents(conn) == 0

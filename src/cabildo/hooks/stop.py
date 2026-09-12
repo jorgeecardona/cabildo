@@ -27,8 +27,7 @@ def main() -> None:
     if data.get("stop_hook_active"):
         return
 
-    from cabildo import store
-    from cabildo import notify
+    from cabildo import notify, store
 
     conn = store.connect()
     try:
@@ -39,4 +38,3 @@ def main() -> None:
     if not reason:
         return
     print(json.dumps({"decision": "block", "reason": reason}))
-

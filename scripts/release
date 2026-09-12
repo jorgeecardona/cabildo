@@ -1,7 +1,8 @@
 #!/bin/sh
-# Release driver, run by the CI job on the default branch. Idempotent:
+# Release driver, invoked by the `release` moon task (deps `ci`) which the CI job runs
+# on the default branch. Idempotent:
 #   - if pyproject's version is already on PyPI -> no-op (safe on every main pipeline)
-#   - else build and publish it to PyPI via OIDC (scripts/pypi-publish)
+#   - else publish it to PyPI via OIDC (scripts/pypi-publish) -- this IS the release
 # Publishing needs no token (OIDC Trusted Publishing); there is no git tag step.
 set -e
 cd "$(CDPATH= cd "$(dirname "$0")/.." && pwd)"
@@ -9,8 +10,7 @@ cd "$(CDPATH= cd "$(dirname "$0")/.." && pwd)"
 V="$(grep -E '^version = "' pyproject.toml | head -1 | cut -d'"' -f2)"
 [ -n "$V" ] || { echo "release: could not read version from pyproject.toml" >&2; exit 1; }
 
-# Already on PyPI? Then this version is released; nothing to do. A 404 (project
-# does not exist yet) reads as "not released" -- the first publish claims the name.
+# Already on PyPI? Then this version is released; nothing to do.
 if uv run python - "$V" <<'PY'
 import json, sys, urllib.request, urllib.error
 version = sys.argv[1]
@@ -26,6 +26,4 @@ then
 fi
 
 echo "release: publishing cabildo $V to PyPI"
-rm -rf dist
-uv build --out-dir dist
 sh scripts/pypi-publish

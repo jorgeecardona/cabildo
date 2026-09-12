@@ -40,13 +40,13 @@ ORPHAN_KEY = "orphans"
 
 @dataclass(frozen=True)
 class Thresholds:
-    warn_pct: float = 15.0          # MemAvailable below this → warn
-    critical_pct: float = 7.0       # …and below this → critical
-    clear_margin: float = 5.0       # points of recovery required to relax a level
-    psi_warn: float = 10.0          # full avg60: a tenth of the minute fully stalled
+    warn_pct: float = 15.0  # MemAvailable below this → warn
+    critical_pct: float = 7.0  # …and below this → critical
+    clear_margin: float = 5.0  # points of recovery required to relax a level
+    psi_warn: float = 10.0  # full avg60: a tenth of the minute fully stalled
     psi_critical: float = 25.0
-    orphan_rss_mb: int = 250        # per-process floor: below it, not worth a word
-    orphan_total_mb: int = 750      # total floor: one stray 300 MB process is life
+    orphan_rss_mb: int = 250  # per-process floor: below it, not worth a word
+    orphan_total_mb: int = 750  # total floor: one stray 300 MB process is life
 
 
 def _gb(kb: int) -> str:
@@ -70,7 +70,8 @@ def level_for(snap: procs.Snapshot, th: Thresholds, *, sticky: str | None = None
     `sticky` is the level currently raised. Passing it applies the hysteresis
     margin to every threshold at or below it, so getting *out* of a level costs
     more than getting into it. PSI is exempt: it is already a 60-second average,
-    so it does not flap and does not need damping."""
+    so it does not flap and does not need damping.
+    """
     mem, stall = snap.memory, snap.stall_pct
     if not mem.ok:
         return None
@@ -118,20 +119,26 @@ def mem_payload(snap: procs.Snapshot, conn, *, limit: int = 3) -> dict:
 
     Computed once, by the producer, for the whole fleet — the alternative is
     every session scanning /proc on every tool call to answer a question the
-    daemon already answered. Each hook then does one dict lookup on its own id."""
+    daemon already answered. Each hook then does one dict lookup on its own id.
+    """
     out: dict[str, dict] = {}
     for sid, plist in snap.by_session().items():
         plist = sorted(plist, key=lambda p: p.rss_kb, reverse=True)
         out[sid] = {
             "rss_mb": sum(p.rss_kb for p in plist) // 1024,
             "count": len(plist),
-            "procs": [{"pid": p.pid, "rss_mb": p.rss_mb, "what": p.label()}
-                      for p in plist[:limit]],
+            "procs": [{"pid": p.pid, "rss_mb": p.rss_mb, "what": p.label()} for p in plist[:limit]],
         }
-    top = [{"rss_mb": p.rss_mb, "what": p.label(40),
+    top = [
+        {
+            "rss_mb": p.rss_mb,
+            "what": p.label(40),
             "who": store.display_name(store.get_session(conn, p.session_id), p.session_id)
-                   if p.session_id else None}
-           for p in snap.procs[:5]]
+            if p.session_id
+            else None,
+        }
+        for p in snap.procs[:5]
+    ]
     return {
         "by_session": out,
         "top": top,
@@ -144,10 +151,20 @@ def mem_payload(snap: procs.Snapshot, conn, *, limit: int = 3) -> dict:
 def orphan_payload(loose: list[procs.Proc], conn, *, limit: int = 6) -> dict:
     rows = []
     for p in sorted(loose, key=lambda p: p.rss_kb, reverse=True)[:limit]:
-        who = (store.display_name(store.get_session(conn, p.session_id), p.session_id)
-               if p.session_id else f"pid {p.claude_pid}")
-        rows.append({"pid": p.pid, "rss_mb": p.rss_mb, "what": p.label(50),
-                     "who": who, "age": _mins(_age(p))})
+        who = (
+            store.display_name(store.get_session(conn, p.session_id), p.session_id)
+            if p.session_id
+            else f"pid {p.claude_pid}"
+        )
+        rows.append(
+            {
+                "pid": p.pid,
+                "rss_mb": p.rss_mb,
+                "what": p.label(50),
+                "who": who,
+                "age": _mins(_age(p)),
+            }
+        )
     return {
         "procs": rows,
         "count": len(loose),
@@ -162,10 +179,12 @@ def _age(p: procs.Proc) -> float:
 # --------------------------------------------------------------------------- #
 # The sweep
 # --------------------------------------------------------------------------- #
-def sweep(conn, th: Thresholds | None = None, *, source: str | None = None,
-          min_rss_mb: int = 100) -> list[str]:
+def sweep(
+    conn, th: Thresholds | None = None, *, source: str | None = None, min_rss_mb: int = 100
+) -> list[str]:
     """Sample the machine and reconcile both conditions. Returns log lines for
-    whatever was actually news — an unchanged condition is refreshed silently."""
+    whatever was actually news — an unchanged condition is refreshed silently.
+    """
     th = th or Thresholds()
     source = source or f"daemon:{store.hostname()}"
 
@@ -193,28 +212,41 @@ def _reconcile_mem(conn, snap: procs.Snapshot, th: Thresholds, source: str) -> l
     level = level_for(snap, th, sticky=cur["level"] if cur else None)
     if level is None:
         if cur and store.clear_condition(
-            conn, key=MEM_KEY, source=source,
+            conn,
+            key=MEM_KEY,
+            source=source,
             headline=f"memory recovered — {snap.memory.avail_pct:.0f}% RAM available again",
         ):
             return [f"✅ mem cleared ({snap.memory.avail_pct:.0f}% available)"]
         return []
     res = store.raise_condition(
-        conn, key=MEM_KEY, level=level, headline=mem_headline(snap),
-        advice=ADVICE.get(level), data=mem_payload(snap, conn), source=source,
+        conn,
+        key=MEM_KEY,
+        level=level,
+        headline=mem_headline(snap),
+        advice=ADVICE.get(level),
+        data=mem_payload(snap, conn),
+        source=source,
     )
     return [f"⚠ mem {level}: {res['headline']}"] if res["announced"] else []
 
 
-def _reconcile_orphans(conn, snap: procs.Snapshot, th: Thresholds, source: str,
-                       live_ids: set[str]) -> list[str]:
-    loose = [p for p in procs.loose(snap, live_ids)
-             if p.rss_mb >= th.orphan_rss_mb and not procs.is_self(p)]
+def _reconcile_orphans(
+    conn, snap: procs.Snapshot, th: Thresholds, source: str, live_ids: set[str]
+) -> list[str]:
+    loose = [
+        p
+        for p in procs.loose(snap, live_ids)
+        if p.rss_mb >= th.orphan_rss_mb and not procs.is_self(p)
+    ]
     total_mb = sum(p.rss_mb for p in loose)
     cur = _current(conn, ORPHAN_KEY)
 
     if not loose or total_mb < th.orphan_total_mb:
         if cur and store.clear_condition(
-            conn, key=ORPHAN_KEY, source=source,
+            conn,
+            key=ORPHAN_KEY,
+            source=source,
             headline="the leftover processes are gone",
         ):
             return ["✅ orphans cleared"]
@@ -223,16 +255,26 @@ def _reconcile_orphans(conn, snap: procs.Snapshot, th: Thresholds, source: str,
     # Level is about waste, not urgency: leftovers only become critical when
     # they are also a meaningful slice of a machine that is already short.
     level = "warn"
-    if snap.memory.ok and total_mb * 1024 > snap.memory.total_kb * 0.15 \
-            and snap.memory.avail_pct <= th.warn_pct:
+    if (
+        snap.memory.ok
+        and total_mb * 1024 > snap.memory.total_kb * 0.15
+        and snap.memory.avail_pct <= th.warn_pct
+    ):
         level = "critical"
     res = store.raise_condition(
-        conn, key=ORPHAN_KEY, level=level,
-        headline=(f"{len(loose)} process(es) holding {total_mb / 1024:.1f}G were left "
-                  f"behind by agents that are gone"),
-        advice=("Nobody is waiting on these — the sessions that started them ended. "
-                "`cabildo mem --loose` lists them with pids; kill the ones you "
-                "recognize as yours. Do not kill what you cannot account for."),
-        data=orphan_payload(loose, conn), source=source,
+        conn,
+        key=ORPHAN_KEY,
+        level=level,
+        headline=(
+            f"{len(loose)} process(es) holding {total_mb / 1024:.1f}G were left "
+            f"behind by agents that are gone"
+        ),
+        advice=(
+            "Nobody is waiting on these — the sessions that started them ended. "
+            "`cabildo mem --loose` lists them with pids; kill the ones you "
+            "recognize as yours. Do not kill what you cannot account for."
+        ),
+        data=orphan_payload(loose, conn),
+        source=source,
     )
     return [f"🧟 orphans {level}: {res['headline']}"] if res["announced"] else []

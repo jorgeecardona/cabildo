@@ -83,8 +83,8 @@ class IssueFormatError(ValueError):
 class Status(enum.StrEnum):
     OPEN = "open"
     IN_PROGRESS = "in-progress"
-    BLOCKED = "blocked"          # waiting on a decision, a credential, or another issue
-    DONE = "done"                # keeps the file; requires fixed_in
+    BLOCKED = "blocked"  # waiting on a decision, a credential, or another issue
+    DONE = "done"  # keeps the file; requires fixed_in
 
 
 #: Core front matter, in render order. Extras follow, in the order the file had them.
@@ -108,8 +108,8 @@ class Field:
 
     name: str
     required: bool = False
-    values: tuple[str, ...] = ()      # empty means free text
-    is_list: bool = False             # a YAML block list rather than a scalar
+    values: tuple[str, ...] = ()  # empty means free text
+    is_list: bool = False  # a YAML block list rather than a scalar
     #: a file, relative to the issue folder, this field's value must appear in — and which must
     #: link back to the issue. One direction is not enough: a register that names a gap but does
     #: not point at the task is how the same gap gets found four times and fixed zero.
@@ -136,19 +136,21 @@ class Field:
             # four attempts trying comma, comma-space and space as separators, then gave up and
             # filed with one tag instead of the four it meant — because nothing told it that a
             # delimited string was never going to be the answer.
-            return [f"`{self.name}` is a list — pass a list of values, not the delimited "
-                    f"string {value!r}"]
+            return [
+                f"`{self.name}` is a list — pass a list of values, not the delimited "
+                f"string {value!r}"
+            ]
         out = []
         if self.values:
             out += [
                 f"unknown {self.name} {v!r} — one of {', '.join(self.values)}"
-                for v in got if v not in self.values
+                for v in got
+                if v not in self.values
             ]
         rx = self.regex
         if rx is not None:
             out += [
-                f"{self.name} {v!r} does not match {self.pattern}"
-                for v in got if not rx.match(v)
+                f"{self.name} {v!r} does not match {self.pattern}" for v in got if not rx.match(v)
             ]
         return out
 
@@ -164,7 +166,7 @@ class Config:
     areas: tuple[str, ...] = ()
     fields: Mapping[str, Field] = dataclasses.field(default_factory=dict)
     index: bool = True
-    date_style: str = "DMY"          # DMY → 03-08-2026-slug.md; YMD → 2026-08-03-slug.md
+    date_style: str = "DMY"  # DMY → 03-08-2026-slug.md; YMD → 2026-08-03-slug.md
     #: groups where at least one member must be present. For "name the register entry, or say why
     #: there is none" — an either/or that `required` cannot express, and where the point is that
     #: silence is not an allowed answer.
@@ -220,7 +222,7 @@ class Config:
         field = self.fields.get(name)
         return field if field is not None and field.values else None
 
-    def rank_key(self, issue: "Issue") -> tuple:
+    def rank_key(self, issue: Issue) -> tuple:
         """Sort order for the board: priority first, then the folder's own area order, then age.
 
         Priority dominates on purpose. A P0 in the area someone happened to list last is still the
@@ -237,7 +239,9 @@ class Config:
 
     @property
     def filename_re(self) -> re.Pattern[str]:
-        head = r"(\d{2})-(\d{2})-(\d{4})" if self.date_style == "DMY" else r"(\d{4})-(\d{2})-(\d{2})"
+        head = (
+            r"(\d{2})-(\d{2})-(\d{4})" if self.date_style == "DMY" else r"(\d{4})-(\d{2})-(\d{2})"
+        )
         return re.compile(rf"^{head}-([a-z0-9]+(?:-[a-z0-9]+)*)\.md$")
 
     def filename(self, filed: str, slug: str) -> str:
@@ -275,9 +279,7 @@ def load_config(folder: pathlib.Path) -> Config:
     style = str(raw.get("date_style", "DMY")).upper()
     if style not in ("DMY", "YMD"):
         raise IssueFormatError(f"{path}: date_style must be DMY or YMD, not {style!r}")
-    groups = tuple(
-        tuple(g) for g in (raw.get("require_one_of", ()) or ()) if g
-    )
+    groups = tuple(tuple(g) for g in (raw.get("require_one_of", ()) or ()) if g)
     order = tuple(raw.get("field_order", ()) or ())
     missing = [k for k in ("title", "status", "area") if order and k not in order]
     if missing:
@@ -371,7 +373,9 @@ def _quote(value: str) -> str:
 
 def _split_front(text: str, path: pathlib.Path) -> tuple[str, str]:
     if not text.startswith("---\n"):
-        raise IssueFormatError(f"{path.name}: no YAML front matter — the file must start with `---`")
+        raise IssueFormatError(
+            f"{path.name}: no YAML front matter — the file must start with `---`"
+        )
     parts = text.split("---\n", 2)
     if len(parts) != 3:
         raise IssueFormatError(f"{path.name}: unterminated front matter")
@@ -436,10 +440,7 @@ def parse(text: str, path: pathlib.Path, config: Config = DEFAULT_CONFIG) -> Iss
 
     fixed_in = fields.get("fixed_in")
     owner = fields.get("owner")
-    extra = {
-        k: v for k, v in fields.items()
-        if k not in CORE_ORDER and v is not None
-    }
+    extra = {k: v for k, v in fields.items() if k not in CORE_ORDER and v is not None}
     return Issue(
         path=path,
         title=required("title"),
@@ -489,7 +490,8 @@ def render(issue: Issue, config: Config = DEFAULT_CONFIG) -> str:
             if value is None or value == ():
                 continue
             lines += (
-                _render_value(key, value) if isinstance(value, tuple)
+                _render_value(key, value)
+                if isinstance(value, tuple)
                 else [f"{key}: {_quote(str(value))}"]
             )
         lines.append("---")
@@ -528,7 +530,8 @@ def load_all(
     folder: pathlib.Path, config: Config | None = None
 ) -> tuple[tuple[Issue, ...], tuple[Problem, ...]]:
     """Every issue in the folder, plus the files that could not be parsed. Returning both means one
-    malformed file never hides the rest of the register."""
+    malformed file never hides the rest of the register.
+    """
     config = load_config(folder) if config is None else config
     issues: list[Issue] = []
     problems: list[Problem] = []
@@ -548,7 +551,7 @@ def load_all(
 @dataclasses.dataclass(frozen=True)
 class Waiting:
     issue: Issue
-    on: tuple[str, ...]      # slugs of open issues blocking it
+    on: tuple[str, ...]  # slugs of open issues blocking it
     reason: str
 
 
@@ -650,24 +653,30 @@ class _Git:
             try:
                 self._cache[key] = fn()
             except (OSError, subprocess.SubprocessError):
-                self._cache[key] = True      # cannot tell → do not accuse
+                self._cache[key] = True  # cannot tell → do not accuse
         return self._cache[key]
 
     def is_commit(self, sha: str) -> bool:
-        return self._ask("commit", sha,
-                         lambda: self._run("cat-file", "-t", sha).stdout.strip() == "commit")
+        return self._ask(
+            "commit", sha, lambda: self._run("cat-file", "-t", sha).stdout.strip() == "commit"
+        )
 
     def on_any_branch(self, sha: str) -> bool:
-        return self._ask("branch", sha,
-                         lambda: bool(self._run("branch", "--contains", sha).stdout.strip()))
+        return self._ask(
+            "branch", sha, lambda: bool(self._run("branch", "--contains", sha).stdout.strip())
+        )
 
     def is_ancestor(self, sha: str, branch: str) -> bool:
-        return self._ask(f"anc:{branch}", sha,
-                         lambda: self._run("merge-base", "--is-ancestor", sha, branch).returncode == 0)
+        return self._ask(
+            f"anc:{branch}",
+            sha,
+            lambda: self._run("merge-base", "--is-ancestor", sha, branch).returncode == 0,
+        )
 
     def has_ref(self, ref: str) -> bool:
-        return self._ask("ref", ref,
-                         lambda: self._run("rev-parse", "--verify", "--quiet", ref).returncode == 0)
+        return self._ask(
+            "ref", ref, lambda: self._run("rev-parse", "--verify", "--quiet", ref).returncode == 0
+        )
 
 
 def check(folder: pathlib.Path, config: Config | None = None) -> list[Problem]:
@@ -701,13 +710,19 @@ def check(folder: pathlib.Path, config: Config | None = None) -> list[Problem]:
             )
         if issue.status is Status.DONE and not issue.fixed_in:
             problems.append(
-                Problem(p, "status is `done` with no `fixed_in` — name the sha that landed on the "
-                           "mainline, or the folder stops being evidence of anything")
+                Problem(
+                    p,
+                    "status is `done` with no `fixed_in` — name the sha that landed on the "
+                    "mainline, or the folder stops being evidence of anything",
+                )
             )
         if issue.status is not Status.DONE and issue.fixed_in:
             problems.append(
-                Problem(p, f"`fixed_in: {issue.fixed_in}` on an issue that is `{issue.status}` — "
-                           f"either it landed and this is done, or the sha does not belong here")
+                Problem(
+                    p,
+                    f"`fixed_in: {issue.fixed_in}` on an issue that is `{issue.status}` — "
+                    f"either it landed and this is done, or the sha does not belong here",
+                )
             )
         problems.extend(_fixed_in_problems(issue, config, git))
         problems.extend(_section_problems(issue, config))
@@ -715,9 +730,12 @@ def check(folder: pathlib.Path, config: Config | None = None) -> list[Problem]:
         if config.field_order:
             expected = [k for k in config.field_order if k in issue.order]
             if list(issue.order) != expected and issue.order:
-                problems.append(Problem(
-                    p, f"front matter order {list(issue.order)} != {expected}",
-                ))
+                problems.append(
+                    Problem(
+                        p,
+                        f"front matter order {list(issue.order)} != {expected}",
+                    )
+                )
             if config.strict_fields:
                 for key in issue.order:
                     if key not in config.field_order:
@@ -726,12 +744,17 @@ def check(folder: pathlib.Path, config: Config | None = None) -> list[Problem]:
             problems.append(Problem(p, "in-progress with no owner — say who is doing it"))
         if issue.status is Status.BLOCKED and not issue.owner and not issue.blocked_by:
             problems.append(
-                Problem(p, "blocked with neither an owner nor a `blocked_by` — name who can "
-                           "unblock it or which issue it waits on. Silence reads as an oversight")
+                Problem(
+                    p,
+                    "blocked with neither an owner nor a `blocked_by` — name who can "
+                    "unblock it or which issue it waits on. Silence reads as an oversight",
+                )
             )
         for slug in issue.blocked_by:
             if slug not in slugs:
-                problems.append(Problem(p, f"blocked_by names {slug!r}, which is not an issue here"))
+                problems.append(
+                    Problem(p, f"blocked_by names {slug!r}, which is not an issue here")
+                )
         if issue.status is Status.DONE and any(s in open_slugs for s in issue.blocked_by):
             still = ", ".join(s for s in issue.blocked_by if s in open_slugs)
             problems.append(Problem(p, f"done, but still blocked_by open work: {still}"))
@@ -741,11 +764,14 @@ def check(folder: pathlib.Path, config: Config | None = None) -> list[Problem]:
                 problems.append(Problem(p, message))
         for group in config.require_one_of:
             if not any(issue.extra.get(k) for k in group):
-                problems.append(Problem(
-                    p, f"none of {', '.join('`' + k + '`' for k in group)} is set — say which one "
-                       f"applies, or why none does. Silence reads as an oversight and gets "
-                       f"re-litigated",
-                ))
+                problems.append(
+                    Problem(
+                        p,
+                        f"none of {', '.join('`' + k + '`' for k in group)} is set — say which one "
+                        f"applies, or why none does. Silence reads as an oversight and gets "
+                        f"re-litigated",
+                    )
+                )
         problems.extend(_broken_links(issue, folder))
 
     problems.extend(_cycles(issues))
@@ -754,9 +780,7 @@ def check(folder: pathlib.Path, config: Config | None = None) -> list[Problem]:
     return problems
 
 
-def _crossrefs(
-    folder: pathlib.Path, issues: tuple[Issue, ...], config: Config
-) -> list[Problem]:
+def _crossrefs(folder: pathlib.Path, issues: tuple[Issue, ...], config: Config) -> list[Problem]:
     """Enforce a field's two-way link with another document.
 
     Some registers are the record of *what is wrong*, and the issue folder holds one entry broken
@@ -769,10 +793,12 @@ def _crossrefs(
             continue
         target = (folder / field.crossref).resolve()
         if not target.exists():
-            out.append(Problem(
-                folder / CONFIG_NAME,
-                f"fields.{field.name}.crossref points at {field.crossref}, which does not exist",
-            ))
+            out.append(
+                Problem(
+                    folder / CONFIG_NAME,
+                    f"fields.{field.name}.crossref points at {field.crossref}, which does not exist",
+                )
+            )
             continue
         text = target.read_text()
         for issue in issues:
@@ -780,15 +806,17 @@ def _crossrefs(
             if not isinstance(value, str) or not value:
                 continue
             if not re.search(rf"\b{re.escape(value)}\b", text):
-                out.append(Problem(
-                    issue.path, f"{field.name} {value} does not exist in {target.name}"
-                ))
+                out.append(
+                    Problem(issue.path, f"{field.name} {value} does not exist in {target.name}")
+                )
             elif issue.path.name not in text:
-                out.append(Problem(
-                    issue.path,
-                    f"{target.name} does not link back to this file — without the back-link the "
-                    f"task is invisible from the register that is supposed to track it",
-                ))
+                out.append(
+                    Problem(
+                        issue.path,
+                        f"{target.name} does not link back to this file — without the back-link the "
+                        f"task is invisible from the register that is supposed to track it",
+                    )
+                )
     return out
 
 
@@ -808,18 +836,20 @@ def _fixed_in_problems(issue: Issue, config: Config, git: _Git) -> list[Problem]
     if not git.is_commit(sha):
         return [Problem(issue.path, f"fixed_in {sha} is not a commit in this repo")]
     if not git.has_ref(branch):
-        return []          # no such branch here (a fresh clone, a fork) — no opinion
+        return []  # no such branch here (a fresh clone, a fork) — no opinion
     if not git.is_ancestor(sha, branch):
-        return [Problem(
-            issue.path,
-            f"fixed_in {sha} is not on {branch} — record the sha that LANDED, not the worktree "
-            f"one; the land path re-commits, and a worktree sha resolves only until it is pruned",
-        )]
+        return [
+            Problem(
+                issue.path,
+                f"fixed_in {sha} is not on {branch} — record the sha that LANDED, not the worktree "
+                f"one; the land path re-commits, and a worktree sha resolves only until it is pruned",
+            )
+        ]
     return []
 
 
 def _section_problems(issue: Issue, config: Config) -> list[Problem]:
-    """"Define done" is a rule every one of these folders states. This is the enforced version.
+    """ "Define done" is a rule every one of these folders states. This is the enforced version.
 
     The exemption is real work, not a loophole: a hand-off records tree state and resume order for
     work already in flight, so it has no acceptance criteria of its own — it points at the issues
@@ -831,7 +861,7 @@ def _section_problems(issue: Issue, config: Config) -> list[Problem]:
         key, _, value = config.sections_exempt.partition("=")
         if issue.extra.get(key.strip()) == value.strip():
             return []
-    headings = re.findall(r"^##+\s*(.+)$", issue.body, re.M)
+    headings = re.findall(r"^##+\s*(.+)$", issue.body, re.MULTILINE)
     out = []
     for wanted in config.require_sections:
         rx = re.compile(wanted)
@@ -842,23 +872,27 @@ def _section_problems(issue: Issue, config: Config) -> list[Problem]:
 
 def _body_sha_problems(issue: Issue, config: Config, git: _Git) -> list[Problem]:
     """A cited commit that is on no branch dies at the next gc, and the citation reads as evidence
-    right up until someone tries to follow it."""
+    right up until someone tries to follow it.
+    """
     if not config.check_body_shas or not git.usable:
         return []
     out = []
     for sha in sorted(set(_BODY_SHA_RE.findall(issue.body))):
         if git.is_commit(sha) and not git.on_any_branch(sha):
-            out.append(Problem(
-                issue.path,
-                f"cites {sha}, which is on no branch — it dies at the next gc, and until then it "
-                f"reads as evidence",
-            ))
+            out.append(
+                Problem(
+                    issue.path,
+                    f"cites {sha}, which is on no branch — it dies at the next gc, and until then it "
+                    f"reads as evidence",
+                )
+            )
     return out
 
 
 def _cycles(issues: Iterable[Issue]) -> list[Problem]:
     """A blocked_by loop means nothing in it is ever ready, and the board goes quietly empty rather
-    than loudly wrong. Cheap to detect, invisible otherwise."""
+    than loudly wrong. Cheap to detect, invisible otherwise.
+    """
     graph = {i.slug: tuple(i.blocked_by) for i in issues}
     paths = {i.slug: i.path for i in issues}
     state: dict[str, int] = {}
@@ -868,8 +902,10 @@ def _cycles(issues: Iterable[Issue]) -> list[Problem]:
         if state.get(node) == 2:
             return
         if state.get(node) == 1:
-            loop = " → ".join(trail[trail.index(node):] + (node,))
-            out.append(Problem(paths[node], f"blocked_by cycle: {loop} — nothing in it can be ready"))
+            loop = " → ".join(trail[trail.index(node) :] + (node,))
+            out.append(
+                Problem(paths[node], f"blocked_by cycle: {loop} — nothing in it can be ready")
+            )
             return
         state[node] = 1
         for nxt in graph.get(node, ()):
@@ -905,8 +941,11 @@ def _index_problems(
         return [Problem(readme, f"README has no generated-index region ({INDEX_BEGIN})")]
     if _replace_region(text, _index_table(issues, config)) != text:
         return [
-            Problem(readme, "the generated index is stale — run `cabildo issues reindex`. A "
-                            "follow-up nobody can see is what this folder exists to prevent")
+            Problem(
+                readme,
+                "the generated index is stale — run `cabildo issues reindex`. A "
+                "follow-up nobody can see is what this folder exists to prevent",
+            )
         ]
     return []
 
@@ -924,8 +963,13 @@ def _index_table(issues: tuple[Issue, ...], config: Config = DEFAULT_CONFIG) -> 
     live = [i for i in issues if i.open]
     if not live:
         return "_No open follow-ups._"
-    heads = ["Issue", "Area", *(f.capitalize() for f in config.index_fields),
-             "Status", "Waiting on"]
+    heads = [
+        "Issue",
+        "Area",
+        *(f.capitalize() for f in config.index_fields),
+        "Status",
+        "Waiting on",
+    ]
     rows = ["| " + " | ".join(heads) + " |", "|" + "---|" * len(heads)]
     open_slugs = {i.slug for i in live}
     for issue in sorted(live, key=lambda i: (i.area, i.path.name)):
@@ -933,10 +977,17 @@ def _index_table(issues: tuple[Issue, ...], config: Config = DEFAULT_CONFIG) -> 
         blockers = ", ".join(s for s in issue.blocked_by if s in open_slugs) or "—"
         extras = [_cell(issue.extra.get(f)) for f in config.index_fields]
         rows.append(
-            "| " + " | ".join([
-                f"[{issue.title}]({issue.path.name})", issue.area, *extras,
-                f"{issue.status}{owner}", blockers,
-            ]) + " |"
+            "| "
+            + " | ".join(
+                [
+                    f"[{issue.title}]({issue.path.name})",
+                    issue.area,
+                    *extras,
+                    f"{issue.status}{owner}",
+                    blockers,
+                ]
+            )
+            + " |"
         )
     done = [i for i in issues if not i.open]
     if config.index_group_by:
@@ -952,7 +1003,8 @@ def _index_table(issues: tuple[Issue, ...], config: Config = DEFAULT_CONFIG) -> 
 
     counts = ", ".join(
         f"{sum(1 for i in live if i.status is s)} {s}"
-        for s in Status if any(i.status is s for i in live)
+        for s in Status
+        if any(i.status is s for i in live)
     )
     tail = f"{len(live)} open — {counts}" + (f"; {len(done)} done" if done else "")
     rows += ["", f"_{tail}. Generated; edit the files, then `cabildo issues reindex`._"]
@@ -961,16 +1013,19 @@ def _index_table(issues: tuple[Issue, ...], config: Config = DEFAULT_CONFIG) -> 
 
 def _index_groups(live: list[Issue], key: str) -> str:
     """Open work grouped by a list field. Only groups of two or more: a "group" of one is the flat
-    table again with extra steps, and it buries the clusters that are the point."""
+    table again with extra steps, and it buries the clusters that are the point.
+    """
     index: dict[str, list[Issue]] = {}
     for issue in live:
         value = issue.extra.get(key)
-        for item in (value if isinstance(value, tuple) else (value,) if value else ()):
+        for item in value if isinstance(value, tuple) else (value,) if value else ():
             index.setdefault(str(item), []).append(issue)
     shared = {k: v for k, v in index.items() if len(v) > 1}
     lines = [
         f"- **`{k}`** ({len(shared[k])}) — "
-        + ", ".join(f"[{i.slug}]({i.path.name})" for i in sorted(shared[k], key=lambda i: i.path.name))
+        + ", ".join(
+            f"[{i.slug}]({i.path.name})" for i in sorted(shared[k], key=lambda i: i.path.name)
+        )
         for k in sorted(shared, key=lambda k: (-len(shared[k]), k))
     ]
     singles = sorted(k for k in index if len(index[k]) == 1)
@@ -1004,7 +1059,8 @@ def reindex(folder: pathlib.Path, config: Config | None = None) -> None:
 
 def _touch_index(folder: pathlib.Path, config: Config) -> None:
     """Keep the index true after any write. Never let a failure here lose the write itself — the
-    file is the store, and the index is a convenience generated from it."""
+    file is the store, and the index is a convenience generated from it.
+    """
     try:
         reindex(folder, config)
     except (IssueFormatError, OSError):
@@ -1021,7 +1077,8 @@ def slugify(title: str) -> str:
 
 def resolve(folder: pathlib.Path, name: str) -> pathlib.Path:
     """A filename, or any unambiguous fragment of one. Ambiguity is an error rather than a guess:
-    picking the first match is how an agent edits an issue nobody asked it to touch."""
+    picking the first match is how an agent edits an issue nobody asked it to touch.
+    """
     if name.endswith(".md") and (folder / name).exists():
         return folder / name
     matches = [p for p in folder.glob("*.md") if p.name != README_NAME and name in p.name]
@@ -1063,9 +1120,7 @@ def file_issue(
         extra=dict(extra or {}),
         body=body if body.startswith("\n") else "\n" + body,
     )
-    missing = [
-        m for f in config.fields.values() for m in f.problems(issue.extra.get(f.name))
-    ]
+    missing = [m for f in config.fields.values() for m in f.problems(issue.extra.get(f.name))]
     if missing:
         raise IssueFormatError("; ".join(missing))
     save(issue, config)
@@ -1073,11 +1128,10 @@ def file_issue(
     return path
 
 
-def update(
-    folder: pathlib.Path, name: str, config: Config | None = None, **changes
-) -> Issue:
+def update(folder: pathlib.Path, name: str, config: Config | None = None, **changes) -> Issue:
     """Edit one issue's front matter. `extra` fields are merged, not replaced, so setting one
-    project field cannot silently drop the others."""
+    project field cannot silently drop the others.
+    """
     config = load_config(folder) if config is None else config
     issue = load(resolve(folder, name), config)
     extra = dict(issue.extra) | dict(changes.pop("extra", None) or {})
@@ -1088,11 +1142,16 @@ def update(
 
 
 def claim(
-    folder: pathlib.Path, name: str, *, owner: str, force: bool = False,
+    folder: pathlib.Path,
+    name: str,
+    *,
+    owner: str,
+    force: bool = False,
     config: Config | None = None,
 ) -> Issue:
     """Put a name on a follow-up and move it to in-progress. Refuses to steal by default: an owner
-    that silently changes hands is how two agents end up doing the same work."""
+    that silently changes hands is how two agents end up doing the same work.
+    """
     config = load_config(folder) if config is None else config
     issue = load(resolve(folder, name), config)
     if issue.owner and issue.owner != owner and not force:
@@ -1108,7 +1167,8 @@ def claim(
 
 def release(folder: pathlib.Path, name: str, config: Config | None = None) -> Issue:
     """Drop the owner and put it back on the board — the honest move when you stop, so it does not
-    look taken forever."""
+    look taken forever.
+    """
     config = load_config(folder) if config is None else config
     issue = load(resolve(folder, name), config)
     status = Status.OPEN if issue.status is Status.IN_PROGRESS else issue.status
@@ -1118,12 +1178,11 @@ def release(folder: pathlib.Path, name: str, config: Config | None = None) -> Is
     return updated
 
 
-def close(
-    folder: pathlib.Path, name: str, *, fixed_in: str, config: Config | None = None
-) -> Issue:
+def close(folder: pathlib.Path, name: str, *, fixed_in: str, config: Config | None = None) -> Issue:
     """Mark it done. `fixed_in` is required because closing without naming what fixed it is how a
     register stops being evidence — and it must be the sha that landed on the mainline, not the one
-    from a worktree that will be pruned."""
+    from a worktree that will be pruned.
+    """
     config = load_config(folder) if config is None else config
     if not fixed_in.strip():
         raise IssueFormatError("fixed_in is required — name the commit that landed the fix")
@@ -1217,7 +1276,8 @@ def starter_config(areas: Iterable[str] = ()) -> str:
     """
     names = tuple(areas)
     listed = (
-        "areas = [" + ", ".join(f'"{a}"' for a in names) + "]" if names
+        "areas = [" + ", ".join(f'"{a}"' for a in names) + "]"
+        if names
         else '# areas = ["backend", "frontend", "ci"]   # REQUIRED — until set, any area is accepted'
     )
     return f"""\
@@ -1263,12 +1323,14 @@ def scaffold(
     readme = folder / README_NAME
     if not readme.exists():
         names = tuple(areas)
-        readme.write_text(STARTER_README.format(
-            today=today or _dt.date.today().isoformat(),
-            area=names[0] if names else "<one of the areas above>",
-            begin=INDEX_BEGIN,
-            end=INDEX_END,
-        ))
+        readme.write_text(
+            STARTER_README.format(
+                today=today or _dt.date.today().isoformat(),
+                area=names[0] if names else "<one of the areas above>",
+                begin=INDEX_BEGIN,
+                end=INDEX_END,
+            )
+        )
         written.append(readme)
     return written
 
@@ -1314,7 +1376,11 @@ def infer_config(folder: pathlib.Path) -> str:
         "",
         f'date_style = "{style}"',
         f"index = {'true' if has_region else 'false'}"
-        + ("" if has_region else "   # no generated-index region in README.md; add one, then flip this"),
+        + (
+            ""
+            if has_region
+            else "   # no generated-index region in README.md; add one, then flip this"
+        ),
         "",
         "# The one vocabulary that cannot be guessed from outside this repo.",
         "areas = [" + ", ".join(f'"{a}"' for a in areas) + "]",
@@ -1324,8 +1390,10 @@ def infer_config(folder: pathlib.Path) -> str:
         # A field with few distinct values is an enum worth pinning; free text is not.
         enum_like = 0 < len(values) <= 8 and not spec["list"]
         lines += ["", f"[fields.{key}]"]
-        lines.append(f"required = {'true' if spec['count'] == len(issues) else 'false'}"
-                     f"   # on {spec['count']}/{len(issues)} issues today")
+        lines.append(
+            f"required = {'true' if spec['count'] == len(issues) else 'false'}"
+            f"   # on {spec['count']}/{len(issues)} issues today"
+        )
         if spec["list"]:
             lines.append("list = true")
         if enum_like:

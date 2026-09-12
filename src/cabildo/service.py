@@ -52,7 +52,7 @@ MARKER = "# Written by `cabildo service install`."
 class Unit:
     """One systemd unit we know how to write, start, and take away again."""
 
-    key: str                       # "daemon" | "sync"
+    key: str  # "daemon" | "sync"
     description: str
     exec_start: list[str]
     restart_sec: int = 5
@@ -72,7 +72,8 @@ class Unit:
 # --------------------------------------------------------------------------- #
 def unit_dir() -> Path:
     """XDG-correct home for user units. Honors XDG_CONFIG_HOME so tests (and
-    unusual setups) don't have to write into the real ~/.config."""
+    unusual setups) don't have to write into the real ~/.config.
+    """
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
     return Path(base) / "systemd" / "user"
 
@@ -80,16 +81,21 @@ def unit_dir() -> Path:
 def unavailable_reason() -> str | None:
     """None when `systemctl --user` can be expected to work here, else a
     human-readable reason. Checked before writing anything: a unit file nobody
-    can start is worse than an honest error."""
+    can start is worse than an honest error.
+    """
     if sys.platform == "darwin":
-        return ("macOS has no systemd — run `cabildo service install --print` and "
-                "wrap the printed ExecStart in a launchd plist, or just run the "
-                "daemon under your own supervisor.")
+        return (
+            "macOS has no systemd — run `cabildo service install --print` and "
+            "wrap the printed ExecStart in a launchd plist, or just run the "
+            "daemon under your own supervisor."
+        )
     if not shutil.which("systemctl"):
         return "no `systemctl` on PATH — this machine doesn't run systemd."
     if not (os.environ.get("XDG_RUNTIME_DIR") or Path(f"/run/user/{os.getuid()}").exists()):
-        return ("no user runtime dir — `systemctl --user` needs a logind session "
-                "(you may be in a container or a bare ssh without lingering).")
+        return (
+            "no user runtime dir — `systemctl --user` needs a logind session "
+            "(you may be in a container or a bare ssh without lingering)."
+        )
     return None
 
 
@@ -99,7 +105,8 @@ def unavailable_reason() -> str | None:
 def _python() -> str:
     """The interpreter cabildo is installed in. Using sys.executable rather than
     a `cabildo` on PATH keeps the unit pointed at THIS install even if PATH
-    later changes or a second copy shows up."""
+    later changes or a second copy shows up.
+    """
     return sys.executable
 
 
@@ -108,7 +115,8 @@ def _passthrough_env() -> dict[str, str]:
 
     CABILDO_HOME because a non-default bus location is otherwise invisible to a
     service; PATH because systemd --user's default doesn't include ~/.local/bin
-    or a nvm/uv shim dir, which is where `claude` usually lives."""
+    or a nvm/uv shim dir, which is where `claude` usually lives.
+    """
     env = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")}
     home = os.environ.get("CABILDO_HOME")
     if home:
@@ -132,13 +140,13 @@ def daemon_unit(
 
     The age ceiling matters more for a service than for a hand-started daemon:
     this one comes up at login, whenever that is, and finds whatever the queue
-    accumulated while the machine was off."""
+    accumulated while the machine was off.
+    """
     cmd = [_python(), "-m", "cabildo.daemon"]
     if allow_push:
         cmd.append("--allow-push")
     if allow_spawn:
-        cmd += ["--allow-spawn", "--max-agents", str(max_agents),
-                "--max-depth", str(max_depth)]
+        cmd += ["--allow-spawn", "--max-agents", str(max_agents), "--max-depth", str(max_depth)]
     if budget:
         cmd += ["--budget", f"{budget:g}", "--budget-days", f"{budget_days:g}"]
     cmd += ["--max-intent-age", f"{max_intent_age:g}"]
@@ -160,9 +168,9 @@ def daemon_unit(
 def sync_unit(*, interval: float = 60.0, base: str | None = None) -> Unit:
     """The cloud mirror. The token stays in ~/.cabildo/cloud.json (mode 600) —
     never on the unit's command line, where `systemctl cat` and the journal
-    would happily republish it."""
-    cmd = [_python(), "-m", "cabildo.cli", "sync", "--loop",
-           "--interval", f"{interval:g}"]
+    would happily republish it.
+    """
+    cmd = [_python(), "-m", "cabildo.cli", "sync", "--loop", "--interval", f"{interval:g}"]
     if base:
         cmd += ["--base", base]
     return Unit(
@@ -177,8 +185,8 @@ def sync_unit(*, interval: float = 60.0, base: str | None = None) -> Unit:
 
 
 def _sh_quote(value: str) -> str:
-    """systemd's own quoting: only what contains whitespace or quotes needs it."""
-    if value and not any(c in value for c in ' \t"\'\\'):
+    """Systemd's own quoting: only what contains whitespace or quotes needs it."""
+    if value and not any(c in value for c in " \t\"'\\"):
         return value
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
@@ -186,10 +194,9 @@ def _sh_quote(value: str) -> str:
 
 def render(unit: Unit) -> str:
     """The unit file, as text. Kept readable on purpose — this is the thing the
-    user will `cat` at 3am when notifications stopped arriving."""
-    env_lines = "".join(
-        f'Environment="{k}={v}"\n' for k, v in unit.env.items()
-    )
+    user will `cat` at 3am when notifications stopped arriving.
+    """
+    env_lines = "".join(f'Environment="{k}={v}"\n' for k, v in unit.env.items())
     exec_start = " ".join(_sh_quote(a) for a in unit.exec_start)
     return f"""\
 {MARKER} Safe to edit; re-running the installer
@@ -209,7 +216,7 @@ RestartSec={unit.restart_sec}
 # One process, no forking, no pidfile — the journal is the log.
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier={unit.name.removesuffix('.service')}
+SyslogIdentifier={unit.name.removesuffix(".service")}
 
 [Install]
 WantedBy=default.target
@@ -221,7 +228,8 @@ WantedBy=default.target
 # --------------------------------------------------------------------------- #
 def systemctl(*args: str, capture: bool = True) -> subprocess.CompletedProcess:
     """`systemctl --user ...`. Never raises: every caller here would rather
-    report a failure than take the CLI down with a traceback."""
+    report a failure than take the CLI down with a traceback.
+    """
     cmd = ["systemctl", "--user", *args]
     try:
         return subprocess.run(cmd, capture_output=capture, text=True, timeout=30)
@@ -231,11 +239,12 @@ def systemctl(*args: str, capture: bool = True) -> subprocess.CompletedProcess:
 
 def exec_start_of(path: Path) -> str:
     """The ExecStart line of a unit file already on disk — what you need to see
-    before deciding whether replacing it is safe."""
+    before deciding whether replacing it is safe.
+    """
     try:
         for line in path.read_text().splitlines():
             if line.startswith("ExecStart="):
-                return line[len("ExecStart="):].strip()
+                return line[len("ExecStart=") :].strip()
     except OSError:
         pass
     return ""
@@ -246,7 +255,7 @@ def foreign(unit: Unit) -> bool:
     try:
         return unit.path.exists() and MARKER not in unit.path.read_text()
     except OSError:
-        return True     # unreadable — treat as somebody else's and refuse
+        return True  # unreadable — treat as somebody else's and refuse
 
 
 def write_units(units: list[Unit], *, force: bool = False) -> list[Path]:
@@ -254,7 +263,8 @@ def write_units(units: list[Unit], *, force: bool = False) -> list[Path]:
 
     Refuses to overwrite a unit file we didn't write unless forced: a
     `cabildo-sync.service` you hand-rolled to run something else is a working
-    setup, and clobbering it would leave nothing to restore it from."""
+    setup, and clobbering it would leave nothing to restore it from.
+    """
     d = unit_dir()
     d.mkdir(parents=True, exist_ok=True)
     written = []
@@ -262,17 +272,20 @@ def write_units(units: list[Unit], *, force: bool = False) -> list[Path]:
         if not force and foreign(u):
             raise FileExistsError(
                 f"{u.path} exists and was not written by cabildo "
-                f"(ExecStart={exec_start_of(u.path) or '?'})")
+                f"(ExecStart={exec_start_of(u.path) or '?'})"
+            )
         u.path.write_text(render(u))
         os.chmod(u.path, 0o644)
         written.append(u.path)
     return written
 
 
-def install(units: list[Unit], *, start: bool = True,
-            force: bool = False) -> list[tuple[str, int, str]]:
+def install(
+    units: list[Unit], *, start: bool = True, force: bool = False
+) -> list[tuple[str, int, str]]:
     """Write, reload, enable (and start). Returns one (step, rc, output) per
-    systemctl call so the caller can show exactly what failed."""
+    systemctl call so the caller can show exactly what failed.
+    """
     write_units(units, force=force)
     steps: list[tuple[str, int, str]] = []
 
@@ -295,7 +308,8 @@ def install(units: list[Unit], *, start: bool = True,
 def uninstall(units: list[Unit], *, force: bool = False) -> list[tuple[str, int, str]]:
     """Stop, disable, remove the files, reload. Leaves the bus DB alone —
     uninstalling a service must never look like uninstalling your data — and
-    leaves alone any unit file we didn't write."""
+    leaves alone any unit file we didn't write.
+    """
     steps: list[tuple[str, int, str]] = []
     for u in units:
         if not force and foreign(u):
@@ -303,8 +317,9 @@ def uninstall(units: list[Unit], *, force: bool = False) -> list[tuple[str, int,
             continue
         for verb in ("stop", "disable"):
             p = systemctl(verb, u.name)
-            steps.append((f"{verb} {u.name}", p.returncode,
-                          ((p.stderr or "") + (p.stdout or "")).strip()))
+            steps.append(
+                (f"{verb} {u.name}", p.returncode, ((p.stderr or "") + (p.stdout or "")).strip())
+            )
         if u.path.exists():
             u.path.unlink()
             steps.append((f"rm {u.path}", 0, ""))
@@ -313,14 +328,25 @@ def uninstall(units: list[Unit], *, force: bool = False) -> list[tuple[str, int,
     return steps
 
 
-_SHOW_PROPS = ("UnitFileState", "ActiveState", "SubState", "MainPID",
-               "ExecMainStartTimestamp", "NRestarts", "Result")
+_SHOW_PROPS = (
+    "UnitFileState",
+    "ActiveState",
+    "SubState",
+    "MainPID",
+    "ExecMainStartTimestamp",
+    "NRestarts",
+    "Result",
+)
 
 
 def status(unit: Unit) -> dict:
     """What systemd thinks of one unit, plus whether we wrote its file at all."""
-    info = {"key": unit.key, "name": unit.name, "installed": unit.path.exists(),
-            "path": str(unit.path)}
+    info = {
+        "key": unit.key,
+        "name": unit.name,
+        "installed": unit.path.exists(),
+        "path": str(unit.path),
+    }
     p = systemctl("show", unit.name, *[f"--property={k}" for k in _SHOW_PROPS])
     for line in (p.stdout or "").splitlines():
         k, _, v = line.partition("=")
@@ -332,9 +358,12 @@ def status(unit: Unit) -> dict:
 def linger_enabled() -> bool | None:
     """Whether the user's services survive logout. None when we can't tell."""
     try:
-        p = subprocess.run(["loginctl", "show-user", str(os.getuid()),
-                            "--property=Linger", "--value"],
-                           capture_output=True, text=True, timeout=10)
+        p = subprocess.run(
+            ["loginctl", "show-user", str(os.getuid()), "--property=Linger", "--value"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
     except Exception:
         return None
     if p.returncode != 0:
@@ -344,10 +373,15 @@ def linger_enabled() -> bool | None:
 
 def enable_linger() -> tuple[int, str]:
     """Ask logind to keep this user's services running after logout. Needs a
-    polkit prompt or root, so it can legitimately fail — report, don't die."""
+    polkit prompt or root, so it can legitimately fail — report, don't die.
+    """
     try:
-        p = subprocess.run(["loginctl", "enable-linger", str(os.getuid())],
-                           capture_output=True, text=True, timeout=60)
+        p = subprocess.run(
+            ["loginctl", "enable-linger", str(os.getuid())],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
     except Exception as e:
         return 1, str(e)
     return p.returncode, ((p.stderr or "") + (p.stdout or "")).strip()

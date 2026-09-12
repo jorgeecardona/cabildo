@@ -5,8 +5,13 @@ dist/
 build/
 *.egg-info/
 
+# moon + mkdocs build output
+.moon/cache/
+site/
+
 # conversation logs stay local
 logs/
 .pytest_cache/
+.ruff_cache/
 .claude/
 .vscode/

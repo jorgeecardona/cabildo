@@ -34,7 +34,8 @@ EVENTS = (
 
 def _injected_len(output: str) -> int:
     """Chars of context this hook pushed into the model: additionalContext plus
-    any deny/stop reason (all land in the model's context). 0 if unparseable."""
+    any deny/stop reason (all land in the model's context). 0 if unparseable.
+    """
     try:
         obj = json.loads(output)
     except Exception:
@@ -64,11 +65,15 @@ def _record(event: str, raw_input: str, output: str, elapsed_ms: float) -> None:
         except Exception:
             pass
         from cabildo import store
+
         conn = store.connect()
         try:
             store.record_hook_metric(
-                conn, session_id=session_id, event=event,
-                injected_chars=_injected_len(output), elapsed_ms=elapsed_ms,
+                conn,
+                session_id=session_id,
+                event=event,
+                injected_chars=_injected_len(output),
+                elapsed_ms=elapsed_ms,
             )
         finally:
             conn.close()
@@ -79,8 +84,10 @@ def _record(event: str, raw_input: str, output: str, elapsed_ms: float) -> None:
 def main() -> None:
     name = sys.argv[1] if len(sys.argv) > 1 else ""
     if name not in EVENTS:
-        print(f"cabildo-hook: unknown event {name!r} "
-              f"(choose from: {', '.join(EVENTS)})", file=sys.stderr)
+        print(
+            f"cabildo-hook: unknown event {name!r} (choose from: {', '.join(EVENTS)})",
+            file=sys.stderr,
+        )
         return
 
     # Read stdin once here so we can both measure it and still hand it to the

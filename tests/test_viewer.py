@@ -29,21 +29,28 @@ def test_agents_carry_name_and_ago(conn):
 def test_message_to_field_channel_and_dm(conn):
     make_session(conn, "a", handle="alice")
     make_session(conn, "b", handle="bob")
-    store.post_message(conn, from_session="a", from_handle="alice",
-                       body="hello channel", topic="general")
-    store.post_message(conn, from_session="a", from_handle="alice",
-                       body="hi bob", to_session="b")
+    store.post_message(
+        conn, from_session="a", from_handle="alice", body="hello channel", topic="general"
+    )
+    store.post_message(conn, from_session="a", from_handle="alice", body="hi bob", to_session="b")
     s = viewer._state()
     tos = {m["to"] for m in s["messages"]}
-    assert "#general" in tos      # channel message -> #topic
-    assert "@bob" in tos          # direct message -> recipient display name
+    assert "#general" in tos  # channel message -> #topic
+    assert "@bob" in tos  # direct message -> recipient display name
     assert s["messages_total"] == 2
 
 
 def test_claims_are_listed(conn):
     make_session(conn, "a", handle="alice")
-    store.acquire_claim(conn, resource="push:repo", holder_session="a",
-                        holder_handle="alice", project=None, ttl_seconds=300, note="landing")
+    store.acquire_claim(
+        conn,
+        resource="push:repo",
+        holder_session="a",
+        holder_handle="alice",
+        project=None,
+        ttl_seconds=300,
+        note="landing",
+    )
     s = viewer._state()
     assert len(s["claims"]) == 1
     c = s["claims"][0]

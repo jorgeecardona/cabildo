@@ -1,5 +1,6 @@
 """Human-readable strings the hooks inject as additionalContext. Kept compact:
-these land in the model's context every turn, so brevity matters."""
+these land in the model's context every turn, so brevity matters.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +12,8 @@ from . import store
 
 def unread_line(conn: sqlite3.Connection, session_id: str) -> str | None:
     """One-line unread notice for UserPromptSubmit. None when nothing is unread
-    (so we inject nothing rather than noise)."""
+    (so we inject nothing rather than noise).
+    """
     s = store.unread_summary(conn, session_id)
     if s["count"] == 0:
         return None
@@ -34,7 +36,8 @@ def midturn_urgent_text(conn: sqlite3.Connection, session_id: str) -> str | None
     """Mid-turn (PostToolUse) delivery of URGENT mail. Injects each message
     exactly once — surfaced ids are recorded as delivered so the next tool call
     stays silent. Ordinary mail never interrupts a turn; it waits for the
-    UserPromptSubmit notice."""
+    UserPromptSubmit notice.
+    """
     msgs = store.undelivered_urgent(conn, session_id)
     if not msgs:
         return None
@@ -53,9 +56,9 @@ def midturn_urgent_text(conn: sqlite3.Connection, session_id: str) -> str | None
 
 def urgent_block_reason(conn: sqlite3.Connection, session_id: str) -> str | None:
     """Reason string for the Stop hook to refuse an idle-out. None unless there
-    is unread *urgent* mail — ordinary messages must never hold a turn open."""
-    urgent = [m for m in store.inbox(conn, session_id, unread_only=True, limit=20)
-              if m["urgent"]]
+    is unread *urgent* mail — ordinary messages must never hold a turn open.
+    """
+    urgent = [m for m in store.inbox(conn, session_id, unread_only=True, limit=20) if m["urgent"]]
     if not urgent:
         return None
     lines = [
@@ -77,9 +80,7 @@ def urgent_block_reason(conn: sqlite3.Connection, session_id: str) -> str | None
 _CONDITION_MARK = {"critical": "🚨", "warn": "⚠", "info": "ℹ"}
 
 
-def condition_text(
-    conn: sqlite3.Connection, session_id: str, *, mark: bool = True
-) -> str | None:
+def condition_text(conn: sqlite3.Connection, session_id: str, *, mark: bool = True) -> str | None:
     """Machine-wide conditions this session hasn't been told about yet.
 
     This is the nudge channel for things no agent can see from inside its own
@@ -89,7 +90,8 @@ def condition_text(
 
     The `by_session` payload is what stops this being ambient anxiety. Every
     agent reads the same headline, but the one actually holding the memory is
-    told so, in the second line, and only it is being asked to act."""
+    told so, in the second line, and only it is being asked to act.
+    """
     rows = store.undelivered_conditions(conn, session_id)
     if not rows:
         return None
@@ -111,8 +113,9 @@ def condition_text(
                 f"{mine['count']} process(es){': ' + what if what else ''}"
             )
         for p in (c["data"].get("procs") or [])[:4]:
-            lines.append(f"   · pid {p['pid']} {p['what']} ({p['rss_mb']}M, "
-                         f"{p['age']} old, from {p['who']})")
+            lines.append(
+                f"   · pid {p['pid']} {p['what']} ({p['rss_mb']}M, {p['age']} old, from {p['who']})"
+            )
         if c["advice"]:
             lines.append(f"   → {c['advice']}")
 
@@ -124,7 +127,8 @@ def condition_text(
 def _join(*parts: str | None) -> str | None:
     """Stitch several injections into one additionalContext blob, dropping the
     silent ones. Hooks emit at most one string, so anything with something to
-    say has to share the slot."""
+    say has to share the slot.
+    """
     kept = [p for p in parts if p]
     return "\n".join(kept) if kept else None
 
@@ -153,7 +157,7 @@ def register_line(cwd: str | None, handle: str | None = None) -> str | None:
         config = issues.load_config(folder)
         board = issues.board(folder, config, owner=handle)
     except Exception:
-        return None                      # a broken register must never cost anyone a session
+        return None  # a broken register must never cost anyone a session
     if not (board.ready or board.mine or board.waiting):
         return None
 
@@ -180,7 +184,8 @@ def register_line(cwd: str | None, handle: str | None = None) -> str | None:
 
 def session_banner(conn: sqlite3.Connection, session_id: str) -> str:
     """Fuller status for SessionStart: who you are, who else is online on this
-    project, active locks, unread count."""
+    project, active locks, unread count.
+    """
     me = store.get_session(conn, session_id)
     name = store.display_name(me, session_id)
     project = me["project"] if me else None
@@ -203,8 +208,7 @@ def session_banner(conn: sqlite3.Connection, session_id: str) -> str:
     claims = store.list_claims(conn, project=project)
     if claims:
         lines.append(
-            "Active locks: "
-            + ", ".join(f"{c['resource']} by {c['holder']}" for c in claims[:6])
+            "Active locks: " + ", ".join(f"{c['resource']} by {c['holder']}" for c in claims[:6])
         )
 
     s = store.unread_summary(conn, session_id)

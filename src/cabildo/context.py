@@ -29,7 +29,8 @@ from pathlib import Path
 def _ppid(pid: int) -> int:
     """Parent PID of `pid`, or 0. Parses /proc/<pid>/stat robustly: comm is
     wrapped in parens and may itself contain spaces/parens, so we index off the
-    final ')' rather than splitting the whole line."""
+    final ')' rather than splitting the whole line.
+    """
     try:
         data = Path(f"/proc/{pid}/stat").read_bytes()
     except OSError:
@@ -63,7 +64,8 @@ _INTERPRETERS = ("python", "node", "bun", "deno")
 def _exe_id(argv: list[str]) -> str:
     """The token that says what program this is: argv[0], or the script path
     for interpreter-launched processes ('node .../claude-code/cli.js'). Shell
-    wrappers return '' — a `bash -c` string quoting 'claude' is not claude."""
+    wrappers return '' — a `bash -c` string quoting 'claude' is not claude.
+    """
     if not argv:
         return ""
     base = os.path.basename(argv[0]).lower()
@@ -97,7 +99,8 @@ def resolve_claude_pid(start_pid: int | None = None, *, include_self: bool = Fal
     `include_self` starts the walk at `start_pid` itself. Hooks and the MCP
     server want the default (they are never claude), but memory accounting walks
     *arbitrary* pids up to their owning agent, and there claude's own resident
-    set belongs to claude."""
+    set belongs to claude.
+    """
     start = start_pid if start_pid is not None else os.getpid()
     if include_self and start > 1 and _is_claude(start):
         return start
@@ -122,14 +125,15 @@ def _worktree_main_root(git_file: Path) -> Path | None:
     dir's `commondir` resolves to the main <main>/.git, whose parent is the repo
     root. Without this, every worktree looks like its own project and agents on
     the same repo land in separate channels (proj:mcp-oauth instead of
-    proj:paas), unable to see each other."""
+    proj:paas), unable to see each other.
+    """
     try:
         text = git_file.read_text().strip()
     except OSError:
         return None
     if not text.startswith("gitdir:"):
         return None
-    gitdir = Path(text[len("gitdir:"):].strip())
+    gitdir = Path(text[len("gitdir:") :].strip())
     if not gitdir.is_absolute():
         gitdir = (git_file.parent / gitdir).resolve()
     commondir_file = gitdir / "commondir"
@@ -159,13 +163,14 @@ def _unmangle(mangled: str) -> Path | None:
     filesystem, taking the longest segment that exists at each step — that is
     what distinguishes `.../projects/agent-chat` from a `.../projects/agent/chat`
     that was never there. Returns None if the path can't be rebuilt (the origin
-    was deleted, or it never looked like this)."""
+    was deleted, or it never looked like this).
+    """
     tokens = [t for t in mangled.lstrip("-").split("-") if t]
     if not tokens:
         return None
     cur, i = Path("/"), 0
     while i < len(tokens):
-        for j in range(len(tokens), i, -1):          # longest candidate first
+        for j in range(len(tokens), i, -1):  # longest candidate first
             cand = cur / "-".join(tokens[i:j])
             if cand.is_dir():
                 cur, i = cand, j
@@ -195,7 +200,8 @@ _SCRATCH_SESSION = re.compile(
 
 def scratchpad_session(text: str) -> str | None:
     """The session_id named by a scratchpad path appearing anywhere in `text`
-    (a path, or a whole command line), or None."""
+    (a path, or a whole command line), or None.
+    """
     m = _SCRATCH_SESSION.search(text or "")
     return m.group(1) if m else None
 
@@ -204,7 +210,8 @@ def _git_project(start: Path) -> tuple[str, str]:
     """The guess: nearest ancestor containing a .git entry, named after its
     directory. No git repo anywhere above → the directory itself. A linked
     worktree resolves to its main repo so agents on the same codebase share one
-    project."""
+    project.
+    """
     for d in (start, *start.parents):
         dot_git = d / ".git"
         if dot_git.is_dir():
@@ -244,7 +251,8 @@ def git_project(cwd: str | None = None) -> tuple[str, str]:
     scratchpad belongs to, not to a project called "scratchpad".
 
     CABILDO_PROJECT overrides everything, for one-off runs and for `.mcp.json`
-    entries written by `cabildo add`."""
+    entries written by `cabildo add`.
+    """
     start = Path(cwd or os.getcwd()).resolve()
     origin = scratchpad_origin(start)
     if origin is not None:
@@ -253,12 +261,13 @@ def git_project(cwd: str | None = None) -> tuple[str, str]:
 
     try:
         from . import cloud
+
         pinned = cloud.project_for_path(start) or cloud.project_for_path(root)
-    except Exception:      # a corrupt/unreadable registry must not break sessions
+    except Exception:  # a corrupt/unreadable registry must not break sessions
         pinned = None
     if pinned:
         pinned_name, pinned_root = pinned
-        if len(pinned_root) >= len(root):      # at, or below, the repo it names
+        if len(pinned_root) >= len(root):  # at, or below, the repo it names
             name = pinned_name
             if len(pinned_root) > len(root):
                 root = pinned_root

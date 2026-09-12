@@ -20,8 +20,9 @@ import shutil
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 GIT_TIMEOUT = 120
 # The gate is the referee: it can run a whole test suite, so it gets room.
@@ -56,7 +57,8 @@ BUS_TOOLS = [
 class Ctx:
     """Daemon-level settings. Deliberately not reachable from intent params —
     an agent must not be able to talk the daemon into pushing, spawning, or
-    raising its own budget."""
+    raising its own budget.
+    """
 
     worker: str
     allow_push: bool = False
@@ -120,10 +122,11 @@ def _porcelain_path(line: str) -> str:
     Not a fixed slice: the XY status field is two columns, but the leading space
     of ' M file' is gone by the time output reaches us (git()'s .strip()), so a
     line is 'M file' or 'MM file' depending on the state. Split off the first
-    field instead, and take the destination of a rename."""
+    field instead, and take the destination of a rename.
+    """
     body = line.strip()
     body = body.split(maxsplit=1)[1] if " " in body else body
-    if " -> " in body:                       # 'R  old -> new'
+    if " -> " in body:  # 'R  old -> new'
         body = body.split(" -> ", 1)[1]
     return body.strip().strip('"')
 
@@ -131,9 +134,11 @@ def _porcelain_path(line: str) -> str:
 def _claude_settings_hint(dirty_lines: list[str]) -> str:
     paths = [_porcelain_path(ln) for ln in dirty_lines]
     if paths and all(p in _CLAUDE_OWN for p in paths):
-        return ("\n\nNote: that is Claude Code's own settings file, which it "
-                "rewrites when you accept a permission — probably not your work. "
-                "Commit it or `git checkout --` it, then re-request.")
+        return (
+            "\n\nNote: that is Claude Code's own settings file, which it "
+            "rewrites when you accept a permission — probably not your work. "
+            "Commit it or `git checkout --` it, then re-request."
+        )
     return ""
 
 
@@ -156,7 +161,10 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     remote = params.get("remote", "origin")
     for name, val in (("target", target), ("remote", remote)):
         # These reach a command line; keep them boring.
-        if not isinstance(val, str) or not val.replace("-", "").replace("_", "").replace("/", "").isalnum():
+        if (
+            not isinstance(val, str)
+            or not val.replace("-", "").replace("_", "").replace("/", "").isalnum()
+        ):
             raise Reject(f"params.{name} must be a plain ref name, got {val!r}")
 
     steps: list[dict[str, Any]] = []
@@ -192,8 +200,9 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
             f"commit:\n{chr(10).join(tracked)[:2000]}" + _claude_settings_hint(tracked),
             steps,
         )
-    step("status", 0,
-         f"clean ({len(untracked)} untracked file(s) ignored)" if untracked else "clean")
+    step(
+        "status", 0, f"clean ({len(untracked)} untracked file(s) ignored)" if untracked else "clean"
+    )
 
     # 2. Fetch.
     if not step("fetch", *git(["fetch", remote, target], root)):
@@ -204,8 +213,7 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         return {
             "ok": True,
             "landed": False,
-            "reason": "nothing to land — HEAD has no commits beyond "
-            f"{remote}/{target}",
+            "reason": f"nothing to land — HEAD has no commits beyond {remote}/{target}",
             "branch": branch,
             "steps": steps,
         }
@@ -224,10 +232,13 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     # Verify the rebase did what it claims: rc=0 covers "rebased" and "did
     # nothing" alike, and landing un-rebased work is how two heads reach main.
     anc_rc, _ = git(["merge-base", "--is-ancestor", f"{remote}/{target}", "HEAD"], root)
-    steps.append({
-        "step": "verify-rebase", "rc": anc_rc,
-        "out": f"{remote}/{target} {'is' if anc_rc == 0 else 'is NOT'} an ancestor of HEAD",
-    })
+    steps.append(
+        {
+            "step": "verify-rebase",
+            "rc": anc_rc,
+            "out": f"{remote}/{target} {'is' if anc_rc == 0 else 'is NOT'} an ancestor of HEAD",
+        }
+    )
     if anc_rc != 0:
         return _fail(
             f"rebase exited 0 but {remote}/{target} is still not an ancestor of "
@@ -252,7 +263,9 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         # Loud, and recorded in the result, so "no gate" can never look like
         # "gate passed" to anyone reading the queue.
         gate_state = "ABSENT"
-        steps.append({"step": "gate", "rc": 0, "out": f"no {GATE_PATH} in {root} — NOTHING VERIFIED"})
+        steps.append(
+            {"step": "gate", "rc": 0, "out": f"no {GATE_PATH} in {root} — NOTHING VERIFIED"}
+        )
         ctx.log(f"  ⚠ no gate at {GATE_PATH} — landing unverified")
 
     # 5. Push.
@@ -283,10 +296,13 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         # "I could not check" is not "I did not do it". Claiming a failed land
         # here is unearned certainty in the other direction, and it points the
         # requester at exactly the wrong recovery (re-push, re-rebase).
-        steps.append({
-            "step": "verify", "rc": ver_rc,
-            "out": f"ls-remote failed — landed state UNVERIFIED:\n{ver_out[-1000:]}",
-        })
+        steps.append(
+            {
+                "step": "verify",
+                "rc": ver_rc,
+                "out": f"ls-remote failed — landed state UNVERIFIED:\n{ver_out[-1000:]}",
+            }
+        )
         return {
             "ok": True,
             "landed": None,
@@ -311,12 +327,14 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         if f_rc == 0 and git(["merge-base", "--is-ancestor", sha, remote_sha], root)[0] == 0:
             landed = True
             detail = f"tip moved to {remote_sha[:12]}, our commit is an ancestor"
-    steps.append({
-        "step": "verify",
-        "rc": 0 if landed else 1,
-        "out": f"{remote}/{target} is at {remote_sha[:12] or '?'}; "
-               f"we pushed {sha[:12]}; {detail if landed else 'MISMATCH'}",
-    })
+    steps.append(
+        {
+            "step": "verify",
+            "rc": 0 if landed else 1,
+            "out": f"{remote}/{target} is at {remote_sha[:12] or '?'}; "
+            f"we pushed {sha[:12]}; {detail if landed else 'MISMATCH'}",
+        }
+    )
     if not landed:
         return _fail(
             f"push reported rc={push_rc} but {remote}/{target} is at "
@@ -385,7 +403,8 @@ scoreboard. You do not get to declare your own work done — the gate does.
 """
 
 ROLES: dict[str, str] = {
-    "pm": _COMMON + """
+    "pm": _COMMON
+    + """
 YOUR ROLE: PM / coordinator (@pm).
 You own the work queue and sequencing: what is next, what is blocked, what is
 duplicated. You do not write feature code.
@@ -394,7 +413,8 @@ same scope — check `list_agents` and `claims` before assigning.
 Beware your own failure mode: a PM that generates work to look busy is worse
 than no PM. If nothing needs coordinating, say so and stop.
 """,
-    "qa": _COMMON + """
+    "qa": _COMMON
+    + """
 YOUR ROLE: QA / testing (@qa).
 You own whether the gate can be TRUSTED, not the bug count. A gate that silently
 skips is worse than no gate: it grants confidence nobody earned. Hunt for gates
@@ -404,7 +424,8 @@ Your win condition is "the gate is trustworthy and green", never "bugs found".
 Do not optimise for finding things; a QA agent rewarded for bugs will always
 find bugs, and that is a local optimum that costs the team.
 """,
-    "ux": _COMMON + """
+    "ux": _COMMON
+    + """
 YOUR ROLE: UI / UX (@ux).
 You own the interface and its visual verification.
 Verify by driving the real thing, not by reasoning about it. Prefer bundling and
@@ -433,7 +454,8 @@ def _reconcile_live(conn) -> int:
     The ledger and not daemon memory, because daemon memory dies with the
     daemon: a restart would reset the fleet cap to zero while yesterday's
     agents are still burning tokens. A status row is a claim; the PID check is
-    the audit."""
+    the audit.
+    """
     from . import store
 
     live = 0
@@ -459,7 +481,8 @@ def _reconcile_live(conn) -> int:
 def _throttle(ctx: Ctx) -> dict[str, Any] | None:
     """Refuse to spawn when the trailing burn is already over budget. The
     spawner is the only place new load originates, so it is the only place a
-    throttle actually bites."""
+    throttle actually bites.
+    """
     if not ctx.budget:
         return None
     from . import usage  # local: keeps the transcript scan off the import path
@@ -472,8 +495,11 @@ def _throttle(ctx: Ctx) -> dict[str, Any] | None:
             "ok": False,
             "reason": f"throttled: {f['pct']:.1f}% of a {ctx.budget:,.0f} weighted-token "
             f"budget over {ctx.budget_days:g}d ({f['state']}). "
-            + (f"At the current rate you cross it in {f['hours_left']:.1f}h (~{f['eta']}). "
-               if f["hours_left"] else "")
+            + (
+                f"At the current rate you cross it in {f['hours_left']:.1f}h (~{f['eta']}). "
+                if f["hours_left"]
+                else ""
+            )
             + "Spawning more agents now would burn the rest faster. Not spawning.",
             "usage": f,
         }
@@ -505,8 +531,7 @@ def spawn(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     if not target.replace("-", "").replace("_", "").replace("/", "").isalnum():
         raise Reject(f"params.target must be a plain ref name, got {target!r}")
     if model is not None and model not in MODELS:
-        raise Reject(f"unknown model {model!r}; allowed: {sorted(MODELS)}, or omit "
-                     "for the default")
+        raise Reject(f"unknown model {model!r}; allowed: {sorted(MODELS)}, or omit for the default")
 
     conn = store.connect()
     try:
@@ -514,15 +539,19 @@ def spawn(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         # single choke point every spawn must pass. There is no second door.
         depth = store.spawn_depth_of(conn, parent) + 1
         if depth > ctx.max_depth:
-            return {"ok": False, "reason":
-                    f"spawn depth {depth} exceeds the limit ({ctx.max_depth}). "
-                    "You are too deep in the tree to delegate further — do the "
-                    "work yourself, or DM your spawner to ask for help."}
+            return {
+                "ok": False,
+                "reason": f"spawn depth {depth} exceeds the limit ({ctx.max_depth}). "
+                "You are too deep in the tree to delegate further — do the "
+                "work yourself, or DM your spawner to ask for help.",
+            }
 
         live = _reconcile_live(conn)
         if live >= ctx.max_agents:
-            return {"ok": False, "reason": f"at the {ctx.max_agents}-agent cap; "
-                    f"{live} still running. Not spawning."}
+            return {
+                "ok": False,
+                "reason": f"at the {ctx.max_agents}-agent cap; {live} still running. Not spawning.",
+            }
 
         throttled = _throttle(ctx)
         if throttled:
@@ -553,28 +582,35 @@ def spawn(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
             git(["worktree", "remove", "--force", wt], root)
             git(["branch", "-D", branch], root)
             return {
-                "ok": True, "spawned": False,
+                "ok": True,
+                "spawned": False,
                 "reason": "dry run — worktree created and removed cleanly; would have "
                 f"launched {role} in {wt}. Start the daemon with --allow-spawn to "
                 "actually launch agents.",
                 "would_run": f"claude -p <task> (role={role}, "
-                             f"model={model or 'default'}, depth={depth}, cwd={wt})",
+                f"model={model or 'default'}, depth={depth}, cwd={wt})",
             }
 
         parent_label = store.display_name(store.get_session(conn, parent), parent)
         prompt = ROLES[role].format(target=target, worktree=wt, parent=parent_label)
         log_path = os.path.join(wt, f".agent-{role}.log")
         cmd = [
-            claude, "-p", task,
-            "--append-system-prompt", prompt,
-            "--permission-mode", "acceptEdits",
+            claude,
+            "-p",
+            task,
+            "--append-system-prompt",
+            prompt,
+            "--permission-mode",
+            "acceptEdits",
             # acceptEdits covers file edits but NOT mcp tools, and a headless agent
             # cannot answer a permission prompt: without this it boots, registers on
             # the bus, and is then mute — which is exactly what happened the first
             # time. Named explicitly rather than a wildcard: a spawned agent gets a
             # voice, not the run of the machine.
-            "--allowedTools", ",".join(BUS_TOOLS),
-            "--add-dir", root,
+            "--allowedTools",
+            ",".join(BUS_TOOLS),
+            "--add-dir",
+            root,
         ]
         if model:
             cmd += ["--model", model]
@@ -586,23 +622,42 @@ def spawn(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         # backfills it by tag, and a row that arrives after the child registers
         # would lose that race.
         store.record_spawn(
-            conn, tag=tag, parent_session=parent, role=role, task=task,
-            model=model, depth=depth, worktree=wt, branch=branch, log=log_path,
+            conn,
+            tag=tag,
+            parent_session=parent,
+            role=role,
+            task=task,
+            model=model,
+            depth=depth,
+            worktree=wt,
+            branch=branch,
+            log=log_path,
         )
         logf = open(log_path, "wb")
         proc = subprocess.Popen(
-            cmd, cwd=wt, stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            cmd,
+            cwd=wt,
+            stdout=logf,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
             start_new_session=True,  # survives the daemon; it is not our child to babysit
             env={**os.environ, "CLAUDE_PROJECT_DIR": wt, "CABILDO_TAG": tag},
         )
         store.set_spawn_pid(conn, tag, proc.pid)
-        ctx.log(f"  🚀 launched {role} pid={proc.pid} (depth {depth}, "
-                f"for {parent_label}) — verifying it's really alive…")
+        ctx.log(
+            f"  🚀 launched {role} pid={proc.pid} (depth {depth}, "
+            f"for {parent_label}) — verifying it's really alive…"
+        )
 
         alive, sid, why = _verify_spawn(proc, wt, ctx, tag=tag)
         base = {
-            "role": role, "pid": proc.pid, "worktree": wt, "branch": branch,
-            "log": log_path, "parent": parent_label, "depth": depth,
+            "role": role,
+            "pid": proc.pid,
+            "worktree": wt,
+            "branch": branch,
+            "log": log_path,
+            "parent": parent_label,
+            "depth": depth,
             "model": model or "default",
         }
         if not alive:
@@ -611,17 +666,31 @@ def spawn(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
             # exited: every mcp call denied, no permission prompt possible. Reporting
             # that as success is the exact failure this system exists to catch.
             store.mark_spawn_dead(conn, tag)
-            return {**base, "ok": False, "spawned": False,
-                    "reason": f"launched but did not survive: {why}. Last words:\n"
-                              f"{_tail(log_path, 900)}"}
-        return {**base, "ok": True, "spawned": True, "session": sid,
-                "verified": f"registered on the bus as {(sid or '?')[:8]}" if sid
-                else "process alive, but it has NOT registered on the bus",
-                "reason": f"{role} is running in its own worktree on {branch}, "
-                          f"reporting to {parent_label}."
-                          + ("" if sid else " NOTE: it has not announced itself on the "
-                             "bus — it may lack permission to use the bus tools, in "
-                             "which case it can work but cannot talk.")}
+            return {
+                **base,
+                "ok": False,
+                "spawned": False,
+                "reason": f"launched but did not survive: {why}. Last words:\n"
+                f"{_tail(log_path, 900)}",
+            }
+        return {
+            **base,
+            "ok": True,
+            "spawned": True,
+            "session": sid,
+            "verified": f"registered on the bus as {(sid or '?')[:8]}"
+            if sid
+            else "process alive, but it has NOT registered on the bus",
+            "reason": f"{role} is running in its own worktree on {branch}, "
+            f"reporting to {parent_label}."
+            + (
+                ""
+                if sid
+                else " NOTE: it has not announced itself on the "
+                "bus — it may lack permission to use the bus tools, in "
+                "which case it can work but cannot talk."
+            ),
+        }
     finally:
         conn.close()
 
@@ -634,8 +703,9 @@ def _tail(path: str, n: int) -> str:
         return "(no log)"
 
 
-def _verify_spawn(proc, wt: str, ctx: Ctx, *, tag: str,
-                  timeout: int = 25) -> tuple[bool, str | None, str]:
+def _verify_spawn(
+    proc, wt: str, ctx: Ctx, *, tag: str, timeout: int = 25
+) -> tuple[bool, str | None, str]:
     """Did it actually start, and did it reach the bus as the agent we launched?
 
     Two independent checks, because they fail differently: the process being
@@ -688,8 +758,11 @@ def ask(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         raise Reject("params.options must be a list of 1-4 short strings")
     options = [str(o)[:24] for o in options]
     if not desktop.available():
-        return {"ok": False, "reason": "no desktop notifications available here "
-                "(no session bus / no notify-send) — ask on the bus instead"}
+        return {
+            "ok": False,
+            "reason": "no desktop notifications available here "
+            "(no session bus / no notify-send) — ask on the bus instead",
+        }
 
     # Everything the human needs to answer without hunting for a terminal.
     where = os.path.basename(project.rstrip("/")) if project else "?"
@@ -708,16 +781,23 @@ def ask(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         try:
             if choice is None:
                 store.post_message(
-                    conn, from_session=store.HUMAN_SESSION, from_handle=store.HUMAN_HANDLE,
+                    conn,
+                    from_session=store.HUMAN_SESSION,
+                    from_handle=store.HUMAN_HANDLE,
                     body=f"(no answer — the notification for {question!r} was dismissed. "
-                         "Ask again on the bus if you're still blocked.)",
-                    to_session=asker, project=project or None, urgent=False,
+                    "Ask again on the bus if you're still blocked.)",
+                    to_session=asker,
+                    project=project or None,
+                    urgent=False,
                 )
             else:
                 store.post_message(
-                    conn, from_session=store.HUMAN_SESSION, from_handle=store.HUMAN_HANDLE,
+                    conn,
+                    from_session=store.HUMAN_SESSION,
+                    from_handle=store.HUMAN_HANDLE,
                     body=f"{choice}\n\n(in answer to: {question})",
-                    to_session=asker, project=project or None,
+                    to_session=asker,
+                    project=project or None,
                     # Urgent so the asker cannot idle through the answer it asked for.
                     urgent=True,
                 )
@@ -728,18 +808,21 @@ def ask(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     t = threading.Thread(target=wait_and_post, daemon=True)
     t.start()
     if not up.wait(timeout=5):
-        return {"ok": False, "asked": False,
-                "reason": "could not get the question in front of him — the "
-                          "notifier thread never started. Ask on the bus instead."}
+        return {
+            "ok": False,
+            "asked": False,
+            "reason": "could not get the question in front of him — the "
+            "notifier thread never started. Ask on the bus instead.",
+        }
     return {
         "ok": True,
         "asked": True,
         "question": question,
         "options": options,
         "reason": "the question is in front of him; his answer will arrive as an "
-                  "urgent DM from @jorge whenever he clicks. Do not block on it — "
-                  "go do something else and read your inbox. If he dismisses it "
-                  "you get told that too, rather than silence.",
+        "urgent DM from @jorge whenever he clicks. Do not block on it — "
+        "go do something else and read your inbox. If he dismisses it "
+        "you get told that too, rather than silence.",
     }
 
 

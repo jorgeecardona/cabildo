@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """SessionEnd hook: mark this session ended and drop any advisory locks it held
-so a finished agent never blocks the others. Injects nothing."""
+so a finished agent never blocks the others. Injects nothing.
+"""
 
 from __future__ import annotations
-
 
 from cabildo.hooks._common import read_input
 
@@ -21,4 +21,3 @@ def main() -> None:
         store.end_session(conn, session_id)
     finally:
         conn.close()
-

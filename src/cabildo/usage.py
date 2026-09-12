@@ -23,9 +23,10 @@ import json
 import os
 import time
 from collections import defaultdict
+from collections.abc import Iterator
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 PROJECTS = Path(os.path.expanduser("~/.claude/projects"))
 
@@ -49,7 +50,8 @@ def _weighted(u: dict[str, Any]) -> float:
 
 def records(since: float) -> Iterator[dict[str, Any]]:
     """Yield {ts, model, project, session, in, out, cache_read, cache_write, weighted}
-    for every assistant message newer than `since` (epoch seconds)."""
+    for every assistant message newer than `since` (epoch seconds).
+    """
     if not PROJECTS.is_dir():
         return
     for f in PROJECTS.rglob("*.jsonl"):
@@ -123,7 +125,8 @@ def summarize(since: float) -> dict[str, Any]:
 def rate_per_hour(by_hour: dict[int, float], lookback_hours: int = 6) -> float:
     """Recent burn rate. Uses only hours that actually have activity: averaging
     over wall-clock would report a low rate simply because you slept, and then
-    forecast that you'll never hit the limit."""
+    forecast that you'll never hit the limit.
+    """
     if not by_hour:
         return 0.0
     newest = max(by_hour)
@@ -157,8 +160,12 @@ def _human(n: float) -> str:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="cabildo-usage", description=(__doc__ or "").split("\n")[0])
     p.add_argument("--days", type=float, default=7.0, help="window to scan")
-    p.add_argument("--budget", type=float, default=0.0,
-                   help="weighted-token budget for the window; enables the forecast")
+    p.add_argument(
+        "--budget",
+        type=float,
+        default=0.0,
+        help="weighted-token budget for the window; enables the forecast",
+    )
     args = p.parse_args(argv)
 
     since = time.time() - args.days * 86400
@@ -166,14 +173,18 @@ def main(argv: list[str] | None = None) -> int:
     s = summarize(since)
     tot = s["totals"]
 
-    print(f"scanned {s['n']:,} messages from {s['sessions']} sessions "
-          f"over {args.days:g}d in {time.time() - t0:.1f}s\n")
+    print(
+        f"scanned {s['n']:,} messages from {s['sessions']} sessions "
+        f"over {args.days:g}d in {time.time() - t0:.1f}s\n"
+    )
     print(f"  output       {_human(tot.get('out', 0)):>8}")
     print(f"  input        {_human(tot.get('in', 0)):>8}")
     print(f"  cache write  {_human(tot.get('cache_write', 0)):>8}")
     print(f"  cache read   {_human(tot.get('cache_read', 0)):>8}")
-    print(f"  weighted     {_human(tot.get('weighted', 0)):>8}   (out×{W_OUTPUT:g} "
-          f"+ in×{W_INPUT:g} + cw×{W_CACHE_WRITE:g} + cr×{W_CACHE_READ:g})\n")
+    print(
+        f"  weighted     {_human(tot.get('weighted', 0)):>8}   (out×{W_OUTPUT:g} "
+        f"+ in×{W_INPUT:g} + cw×{W_CACHE_WRITE:g} + cr×{W_CACHE_READ:g})\n"
+    )
 
     print("by day (weighted):")
     for d in sorted(s["by_day"])[-10:]:

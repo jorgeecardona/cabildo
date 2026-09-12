@@ -32,7 +32,8 @@ def transcript_root() -> Path:
 
 def _content_len(content: Any) -> int:
     """Length of a message/result content, whether it's a plain string or the
-    structured list-of-blocks form Claude Code also uses."""
+    structured list-of-blocks form Claude Code also uses.
+    """
     if isinstance(content, str):
         return len(content)
     if isinstance(content, list):
@@ -54,14 +55,13 @@ def scan_file(path: Path) -> dict[str, dict[str, int]]:
     {tool_name: {"calls", "input_chars", "output_chars"}}.
 
     tool_use and its tool_result are on separate lines, so we remember each
-    cabildo tool_use id and attribute the later result back to it."""
+    cabildo tool_use id and attribute the later result back to it.
+    """
     by_tool: dict[str, dict[str, int]] = {}
     id2name: dict[str, str] = {}
 
     def bucket(name: str) -> dict[str, int]:
-        return by_tool.setdefault(
-            name, {"calls": 0, "input_chars": 0, "output_chars": 0}
-        )
+        return by_tool.setdefault(name, {"calls": 0, "input_chars": 0, "output_chars": 0})
 
     try:
         fh = path.open(encoding="utf-8", errors="replace")
@@ -107,7 +107,8 @@ def scan_file(path: Path) -> dict[str, dict[str, int]]:
 def scan(root: Path | None = None, session_id: str | None = None) -> dict[str, Any]:
     """Aggregate cabildo tool traffic across all transcripts (or one session).
 
-    Returns totals, a per-tool breakdown, and the file count scanned."""
+    Returns totals, a per-tool breakdown, and the file count scanned.
+    """
     root = root or transcript_root()
     by_tool: dict[str, dict[str, int]] = {}
     files = 0
@@ -121,9 +122,7 @@ def scan(root: Path | None = None, session_id: str | None = None) -> dict[str, A
             if per:
                 files += 1
             for name, e in per.items():
-                agg = by_tool.setdefault(
-                    name, {"calls": 0, "input_chars": 0, "output_chars": 0}
-                )
+                agg = by_tool.setdefault(name, {"calls": 0, "input_chars": 0, "output_chars": 0})
                 for k, v in e.items():
                     agg[k] += v
 
@@ -157,7 +156,8 @@ def project_slug(path: str) -> str:
     ~/.claude/projects/<slug>/, where <slug> is the absolute cwd with every
     non-alphanumeric character turned into a dash
     (/home/jo/my.app -> -home-jo-my-app). Recomputing it is how we find *this*
-    project's sessions without a lookup table."""
+    project's sessions without a lookup table.
+    """
     return re.sub(r"[^a-zA-Z0-9]", "-", str(path))
 
 
@@ -169,7 +169,8 @@ def _user_text(obj: Any) -> str | None:
     tool_result blocks (they ride on user-type lines), hook/meta injections, and
     slash-command echoes. We want only what a person actually typed, so
     tool_result lines, meta lines, and the wrapper forms (`<...>` tags,
-    hook output, the caveat banner) are all rejected."""
+    hook output, the caveat banner) are all rejected.
+    """
     if not isinstance(obj, dict) or obj.get("type") != "user" or obj.get("isMeta"):
         return None
     msg = obj.get("message")
@@ -210,7 +211,8 @@ def _assistant_text(obj: Any) -> str | None:
 
     An `type=="assistant"` line's content is a list of blocks; we keep only the
     `text` blocks (the spoken reply) and drop `tool_use` blocks — those are the
-    cost side of the turn, not part of the conversation a human would read."""
+    cost side of the turn, not part of the conversation a human would read.
+    """
     if not isinstance(obj, dict) or obj.get("type") != "assistant":
         return None
     msg = obj.get("message")
@@ -233,7 +235,8 @@ def _assistant_text(obj: Any) -> str | None:
 def _turn(obj: Any) -> tuple[str, str] | None:
     """(role, text) for a genuine conversation turn — a human prompt ('user') or
     Claude's spoken reply ('assistant') — else None. Tool calls, tool results,
-    and meta/hook lines are not turns and return None."""
+    and meta/hook lines are not turns and return None.
+    """
     t = obj.get("type") if isinstance(obj, dict) else None
     if t == "user":
         text = _user_text(obj)
@@ -262,7 +265,8 @@ def session_turns(
         restart from the top.
     Each turn is {"role", "text", "ts"}; text is capped to `cap_chars`. At most
     `max_turns` per call — the offset stops at the last one taken, so the tail
-    ships on the next pass."""
+    ships on the next pass.
+    """
     try:
         size = path.stat().st_size
     except OSError:
@@ -279,9 +283,9 @@ def session_turns(
         fh.seek(after_bytes)
         for raw in fh:
             if not raw.endswith(b"\n"):
-                break                       # partial final line — leave cursor before it
+                break  # partial final line — leave cursor before it
             if len(turns) >= max_turns:
-                break                       # tail resumes here next pass
+                break  # tail resumes here next pass
             offset += len(raw)
             line = raw.decode("utf-8", "replace")
             # Cheap gate: only user/assistant lines can be turns.
@@ -306,7 +310,8 @@ def session_digest(path: Path) -> dict[str, Any] | None:
     """First and last real user turns of a transcript, its turn count, and the
     file's mtime. The first turn is a natural title; the last is where you left
     off. Returns None for a transcript with no genuine user turn (e.g. a pure
-    sub-agent log)."""
+    sub-agent log).
+    """
     first: str | None = None
     last: str | None = None
     turns = 0
@@ -346,15 +351,14 @@ def session_digest(path: Path) -> dict[str, Any] | None:
     }
 
 
-def list_sessions(
-    root: Path | None = None, slug: str | None = None
-) -> list[dict[str, Any]]:
+def list_sessions(root: Path | None = None, slug: str | None = None) -> list[dict[str, Any]]:
     """Session digests for one project (by `slug`) or across all projects,
     newest first.
 
     Only top-level `*.jsonl` files in each project directory are scanned:
     sub-agent sidechain transcripts live in subdirectories, and those are not
-    sessions you resume, so the non-recursive glob leaves them out."""
+    sessions you resume, so the non-recursive glob leaves them out.
+    """
     root = root or transcript_root()
     out: list[dict[str, Any]] = []
     if not root.is_dir():

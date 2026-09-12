@@ -25,16 +25,18 @@ def _uplink_batch(conn, since: int):
 
 def test_messages_are_local_by_default(conn):
     make_session(conn, "s1", project_name="alpha")
-    store.post_message(conn, from_session="s1", from_handle="a",
-                       body="hi", topic=store.project_topic("alpha"))
+    store.post_message(
+        conn, from_session="s1", from_handle="a", body="hi", topic=store.project_topic("alpha")
+    )
     assert conn.execute("SELECT origin FROM messages").fetchone()["origin"] == "local"
 
 
 def test_cloud_message_is_delivered_but_never_mirrored_back(conn):
     make_session(conn, "s1", project_name="alpha")
     topic = store.project_topic("alpha")
-    store.post_message(conn, from_session="s1", from_handle="a",
-                       body="should I use postgres?", topic=topic)
+    store.post_message(
+        conn, from_session="s1", from_handle="a", body="should I use postgres?", topic=topic
+    )
 
     # The uplink mirrors the agent's question and parks its cursor on it.
     batch = _uplink_batch(conn, 0)
@@ -42,8 +44,14 @@ def test_cloud_message_is_delivered_but_never_mirrored_back(conn):
     cursor = batch[-1]["id"]
 
     # Jorge answers in the browser; the runner injects it locally.
-    store.post_message(conn, from_session="human:jorge", from_handle="jorge",
-                       body="yes, postgres", topic=topic, origin="cloud")
+    store.post_message(
+        conn,
+        from_session="human:jorge",
+        from_handle="jorge",
+        body="yes, postgres",
+        topic=topic,
+        origin="cloud",
+    )
 
     # It is a real message on the bus — the agent it answers must actually
     # receive it, which is the whole point of the downlink.
@@ -56,40 +64,50 @@ def test_cloud_message_is_delivered_but_never_mirrored_back(conn):
 def test_downlink_does_not_strand_later_local_messages(conn):
     """A cloud reply sitting between two local messages must not shadow the
     one behind it — the naive fix (jump the cursor past the injected row)
-    would silently drop it."""
+    would silently drop it.
+    """
     make_session(conn, "s1", project_name="alpha")
     topic = store.project_topic("alpha")
-    store.post_message(conn, from_session="s1", from_handle="a",
-                       body="first", topic=topic)
+    store.post_message(conn, from_session="s1", from_handle="a", body="first", topic=topic)
     cursor = _uplink_batch(conn, 0)[-1]["id"]
 
-    store.post_message(conn, from_session="human:jorge", from_handle="jorge",
-                       body="from the dashboard", topic=topic, origin="cloud")
-    store.post_message(conn, from_session="s1", from_handle="a",
-                       body="second", topic=topic)
+    store.post_message(
+        conn,
+        from_session="human:jorge",
+        from_handle="jorge",
+        body="from the dashboard",
+        topic=topic,
+        origin="cloud",
+    )
+    store.post_message(conn, from_session="s1", from_handle="a", body="second", topic=topic)
 
     assert [r["body"] for r in _uplink_batch(conn, cursor)] == ["second"]
 
 
 def test_origin_column_is_added_to_an_existing_bus(conn):
     """_migrate must reach databases created before the column existed —
-    CREATE TABLE IF NOT EXISTS is a no-op against a live file."""
+    CREATE TABLE IF NOT EXISTS is a no-op against a live file.
+    """
     conn.execute("ALTER TABLE messages RENAME TO messages_old")
     conn.execute(
         "CREATE TABLE messages ("
         " id INTEGER PRIMARY KEY AUTOINCREMENT, created_at REAL NOT NULL,"
         " from_session TEXT NOT NULL, from_handle TEXT, topic TEXT,"
         " to_session TEXT, project TEXT, body TEXT NOT NULL,"
-        " urgent INTEGER NOT NULL DEFAULT 0)")
+        " urgent INTEGER NOT NULL DEFAULT 0)"
+    )
     conn.commit()
-    assert "origin" not in {r["name"] for r in
-                            conn.execute("PRAGMA table_info(messages)")}
+    assert "origin" not in {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
 
     store._migrate(conn)
 
-    assert "origin" in {r["name"] for r in
-                        conn.execute("PRAGMA table_info(messages)")}
+    assert "origin" in {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
     make_session(conn, "s1", project_name="alpha")
-    store.post_message(conn, from_session="s1", from_handle="a",
-                       body="after migration", topic=store.project_topic("alpha"))
+    store.post_message(
+        conn,
+        from_session="s1",
+        from_handle="a",
+        body="after migration",
+        topic=store.project_topic("alpha"),
+    )
     assert conn.execute("SELECT origin FROM messages").fetchone()["origin"] == "local"

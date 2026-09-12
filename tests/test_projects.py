@@ -14,7 +14,7 @@ import pytest
 from cabildo import cli, cloud, context, mcp_config
 
 
-@pytest.fixture()
+@pytest.fixture
 def cfg_home(tmp_path, monkeypatch):
     """A throwaway ~ so the registry (and any .mcp.json) stays in tmp."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
@@ -71,7 +71,7 @@ def test_unregister_keeps_the_projects_settings(cfg_home):
     cloud.register_root("thing", str(repo), uplink="content")
     assert cloud.unregister_root(str(repo)) == "thing"
     assert cloud.roots_of("thing") == []
-    assert cloud.uplink_of("thing") == "content"    # a setting, not a consequence
+    assert cloud.uplink_of("thing") == "content"  # a setting, not a consequence
     assert cloud.unregister_root(str(repo)) is None
 
 
@@ -127,7 +127,8 @@ def test_env_var_wins_over_everything(cfg_home, monkeypatch):
 
 def test_a_broken_registry_does_not_break_sessions(cfg_home):
     """Sessions resolve their project on every prompt; a corrupt config file
-    must degrade to the git guess, not take the hook down."""
+    must degrade to the git guess, not take the hook down.
+    """
     repo = make_repo(cfg_home / "code" / "thing")
     p = cloud.config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -147,8 +148,9 @@ def test_apply_adds_the_server_and_the_project_env(tmp_path):
 
 
 def test_apply_is_idempotent_and_leaves_other_servers_alone(tmp_path):
-    (tmp_path / ".mcp.json").write_text(json.dumps(
-        {"mcpServers": {"gitlab": {"command": "gitlab-mcp"}}, "other": 1}))
+    (tmp_path / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"gitlab": {"command": "gitlab-mcp"}}, "other": 1})
+    )
     mcp_config.apply(tmp_path, "paas")
     p, what = mcp_config.apply(tmp_path, "paas")
     assert what == "unchanged"
@@ -168,8 +170,9 @@ def test_remove_deletes_only_a_file_that_was_ours(tmp_path):
     p, what = mcp_config.remove(tmp_path)
     assert what == "deleted" and not p.exists()
 
-    (tmp_path / ".mcp.json").write_text(json.dumps(
-        {"mcpServers": {"gitlab": {"command": "gitlab-mcp"}}}))
+    (tmp_path / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"gitlab": {"command": "gitlab-mcp"}}})
+    )
     mcp_config.apply(tmp_path, "paas")
     p, what = mcp_config.remove(tmp_path)
     assert what == "removed" and p.exists()
@@ -195,7 +198,8 @@ def test_add_pins_the_name_and_wires_the_folder(cfg_home, capsys):
 
 def test_add_resolves_a_subdir_up_to_the_repo(cfg_home):
     """.mcp.json is only read from the folder Claude Code launches in, so a
-    subdirectory has to resolve up or the wiring would do nothing."""
+    subdirectory has to resolve up or the wiring would do nothing.
+    """
     repo = make_repo(cfg_home / "code" / "thing")
     sub = repo / "src"
     sub.mkdir()
@@ -244,11 +248,12 @@ def test_add_rejects_a_path_that_is_not_a_directory(cfg_home):
 
 def test_add_takes_uplink_and_link(cfg_home):
     repo = make_repo(cfg_home / "code" / "thing")
-    assert cli.main(["add", "-p", "thing", "--uplink", "content",
-                     "--link", "other", str(repo)]) == 0
+    assert (
+        cli.main(["add", "-p", "thing", "--uplink", "content", "--link", "other", str(repo)]) == 0
+    )
     assert cloud.uplink_of("thing") == "content"
     assert cloud.peers_of("thing") == ["other"]
-    assert cloud.peers_of("other") == ["thing"]     # links are symmetric
+    assert cloud.peers_of("other") == ["thing"]  # links are symmetric
 
 
 # --------------------------------------------------------------------------- #
@@ -285,7 +290,8 @@ def test_the_dangerous_direction_too(cfg_home):
 
 def test_a_nested_plain_folder_still_follows_the_pin(cfg_home):
     """Only a nested *repo* escapes. A subdirectory of the pinned folder is part
-    of it, which is what makes pinning a repo useful at all."""
+    of it, which is what makes pinning a repo useful at all.
+    """
     parent = make_repo(cfg_home / "self")
     sub = parent / "inner" / "notes"
     sub.mkdir(parents=True)
@@ -297,7 +303,7 @@ def test_pinning_the_child_explicitly_folds_it_back_in(cfg_home):
     parent = make_repo(cfg_home / "mono")
     child = make_repo(parent / "packages" / "api")
     cloud.register_root("mono", str(parent))
-    cloud.register_root("mono", str(child))          # deliberate: same name
+    cloud.register_root("mono", str(child))  # deliberate: same name
     assert context.git_project(str(child))[1] == "mono"
 
 
@@ -326,7 +332,8 @@ def test_a_scratchpad_resolves_to_the_project_it_belongs_to(cfg_home):
 
 def test_the_opted_out_folder_stays_opted_out_from_its_scratchpad(cfg_home):
     """The leak that was live: uplink is applied to the resolved name, so the
-    resolution is what enforces it."""
+    resolution is what enforces it.
+    """
     private = make_repo(cfg_home / "journal")
     cloud.set_uplink("journal", "none")
     pad = _scratch(cfg_home / "tmp", private)
@@ -337,7 +344,8 @@ def test_the_opted_out_folder_stays_opted_out_from_its_scratchpad(cfg_home):
 
 def test_dashes_in_a_directory_name_survive_the_round_trip(cfg_home):
     """The mangling is lossy — '-a-b' is both /a/b and /a-b. The longest path
-    that actually exists is the tiebreaker."""
+    that actually exists is the tiebreaker.
+    """
     repo = make_repo(cfg_home / "code" / "agent-chat")
     pad = _scratch(cfg_home / "tmp", repo)
     assert context.git_project(str(pad))[1] == "agent-chat"
