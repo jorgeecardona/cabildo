@@ -7,7 +7,14 @@ hooks can import them without pulling in the `mcp` package:
    current session. Both the hooks and the MCP subprocess are descendants of
    that single process, so it is the rendezvous key that lets the MCP server
    (which never sees the session_id) bind itself to the session_id that the
-   hooks *do* see.
+   hooks *do* see. The walk itself (`_ppid`/`_argv`, `_is_claude`, `_exe_id`)
+   is platform-agnostic; only the two leaf reads differ: Linux parses
+   `/proc/<pid>/{stat,cmdline}` directly (the fast path, and the one under
+   test on every CI run), macOS -- which has no /proc -- shells out to `ps`
+   instead (`_ppid_darwin`/`_argv_darwin`). Both feed the same `_is_claude`
+   check, so identity rules (never trust a shell's `-c` argument, never treat
+   an interpreter's own path as the script it's running) apply identically on
+   either OS.
 
 2. git_project() -- map a working directory to a "project": the git repo root by
    default, or whatever `cabildo add` pinned that folder to. That pin is read
@@ -20,13 +27,16 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 
 # --------------------------------------------------------------------------- #
-# Process-tree rendezvous (Linux /proc)
+# Process-tree rendezvous -- Linux /proc fast path, `ps`-backed fallback
+# elsewhere (macOS has no /proc at all).
 # --------------------------------------------------------------------------- #
-def _ppid(pid: int) -> int:
+def _ppid_linux(pid: int) -> int:
     """Parent PID of `pid`, or 0. Parses /proc/<pid>/stat robustly: comm is
     wrapped in parens and may itself contain spaces/parens, so we index off the
     final ')' rather than splitting the whole line.
@@ -46,12 +56,67 @@ def _ppid(pid: int) -> int:
         return 0
 
 
-def _argv(pid: int) -> list[str]:
+def _argv_linux(pid: int) -> list[str]:
     try:
         raw = Path(f"/proc/{pid}/cmdline").read_bytes()
     except OSError:
         return []
     return [a.decode("utf-8", "replace") for a in raw.split(b"\x00") if a]
+
+
+def _ps(*args: str) -> str:
+    """Run `ps <args>` and return stripped stdout, or '' on any failure.
+
+    The one primitive the darwin backend is built on: no /proc there, but `ps`
+    is always present and needs no extra dependency (this package stays
+    stdlib-only so the hooks can import it without pulling in `mcp`). A pid
+    that no longer exists makes `ps` exit non-zero with empty output on macOS
+    -- indistinguishable here from "ps itself is broken" or "sandboxed away
+    from us", and all three must degrade to "no information", never raise.
+    Same failure contract as the /proc reads above: caller sees an empty
+    result, not an exception.
+    """
+    try:
+        proc = subprocess.run(["ps", *args], capture_output=True, text=True, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    return proc.stdout.strip()
+
+
+def _ppid_darwin(pid: int) -> int:
+    """Parent PID via `ps -o ppid=`, macOS's only portable source for it."""
+    try:
+        return int(_ps("-o", "ppid=", "-p", str(pid)))
+    except ValueError:
+        return 0
+
+
+def _argv_darwin(pid: int) -> list[str]:
+    """Best-effort argv via `ps -ww -o command=`.
+
+    `-ww` disables ps's column-width truncation -- without it a long
+    interpreter/wrapper command line (exactly the `node .../cli.js` shape
+    `_exe_id` needs to see the tail of) gets cut off and silently
+    misidentified. Unlike /proc/<pid>/cmdline this is NOT NUL-delimited: ps
+    reconstructs one space-joined string with no quoting, so an argument that
+    itself contains a space is indistinguishable from two arguments. That is
+    an inherent limit of `ps` (no psutil here), and it does not matter for our
+    one consumer -- `_exe_id` only ever looks at argv[0], or (for interpreters)
+    the first non-flag token in argv[1:], both of which land correctly
+    regardless of how anything *after* them got split.
+    """
+    text = _ps("-ww", "-o", "command=", "-p", str(pid))
+    return text.split() if text else []
+
+
+def _ppid(pid: int) -> int:
+    return _ppid_darwin(pid) if sys.platform == "darwin" else _ppid_linux(pid)
+
+
+def _argv(pid: int) -> list[str]:
+    return _argv_darwin(pid) if sys.platform == "darwin" else _argv_linux(pid)
 
 
 # Shells are opaque wrappers (`bash -c '<anything>'`); never identify a process
@@ -100,6 +165,19 @@ def resolve_claude_pid(start_pid: int | None = None, *, include_self: bool = Fal
     server want the default (they are never claude), but memory accounting walks
     *arbitrary* pids up to their owning agent, and there claude's own resident
     set belongs to claude.
+
+    Conservative by construction, on both backends: nothing here is cached
+    across calls, so every `_ppid`/`_is_claude` check reflects the process
+    table *right now*. A pid that has exited (or that `ps`/`/proc` can't read)
+    makes `_ppid` return 0, which ends the walk with "no claude found" rather
+    than a guess -- it never carries forward a pid-to-identity mapping that a
+    just-exited process's slot could hand to some unrelated reused pid. That
+    also means an intermediate pid getting reused mid-walk by an unrelated
+    process can at worst end the walk early (that process is checked against
+    `_is_claude` like any other and almost certainly fails); it can never merge
+    two sessions or attribute a live process to the wrong agent, because
+    identity here is exe-only (see `_exe_id`) and is never inherited from a
+    pid's *previous* occupant.
     """
     start = start_pid if start_pid is not None else os.getpid()
     if include_self and start > 1 and _is_claude(start):

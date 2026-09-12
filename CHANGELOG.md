@@ -4,6 +4,19 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-09-12
+
+### Added
+
+- **macOS process identity (#2, #11)** — `context.py`'s `_ppid`/`_argv` gain a
+  `ps`-backed darwin backend (`ps -o ppid=`, `ps -ww -o command=`) behind a
+  `sys.platform` check, so the MCP server can resolve its owning `claude` session
+  on macOS, where there is no `/proc`. The Linux `/proc` fast path is byte-for-byte
+  unchanged. `resolve_claude_pid`/`_is_claude`/`_exe_id` operate on the returned
+  argv and are unchanged. Darwin path is unit-tested against mocked `ps` output;
+  not yet run on a real Mac. (Bulk process enumeration in `procs.py` stays
+  Linux-only — see #3 for its memory backends.)
+
 ## [0.1.6] - 2026-09-12
 
 ### Added

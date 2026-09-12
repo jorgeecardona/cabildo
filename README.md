@@ -71,11 +71,36 @@ it, and both the hooks and the MCP subprocess are descendants of the same
 `claude` process. So:
 
 - The `SessionStart` hook writes `session_id ⇄ claude_pid` into the DB.
-- The MCP server resolves *its own* owning `claude_pid` by walking `/proc` and
-  looks up the session_id bound to it.
+- The MCP server resolves *its own* owning `claude_pid` by walking the process
+  tree and looks up the session_id bound to it — `/proc` on Linux, `ps` on
+  macOS (there is no `/proc` there).
 
 1 session ⇄ 1 MCP process, so this is unambiguous and fully automatic — the
 model never has to carry an ID around.
+
+### Platform support
+
+Core messaging — presence, DMs, topics, claims, hook-level lock enforcement,
+the `session_id ⇄ claude_pid` rendezvous above — works on both Linux and
+macOS: identity resolution has a `ps`-backed backend on macOS behind the same
+`_ppid`/`_argv` interface Linux's `/proc` reads sit behind.
+
+**Linux-only, for now:**
+
+- The daemon's `mem`/`orphans` conditions and the `cabildo mem` command
+  (`cabildo/procs.py`, `monitor.py`) — full-machine memory pressure and
+  "process whose owning agent is gone" detection. Both need enumerating every
+  process on the box each sweep (`/proc`'s directory-of-pids), which has no
+  equally cheap macOS equivalent without an extra dependency; the `ps`-per-pid
+  approach used for identity resolution doesn't scale to "all ~500 processes,
+  every few seconds." These degrade to reporting nothing on macOS (an empty
+  snapshot, not a crash) rather than raising.
+- `cabildo service` (systemd --user units) — macOS has no systemd.
+  `cabildo service install --print` still prints the `ExecStart` command so
+  you can wrap it in a launchd plist or your own supervisor by hand.
+
+Everything else — the bus, both MCP servers, the hooks, `cabildo watch`, the
+local `viewer` — has no OS-specific code path at all.
 
 A session's **project** is its git repo root. A linked git worktree resolves to
 its *main* repo, so several agents working the same codebase in separate
@@ -384,7 +409,6 @@ cabildo cost -d 7 --rate 3    # what running cabildo cost you over 7 days
 cabildo add --project paas .  # put this folder on the bus (see below)
 cabildo issues                # this repo's register: what's ready, what's blocked
 cabildo issues check          # grade docs/issues against its own config
-cabildo doctor                # verify the install (hooks, MCP, DB) + flag platform gaps
 cabildo service install       # run the daemon in the background (see below)
 ```
 
