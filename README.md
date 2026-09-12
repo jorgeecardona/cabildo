@@ -93,9 +93,11 @@ macOS: identity resolution has a `ps`-backed backend on macOS behind the same
   reports empty there rather than faking one. Memory *attribution* itself —
   `cabildo mem`, per-agent RSS, and orphan detection in `cabildo/procs.py` — now
   has a darwin backend (`ps`/`vm_stat`/`sysctl`) and works on both platforms.
-- `cabildo service` (systemd --user units) — macOS has no systemd.
-  `cabildo service install --print` still prints the `ExecStart` command so
-  you can wrap it in a launchd plist or your own supervisor by hand.
+`cabildo service` installs a launchd agent (`~/Library/LaunchAgents` plist +
+`launchctl load`) on macOS and a systemd `--user` unit on Linux, chosen on
+`sys.platform`; dry-run default, refuse-to-overwrite, `status`, and `uninstall`
+behave the same on both. Desktop notifications likewise use `osascript` /
+`terminal-notifier` on macOS and `notify-send` on Linux.
 
 Everything else — the bus, both MCP servers, the hooks, `cabildo watch`, the
 local `viewer` — has no OS-specific code path at all.

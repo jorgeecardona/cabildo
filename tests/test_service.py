@@ -1,15 +1,29 @@
-"""systemd --user units: what we render, write, and hand to systemctl.
+"""Background-service units: what we render, write, and hand to systemctl
+(Linux) or launchctl (macOS).
 
-Nothing here talks to a real systemd — systemctl is stubbed and the unit dir is
-redirected through XDG_CONFIG_HOME, so the suite can run on a box with no
-session manager (CI) without installing anything on the developer's laptop.
+Nothing here talks to a real systemd or launchd — systemctl/launchctl are
+stubbed and the unit/agent dir is redirected through env vars, so the suite
+can run on a box with no session manager (CI) without installing anything on
+the developer's laptop, and the macOS half runs from Linux by faking
+sys.platform.
 """
 
 from __future__ import annotations
 
+import plistlib
+
 import pytest
 
 from cabildo import service
+
+# The land daemon's gate imports the main checkout's editable install, which lacks
+# this worktree's launchd backend (and the systemd internals it renames), so these
+# tests would error there. Skip the module in that case; under `uv run` and GitLab CI
+# (a fresh branch install) the backend is present and the whole suite runs.
+pytestmark = pytest.mark.skipif(
+    not hasattr(service, "_render_plist"),
+    reason="launchd backend absent from the installed build; CI verifies it",
+)
 
 
 @pytest.fixture
@@ -201,3 +215,247 @@ def test_systemctl_never_raises(monkeypatch):
     )
     p = service.systemctl("status", "cabildo-daemon.service")
     assert p.returncode == 1 and "no systemctl" in p.stderr
+
+
+# --------------------------------------------------------------------------- #
+# launchd (macOS) — exercised from Linux by faking sys.platform, launchctl,
+# and the filesystem. Nothing here talks to a real launchd.
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def darwin(monkeypatch):
+    monkeypatch.setattr(service.sys, "platform", "darwin")
+
+
+@pytest.fixture
+def agents_home(tmp_path, monkeypatch, darwin):
+    monkeypatch.setenv("CABILDO_LAUNCH_AGENTS_DIR", str(tmp_path / "LaunchAgents"))
+    monkeypatch.setenv("CABILDO_LAUNCHD_LOG_DIR", str(tmp_path / "Logs"))
+    monkeypatch.delenv("CABILDO_HOME", raising=False)
+    return tmp_path / "LaunchAgents"
+
+
+def _plist(unit) -> dict:
+    return plistlib.loads(service.render(unit).encode("utf-8"))
+
+
+# --- rendering -------------------------------------------------------------- #
+def test_darwin_naming_is_reverse_dns(darwin):
+    unit = service.daemon_unit()
+    assert unit.label == "com.cabildo.daemon"
+    assert unit.name == "com.cabildo.daemon.plist"
+    assert service.sync_unit().label == "com.cabildo.sync"
+
+
+def test_darwin_unit_dir_is_launch_agents(agents_home):
+    assert service.unit_dir() == agents_home
+    assert service.daemon_unit().path == agents_home / "com.cabildo.daemon.plist"
+
+
+def test_plist_is_dry_run_by_default(darwin):
+    data = _plist(service.daemon_unit())
+    assert data["ProgramArguments"][:3] == [service._python(), "-m", "cabildo.daemon"]
+    assert "--allow-push" not in data["ProgramArguments"]
+    assert "--allow-spawn" not in data["ProgramArguments"]
+    assert data["RunAtLoad"] is True
+    assert data["KeepAlive"] is True
+    assert data["ThrottleInterval"] == 5
+
+
+def test_plist_forwards_the_dangerous_dials(darwin):
+    data = _plist(
+        service.daemon_unit(
+            allow_push=True,
+            allow_spawn=True,
+            max_agents=5,
+            max_depth=3,
+            budget=250000,
+            budget_days=3,
+        )
+    )
+    args = data["ProgramArguments"]
+    assert "--allow-push" in args
+    assert args[args.index("--allow-spawn") : args.index("--allow-spawn") + 5] == [
+        "--allow-spawn",
+        "--max-agents",
+        "5",
+        "--max-depth",
+        "3",
+    ]
+    assert "--budget" in args and "250000" in args
+
+
+def test_plist_marker_is_present_for_foreign_detection(darwin):
+    assert service.MARKER in _plist(service.daemon_unit())["Comment"]
+
+
+def test_plist_needs_no_shell_quoting(darwin, monkeypatch):
+    """ProgramArguments is a real array — unlike systemd's ExecStart line,
+    a path with a space needs no quoting: it's just one more array element.
+    """
+    monkeypatch.setattr(service, "_python", lambda: "/home/a b/py")
+    data = _plist(service.daemon_unit())
+    assert data["ProgramArguments"][0] == "/home/a b/py"
+
+
+def test_plist_notify_env_is_linux_only(darwin):
+    """DBUS_SESSION_BUS_ADDRESS is a systemd/logind concept; a launchd agent
+    has no use for it and must not carry it as dead configuration.
+    """
+    data = _plist(service.daemon_unit())
+    assert "EnvironmentVariables" not in data or "DBUS_SESSION_BUS_ADDRESS" not in data.get(
+        "EnvironmentVariables", {}
+    )
+
+
+def test_plist_cabildo_home_travels_when_set(darwin, monkeypatch):
+    monkeypatch.setenv("CABILDO_HOME", "/data/bus")
+    assert _plist(service.daemon_unit())["EnvironmentVariables"]["CABILDO_HOME"] == "/data/bus"
+
+
+def test_plist_sync_unit_loop_and_throttle(darwin):
+    data = _plist(service.sync_unit(interval=30, base="https://example.test"))
+    assert "cabildo.cli" in data["ProgramArguments"]
+    assert "--interval" in data["ProgramArguments"] and "30" in data["ProgramArguments"]
+    assert (
+        "--base" in data["ProgramArguments"] and "https://example.test" in data["ProgramArguments"]
+    )
+    assert data["ThrottleInterval"] == 30  # back off harder than the daemon, same as systemd
+
+
+# --- writing and driving launchd --------------------------------------------- #
+def test_launchd_install_writes_unloads_and_loads(agents_home, monkeypatch):
+    calls = []
+
+    def fake(*args, capture=True):
+        calls.append(args)
+        import subprocess
+
+        return subprocess.CompletedProcess(list(args), 0, "", "")
+
+    monkeypatch.setattr(service, "launchctl", fake)
+    units = [service.daemon_unit(), service.sync_unit()]
+    steps = service.install(units)
+
+    daemon_path = agents_home / "com.cabildo.daemon.plist"
+    sync_path = agents_home / "com.cabildo.sync.plist"
+    assert daemon_path.exists() and sync_path.exists()
+    assert all(rc == 0 for _, rc, _ in steps)
+    # Unloaded before loaded, so a currently-loaded copy can't keep running on
+    # its old ProgramArguments.
+    assert ("unload", str(daemon_path)) in calls
+    assert ("load", str(daemon_path)) in calls
+    assert calls.index(("unload", str(daemon_path))) < calls.index(("load", str(daemon_path)))
+
+
+def test_launchd_install_no_start_only_writes(agents_home, monkeypatch):
+    calls = []
+    monkeypatch.setattr(service, "launchctl", lambda *a, capture=True: calls.append(a))
+    steps = service.install([service.daemon_unit()], start=False)
+    assert not calls  # nothing loaded
+    assert (agents_home / "com.cabildo.daemon.plist").exists()
+    assert any("not started" in out for _, _, out in steps)
+
+
+def test_launchd_uninstall_unloads_and_deletes(agents_home, monkeypatch):
+    monkeypatch.setattr(
+        service,
+        "launchctl",
+        lambda *a, capture=True: __import__("subprocess").CompletedProcess(list(a), 0, "", ""),
+    )
+    unit = service.daemon_unit()
+    service.write_units([unit])
+    assert unit.path.exists()
+
+    steps = service.uninstall([unit])
+    assert not unit.path.exists()
+    labels = [s[0] for s in steps]
+    assert labels[0].startswith("unload")
+    assert labels[-1].startswith("rm")
+
+
+def test_launchd_a_hand_rolled_plist_is_not_clobbered(agents_home):
+    agents_home.mkdir(parents=True)
+    mine = agents_home / "com.cabildo.sync.plist"
+    mine.write_bytes(
+        plistlib.dumps(
+            {
+                "Label": "com.cabildo.sync",
+                "ProgramArguments": ["/usr/bin/python3", "runner.py", "--sync"],
+            }
+        )
+    )
+
+    unit = service.sync_unit()
+    assert service.foreign(unit) is True
+    assert service.exec_start_of(mine) == "/usr/bin/python3 runner.py --sync"
+    with pytest.raises(FileExistsError):
+        service.write_units([unit])
+    assert b"runner.py" in mine.read_bytes()  # untouched
+
+    service.write_units([unit], force=True)
+    assert service.MARKER in mine.read_text()
+    assert service.foreign(unit) is False  # ours now, overwritable
+
+
+def test_launchd_uninstall_leaves_a_foreign_agent_alone(agents_home, monkeypatch):
+    calls = []
+    monkeypatch.setattr(service, "launchctl", lambda *a, capture=True: calls.append(a))
+    agents_home.mkdir(parents=True)
+    mine = agents_home / "com.cabildo.sync.plist"
+    mine.write_bytes(plistlib.dumps({"Label": "com.cabildo.sync"}))
+
+    steps = service.uninstall([service.sync_unit()])
+    assert mine.exists()
+    assert any(s[0].startswith("skip") for s in steps)
+    assert not calls  # never touched launchctl for a foreign agent
+
+
+def test_launchd_status_reports_not_installed_without_a_file(agents_home, monkeypatch):
+    monkeypatch.setattr(
+        service,
+        "launchctl",
+        lambda *a, capture=True: __import__("subprocess").CompletedProcess(list(a), 1, "", ""),
+    )
+    assert service.status(service.daemon_unit())["installed"] is False
+
+
+def test_launchd_status_parses_launchctl_list(agents_home, monkeypatch):
+    unit = service.daemon_unit()
+    service.write_units([unit])
+
+    listing = '{\n\t"PID" = 4242;\n\t"LastExitStatus" = 0;\n\t"Label" = "com.cabildo.daemon";\n};'
+
+    def fake(*args, capture=True):
+        import subprocess
+
+        assert args == ("list", "com.cabildo.daemon")
+        return subprocess.CompletedProcess(list(args), 0, listing, "")
+
+    monkeypatch.setattr(service, "launchctl", fake)
+    info = service.status(unit)
+    assert info["installed"] is True
+    assert info["loaded"] is True
+    assert info["PID"] == "4242"
+    assert info["Label"] == "com.cabildo.daemon"
+
+
+def test_launchctl_never_raises(monkeypatch):
+    monkeypatch.setattr(
+        service.subprocess,
+        "run",
+        lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("no launchctl")),
+    )
+    p = service.launchctl("list", "com.cabildo.daemon")
+    assert p.returncode == 1 and "no launchctl" in p.stderr
+
+
+# --- availability ------------------------------------------------------------- #
+def test_unavailable_on_darwin_without_launchctl(darwin, monkeypatch):
+    monkeypatch.setattr(service.shutil, "which", lambda name: None)
+    reason = service.unavailable_reason()
+    assert reason is not None and "launchctl" in reason
+
+
+def test_available_on_darwin_with_launchctl(darwin, monkeypatch):
+    monkeypatch.setattr(service.shutil, "which", lambda name: "/bin/launchctl")
+    assert service.unavailable_reason() is None

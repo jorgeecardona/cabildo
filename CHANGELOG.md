@@ -4,6 +4,18 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-09-12
+
+### Added
+
+- **macOS service install via launchd (#5)** — `cabildo service` gains a launchd
+  backend behind a `sys.platform` check: it emits a `~/Library/LaunchAgents/`
+  plist and `launchctl load`s it, mirroring the systemd `--user` install (dry-run
+  default, refuse-to-overwrite, `status`, `uninstall`). The systemd internals were
+  renamed to `_*_systemd` dispatch targets with unchanged behavior; a
+  `ProgramArguments` array avoids shell quoting. Unit-tested against mocked
+  `launchctl` + filesystem; not yet run on a real Mac.
+
 ## [0.1.8] - 2026-09-12
 
 ### Added

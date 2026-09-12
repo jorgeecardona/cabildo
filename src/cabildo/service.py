@@ -1,37 +1,42 @@
-"""Run cabildo's long-lived pieces as **systemd --user** services.
+"""Run cabildo's long-lived pieces as a background service — **systemd --user**
+on Linux, **launchd** on macOS.
 
-Why user-space rather than a system unit: everything these processes touch is
-the human's — the SQLite bus under ~/.cabildo, his git worktrees, his `claude`
-credentials, his desktop session for notifications. A root-owned system unit
-would see none of that and would need a pile of `User=`/`Environment=` patching
-to pretend otherwise. `systemctl --user` already runs as him, in his runtime
-dir, next to his session bus.
+Why user-space rather than a system unit/daemon: everything these processes
+touch is the human's — the SQLite bus under ~/.cabildo, his git worktrees, his
+`claude` credentials, his desktop session for notifications. A root-owned
+system service would see none of that and would need a pile of
+`User=`/`Environment=` patching to pretend otherwise. `systemctl --user` (or a
+launchd LaunchAgent, its macOS equivalent) already runs as him, in his session.
 
 Two units, installed independently:
 
-  cabildo-daemon.service   drains the intents queue (land, spawn) and pops
-                           desktop notifications for messages addressed to you
-  cabildo-sync.service     mirrors this laptop's bus up to the hosted dashboard
+  cabildo-daemon   drains the intents queue (land, spawn) and pops desktop
+                   notifications for messages addressed to you
+  cabildo-sync     mirrors this laptop's bus up to the hosted dashboard
 
-Both are written to ~/.config/systemd/user/ and are plain text: read them, edit
-them, delete them. Nothing here hides state anywhere else.
+On Linux they're written to ~/.config/systemd/user/ as plain-text unit files;
+on macOS to ~/Library/LaunchAgents/ as plist agents. Either way: read them,
+edit them, delete them. Nothing here hides state anywhere else.
 
 Two environment details make the difference between "works in my terminal" and
 "works as a service":
 
-  * PATH — systemd --user starts with a minimal PATH, so the daemon would fail
-    to find `claude` or `git` exactly when it tries to spawn an agent. We freeze
-    the installing shell's PATH into the unit.
+  * PATH — a service's default PATH is minimal, so the daemon would fail to
+    find `claude` or `git` exactly when it tries to spawn an agent. We freeze
+    the installing shell's PATH into the unit/agent.
   * DBUS_SESSION_BUS_ADDRESS — notify-send without it falls back to autolaunch
     and pops notifications on a bus nobody is watching. %t/bus is the session
-    bus of the user this unit runs as.
+    bus of the user this unit runs as. (Linux only — launchd's `notify-send`
+    equivalent, `osascript`/`terminal-notifier`, needs no such address.)
 
-Stdlib only, like the rest of the package.
+Stdlib only, like the rest of the package — plistlib included.
 """
 
 from __future__ import annotations
 
 import os
+import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -50,7 +55,11 @@ MARKER = "# Written by `cabildo service install`."
 
 @dataclass(frozen=True)
 class Unit:
-    """One systemd unit we know how to write, start, and take away again."""
+    """One background job we know how to write, start, and take away again —
+    a systemd unit on Linux, a launchd agent on macOS. `key`/`description`/
+    `exec_start`/`env` are the same either way; only the file format and the
+    tool that drives it (`systemctl` vs `launchctl`) differ.
+    """
 
     key: str  # "daemon" | "sync"
     description: str
@@ -59,7 +68,16 @@ class Unit:
     env: dict[str, str] = field(default_factory=dict)
 
     @property
+    def label(self) -> str:
+        """Launchd's identifier — reverse-DNS by convention. Keyed the same as
+        the systemd unit name so 'daemon'/'sync' means the same job either way.
+        """
+        return f"com.cabildo.{self.key}"
+
+    @property
     def name(self) -> str:
+        if sys.platform == "darwin":
+            return f"{self.label}.plist"
         return f"cabildo-{self.key}.service"
 
     @property
@@ -68,27 +86,44 @@ class Unit:
 
 
 # --------------------------------------------------------------------------- #
-# Where things live / whether systemd is even an option
+# Where things live / whether a backend is even an option
 # --------------------------------------------------------------------------- #
 def unit_dir() -> Path:
-    """XDG-correct home for user units. Honors XDG_CONFIG_HOME so tests (and
-    unusual setups) don't have to write into the real ~/.config.
+    """Where unit/agent files live: the XDG-correct systemd --user dir on
+    Linux, ~/Library/LaunchAgents on macOS. Honors overrides so tests (and
+    unusual setups) don't have to write into the real location.
     """
+    if sys.platform == "darwin":
+        base = os.environ.get("CABILDO_LAUNCH_AGENTS_DIR") or os.path.expanduser(
+            "~/Library/LaunchAgents"
+        )
+        return Path(base)
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
     return Path(base) / "systemd" / "user"
 
 
+def log_dir() -> Path:
+    """Where launchd agent logs land. Systemd doesn't need this — journal
+    takes StandardOutput=journal for free — but launchd has no built-in log
+    store, so StandardOutPath/StandardErrorPath must point somewhere real.
+    """
+    base = os.environ.get("CABILDO_LAUNCHD_LOG_DIR") or os.path.expanduser("~/Library/Logs/cabildo")
+    return Path(base)
+
+
+def log_path(unit: Unit) -> Path:
+    return log_dir() / f"{unit.label}.log"
+
+
 def unavailable_reason() -> str | None:
-    """None when `systemctl --user` can be expected to work here, else a
-    human-readable reason. Checked before writing anything: a unit file nobody
-    can start is worse than an honest error.
+    """None when this platform's service manager can be expected to work here,
+    else a human-readable reason. Checked before writing anything: a unit file
+    nobody can start is worse than an honest error.
     """
     if sys.platform == "darwin":
-        return (
-            "macOS has no systemd — run `cabildo service install --print` and "
-            "wrap the printed ExecStart in a launchd plist, or just run the "
-            "daemon under your own supervisor."
-        )
+        if not shutil.which("launchctl"):
+            return "no `launchctl` on PATH — this doesn't look like macOS."
+        return None
     if not shutil.which("systemctl"):
         return "no `systemctl` on PATH — this machine doesn't run systemd."
     if not (os.environ.get("XDG_RUNTIME_DIR") or Path(f"/run/user/{os.getuid()}").exists()):
@@ -153,9 +188,11 @@ def daemon_unit(
     if not notify:
         cmd.append("--no-notify")
     env = _passthrough_env()
-    if notify:
+    if notify and sys.platform != "darwin":
         # %t is the unit's runtime dir (/run/user/UID) — where logind puts the
-        # session bus notify-send needs to reach GNOME.
+        # session bus notify-send needs to reach GNOME. Meaningless outside
+        # systemd, so launchd agents skip it entirely rather than carry a
+        # dead env var.
         env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=%t/bus"
     return Unit(
         key=DAEMON,
@@ -193,9 +230,15 @@ def _sh_quote(value: str) -> str:
 
 
 def render(unit: Unit) -> str:
-    """The unit file, as text. Kept readable on purpose — this is the thing the
-    user will `cat` at 3am when notifications stopped arriving.
+    """The unit/agent file, as text. Kept readable on purpose — this is the
+    thing the user will `cat` at 3am when notifications stopped arriving.
     """
+    if sys.platform == "darwin":
+        return _render_plist(unit)
+    return _render_systemd(unit)
+
+
+def _render_systemd(unit: Unit) -> str:
     env_lines = "".join(f'Environment="{k}={v}"\n' for k, v in unit.env.items())
     exec_start = " ".join(_sh_quote(a) for a in unit.exec_start)
     return f"""\
@@ -223,8 +266,36 @@ WantedBy=default.target
 """
 
 
+def _render_plist(unit: Unit) -> str:
+    """The launchd agent, as an XML property list.
+
+    RunAtLoad + KeepAlive is launchd's `Restart=always`: RunAtLoad starts the
+    job the moment it's loaded, and KeepAlive relaunches it if it dies.
+    ThrottleInterval is its RestartSec — the minimum gap launchd waits before
+    relaunching, so a crash-looping job doesn't spin.
+
+    No shell is involved in ProgramArguments — each argument is its own array
+    element — so unlike the systemd ExecStart line, a path containing a space
+    needs no quoting at all.
+    """
+    data: dict[str, object] = {
+        "Label": unit.label,
+        "Comment": f"{MARKER} Safe to edit; re-running the installer overwrites it.",
+        "ProgramArguments": list(unit.exec_start),
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "ThrottleInterval": unit.restart_sec,
+        "WorkingDirectory": os.path.expanduser("~"),
+        "StandardOutPath": str(log_path(unit)),
+        "StandardErrorPath": str(log_path(unit)),
+    }
+    if unit.env:
+        data["EnvironmentVariables"] = dict(unit.env)
+    return plistlib.dumps(data, fmt=plistlib.FMT_XML).decode("utf-8")
+
+
 # --------------------------------------------------------------------------- #
-# Talking to systemd
+# Talking to systemd / launchd
 # --------------------------------------------------------------------------- #
 def systemctl(*args: str, capture: bool = True) -> subprocess.CompletedProcess:
     """`systemctl --user ...`. Never raises: every caller here would rather
@@ -237,10 +308,28 @@ def systemctl(*args: str, capture: bool = True) -> subprocess.CompletedProcess:
         return subprocess.CompletedProcess(cmd, 1, "", str(e))
 
 
-def exec_start_of(path: Path) -> str:
-    """The ExecStart line of a unit file already on disk — what you need to see
-    before deciding whether replacing it is safe.
+def launchctl(*args: str, capture: bool = True) -> subprocess.CompletedProcess:
+    """`launchctl ...`. Never raises, for the same reason `systemctl()` doesn't:
+    every caller here would rather report a failure than take the CLI down.
     """
+    cmd = ["launchctl", *args]
+    try:
+        return subprocess.run(cmd, capture_output=capture, text=True, timeout=30)
+    except Exception as e:  # no launchctl, hung launchd
+        return subprocess.CompletedProcess(cmd, 1, "", str(e))
+
+
+def exec_start_of(path: Path) -> str:
+    """The command a unit/agent file already on disk would run — what you need
+    to see before deciding whether replacing it is safe.
+    """
+    if sys.platform == "darwin":
+        try:
+            with path.open("rb") as f:
+                data = plistlib.load(f)
+            return " ".join(data.get("ProgramArguments") or [])
+        except (OSError, ValueError):
+            return ""
     try:
         for line in path.read_text().splitlines():
             if line.startswith("ExecStart="):
@@ -267,6 +356,10 @@ def write_units(units: list[Unit], *, force: bool = False) -> list[Path]:
     """
     d = unit_dir()
     d.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "darwin":
+        # launchd creates the log FILE on first write but not its directory —
+        # unlike the journal, which needs nothing prepared for it.
+        log_dir().mkdir(parents=True, exist_ok=True)
     written = []
     for u in units:
         if not force and foreign(u):
@@ -283,9 +376,15 @@ def write_units(units: list[Unit], *, force: bool = False) -> list[Path]:
 def install(
     units: list[Unit], *, start: bool = True, force: bool = False
 ) -> list[tuple[str, int, str]]:
-    """Write, reload, enable (and start). Returns one (step, rc, output) per
-    systemctl call so the caller can show exactly what failed.
+    """Write, then enable (and start). Returns one (step, rc, output) per
+    systemctl/launchctl call so the caller can show exactly what failed.
     """
+    if sys.platform == "darwin":
+        return _install_launchd(units, start=start, force=force)
+    return _install_systemd(units, start=start, force=force)
+
+
+def _install_systemd(units: list[Unit], *, start: bool, force: bool) -> list[tuple[str, int, str]]:
     write_units(units, force=force)
     steps: list[tuple[str, int, str]] = []
 
@@ -305,11 +404,44 @@ def install(
     return steps
 
 
-def uninstall(units: list[Unit], *, force: bool = False) -> list[tuple[str, int, str]]:
-    """Stop, disable, remove the files, reload. Leaves the bus DB alone —
-    uninstalling a service must never look like uninstalling your data — and
-    leaves alone any unit file we didn't write.
+def _install_launchd(units: list[Unit], *, start: bool, force: bool) -> list[tuple[str, int, str]]:
+    """Write the plists, then (unless --no-start) load them. RunAtLoad is
+    always on, so the plist itself is `enable`-equivalent — launchd picks it
+    up at the next login regardless. Whether we call `launchctl load` *now* is
+    the "--now": that's the only thing --no-start withholds.
+
+    An already-loaded agent keeps its OLD ProgramArguments until unloaded and
+    reloaded — the same problem `enable --now` + `restart` solves on the
+    systemd side — so a currently-loaded copy is unloaded first. That unload
+    is expected to fail ("not loaded") on a first install; it isn't surfaced
+    as a step for that reason, mirroring how systemd's `restart` never fails
+    on a unit that merely wasn't running yet.
     """
+    write_units(units, force=force)
+    steps: list[tuple[str, int, str]] = []
+    for u in units:
+        if not start:
+            steps.append((f"write {u.name}", 0, "queued for next login — not started (--no-start)"))
+            continue
+        launchctl("unload", str(u.path))  # best-effort; see docstring
+        p = launchctl("load", str(u.path))
+        steps.append(
+            (f"load {u.name}", p.returncode, ((p.stderr or "") + (p.stdout or "")).strip())
+        )
+    return steps
+
+
+def uninstall(units: list[Unit], *, force: bool = False) -> list[tuple[str, int, str]]:
+    """Stop, remove the files. Leaves the bus DB alone — uninstalling a
+    service must never look like uninstalling your data — and leaves alone
+    any unit/agent file we didn't write.
+    """
+    if sys.platform == "darwin":
+        return _uninstall_launchd(units, force=force)
+    return _uninstall_systemd(units, force=force)
+
+
+def _uninstall_systemd(units: list[Unit], *, force: bool) -> list[tuple[str, int, str]]:
     steps: list[tuple[str, int, str]] = []
     for u in units:
         if not force and foreign(u):
@@ -328,6 +460,22 @@ def uninstall(units: list[Unit], *, force: bool = False) -> list[tuple[str, int,
     return steps
 
 
+def _uninstall_launchd(units: list[Unit], *, force: bool) -> list[tuple[str, int, str]]:
+    steps: list[tuple[str, int, str]] = []
+    for u in units:
+        if not force and foreign(u):
+            steps.append((f"skip {u.name}", 0, "not written by cabildo — left running"))
+            continue
+        p = launchctl("unload", str(u.path))
+        steps.append(
+            (f"unload {u.name}", p.returncode, ((p.stderr or "") + (p.stdout or "")).strip())
+        )
+        if u.path.exists():
+            u.path.unlink()
+            steps.append((f"rm {u.path}", 0, ""))
+    return steps
+
+
 _SHOW_PROPS = (
     "UnitFileState",
     "ActiveState",
@@ -340,7 +488,15 @@ _SHOW_PROPS = (
 
 
 def status(unit: Unit) -> dict:
-    """What systemd thinks of one unit, plus whether we wrote its file at all."""
+    """What the platform's service manager thinks of one unit/agent, plus
+    whether we wrote its file at all.
+    """
+    if sys.platform == "darwin":
+        return _status_launchd(unit)
+    return _status_systemd(unit)
+
+
+def _status_systemd(unit: Unit) -> dict:
     info = {
         "key": unit.key,
         "name": unit.name,
@@ -352,6 +508,30 @@ def status(unit: Unit) -> dict:
         k, _, v = line.partition("=")
         if k in _SHOW_PROPS:
             info[k] = v
+    return info
+
+
+# `launchctl list <label>` prints a quasi-plist dump when the agent is loaded,
+# e.g. `"PID" = 1234;` / `"LastExitStatus" = 0;` — not real plist syntax
+# (plistlib can't parse it), so it's picked apart line by line instead.
+_LAUNCHCTL_LIST_LINE = re.compile(r'^\s*"?(\w+)"?\s*=\s*(.+?);\s*$')
+
+
+def _status_launchd(unit: Unit) -> dict:
+    info = {
+        "key": unit.key,
+        "name": unit.name,
+        "installed": unit.path.exists(),
+        "path": str(unit.path),
+    }
+    p = launchctl("list", unit.label)
+    info["loaded"] = p.returncode == 0
+    if p.returncode != 0:
+        return info
+    for line in (p.stdout or "").splitlines():
+        m = _LAUNCHCTL_LIST_LINE.match(line)
+        if m:
+            info[m.group(1)] = m.group(2).strip('"')
     return info
 
 
