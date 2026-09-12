@@ -4,6 +4,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-09-12
+
 ### Added
 
 - **`cabildo viewer`** — a read-only local web view of the bus (agents, locks,
@@ -20,6 +22,12 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   hooks, the `watch` TUI, and the new `viewer` all work with no network and no
   account. `cabildo sync` remains here as the optional one-way client that
   mirrors the local bus up to a hosted instance.
+- **Repo aligned to the standard OSS template**: proto/moon-driven GitLab CI
+  (one `moon run :ci`, `:release` on main via PyPI OIDC Trusted Publishing),
+  `pre-commit`/`pre-push` git hooks, version-bump guards (`scripts/bump-version`,
+  `check-version-bump`, `ci-version-guard`), ruff + pyright config, mkdocs +
+  Pages, and `uv.lock`. `__version__` is now mirrored from `pyproject` and
+  asserted by a test.
 
 ## [0.1.2]
 
