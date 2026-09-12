@@ -4,6 +4,18 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-09-12
+
+### Added
+
+- **macOS desktop notifications (#4)** — `desktop.py` gains a darwin backend
+  behind a `sys.platform` check (the Linux `notify-send`/D-Bus path is unchanged):
+  `available()` returns true when `osascript` is present, passive notifications use
+  `osascript display notification`, and the `request(action="ask")` button
+  round-trip uses `terminal-notifier` (or an `osascript` dialog fallback). Without
+  it, urgent-to-human prompts silently no-op'd on macOS. Darwin path is unit-tested
+  against mocked `osascript`/`terminal-notifier` output; not yet run on a real Mac.
+
 ## [0.1.5] - 2026-09-12
 
 ### Added
