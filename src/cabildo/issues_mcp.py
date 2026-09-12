@@ -196,10 +196,14 @@ def show_issue(name: str) -> str:
     text = path.read_text()
     if len(text) <= SHOW_LIMIT:
         return text
-    return (
-        f"{text[:SHOW_LIMIT]}\n\n… truncated at {SHOW_LIMIT} of {len(text)} chars. "
-        f"Read {path} directly for the rest."
+    # Budget the footer, path included, against the cap. `path` is absolute and its length is
+    # unbounded (a macOS pytest temp dir alone runs to /private/var/folders/…), so slicing the body
+    # to a fixed SHOW_LIMIT and then appending the footer overran the cap. Subtract the rendered
+    # footer instead, so body + footer stays within SHOW_LIMIT no matter how long the path is.
+    footer = (
+        f"\n\n… truncated at {SHOW_LIMIT} of {len(text)} chars. Read {path} directly for the rest."
     )
+    return text[: max(0, SHOW_LIMIT - len(footer))] + footer
 
 
 @mcp.tool(structured_output=False)
