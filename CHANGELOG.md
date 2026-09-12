@@ -4,6 +4,19 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-09-12
+
+### Added
+
+- **macOS memory attribution (#3)** — `procs.py` gains darwin backends behind a
+  `sys.platform` check: `_memory_darwin` (`sysctl`/`vm_stat` for RAM and swap),
+  `_processes_darwin` (`ps -axo` for per-process RSS and ancestry), so `cabildo
+  mem`, per-agent RSS, and orphan detection now work on macOS. Memory-pressure
+  (PSI) has no darwin equivalent and is deliberately gated off (`_pressure_darwin`
+  returns empty) rather than faked. Linux `/proc` paths are unchanged. Darwin
+  path is unit-tested against mocked `ps`/`vm_stat`/`sysctl` output; not yet run
+  on a real Mac.
+
 ## [0.1.7] - 2026-09-12
 
 ### Added

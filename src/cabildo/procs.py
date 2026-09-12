@@ -24,15 +24,26 @@ Chrome gets the whole mechanism turned off.
 
 Nothing here kills anything, ever. It reports; humans and agents decide.
 
-Linux /proc only, stdlib only (the hooks import this transitively). Every reader
-degrades to empty rather than raising: a memory monitor that can crash a session
-is worse than no memory monitor.
+Linux reads /proc directly -- fast, stdlib only (the hooks import this
+transitively). Darwin has no /proc, so its backends shell out to `ps`,
+`vm_stat`, and `sysctl` instead; same contract, one process spawn per snapshot
+instead of zero. Every reader still degrades to empty rather than raising: a
+memory monitor that can crash a session is worse than no memory monitor.
+
+PSI (kernel memory-pressure stall time) has no darwin equivalent -- macOS only
+exposes a discrete, instantaneous level (`kern.memorystatus_vm_pressure_level`:
+NORMAL/WARN/CRITICAL), not a rolling stall-time average. `pressure()` reports
+{} there rather than fake one; see `_pressure_darwin` for why that is the
+honest choice, not a stub waiting to be filled in.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import subprocess
+import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -47,6 +58,20 @@ def _read(path: str) -> str:
         return Path(path).read_text()
     except OSError:
         return ""
+
+
+def _run(*args: str) -> str:
+    """Stdout of a best-effort subprocess call, or "" on any failure.
+
+    The darwin backends have no /proc to read, so this is their `_read()`:
+    a missing binary, a non-zero exit, or a hang past the timeout all degrade
+    to empty rather than raising or blocking a snapshot forever.
+    """
+    try:
+        cp = subprocess.run(args, capture_output=True, text=True, timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return cp.stdout if cp.returncode == 0 else ""
 
 
 # --------------------------------------------------------------------------- #
@@ -89,6 +114,10 @@ _MEM_FIELDS = {
 
 
 def memory() -> Memory:
+    return _memory_darwin() if sys.platform == "darwin" else _memory_linux()
+
+
+def _memory_linux() -> Memory:
     vals: dict[str, int] = {}
     for line in _read("/proc/meminfo").splitlines():
         name, _, rest = line.partition(":")
@@ -101,7 +130,64 @@ def memory() -> Memory:
     return Memory(**vals)
 
 
+# vm_stat prints "<label padded to 30>  <value padded to 16>.\n" -- trailing
+# period included -- after a header line naming the page size (16 KiB on
+# Apple Silicon, 4 KiB on Intel; never hardcode it).
+_VM_STAT_FIELDS = {"Pages free": "free", "Pages inactive": "inactive"}
+_VM_STAT_PAGESIZE_RE = re.compile(r"page size of (\d+) bytes")
+_SWAPUSAGE_RE = re.compile(r"total\s*=\s*([\d.]+)M\s+used\s*=\s*([\d.]+)M\s+free\s*=\s*([\d.]+)M")
+
+
+def _memory_darwin() -> Memory:
+    """`sysctl` for the totals /proc/meminfo would give us, `vm_stat` for the
+    breakdown MemAvailable is built from.
+
+    "Available" has no darwin counterpart either, so rather than invent one
+    this mirrors psutil's cross-platform formula: `inactive + free` pages.
+    Inactive is darwin's nearest analogue of Linux's reclaimable page cache --
+    not yet needed, but not pinned down as "in use" either -- and free is
+    already free. `purgeable` and `speculative` are deliberately left out, same
+    as psutil (github.com/giampaolo/psutil, psutil/arch/osx/mem.c; see also
+    psutil issue #1277 for why speculative doesn't count).
+    """
+    total_kb = 0
+    raw_total = _run("sysctl", "-n", "hw.memsize").strip()
+    if raw_total.isdigit():
+        total_kb = int(raw_total) // 1024
+
+    vm_text = _run("vm_stat")
+    size_match = _VM_STAT_PAGESIZE_RE.search(vm_text)
+    page_kb = int(size_match.group(1)) / 1024 if size_match else 4.0
+    pages: dict[str, int] = {}
+    for line in vm_text.splitlines():
+        name, sep, rest = line.partition(":")
+        key = _VM_STAT_FIELDS.get(name.strip()) if sep else None
+        if key:
+            try:
+                pages[key] = int(rest.strip().rstrip("."))
+            except ValueError:
+                pass
+    available_kb = round((pages.get("free", 0) + pages.get("inactive", 0)) * page_kb)
+
+    swap_total_kb = swap_free_kb = 0
+    swap_match = _SWAPUSAGE_RE.search(_run("sysctl", "-n", "vm.swapusage"))
+    if swap_match:
+        swap_total_kb = round(float(swap_match.group(1)) * 1024)
+        swap_free_kb = round(float(swap_match.group(3)) * 1024)
+
+    return Memory(
+        total_kb=total_kb,
+        available_kb=available_kb,
+        swap_total_kb=swap_total_kb,
+        swap_free_kb=swap_free_kb,
+    )
+
+
 def pressure() -> dict[str, float]:
+    return _pressure_darwin() if sys.platform == "darwin" else _pressure_linux()
+
+
+def _pressure_linux() -> dict[str, float]:
     """Kernel memory PSI, or {} where it isn't compiled in.
 
     Percentages lie about *load*: a box can sit at 5% available and be perfectly
@@ -121,6 +207,22 @@ def pressure() -> dict[str, float]:
                 except ValueError:
                     pass
     return out
+
+
+def _pressure_darwin() -> dict[str, float]:
+    """Always {} -- deliberately, not "not implemented yet".
+
+    The nearest darwin has to PSI is `kern.memorystatus_vm_pressure_level` (the
+    same signal the `memory_pressure` CLI and dispatch_source_memorypressure
+    read): a discrete, instantaneous NORMAL/WARN/CRITICAL level, not a rolling
+    stall-time average. Synthesizing an `avgN`-shaped float from a 3-value
+    snapshot would look like PSI without meaning what PSI means, and a monitor
+    that lies about load is worse than one that says nothing (see the module
+    docstring). `Snapshot.stall_pct` already treats {} as "no evidence", so
+    `monitor.level_for` falls back to `avail_pct` alone on darwin — honest, if
+    less sensitive than Linux.
+    """
+    return {}
 
 
 # --------------------------------------------------------------------------- #
@@ -210,6 +312,12 @@ def _cwd(pid: int) -> str:
 
 
 def processes(min_rss_kb: int = 0) -> list[Proc]:
+    return (
+        _processes_darwin(min_rss_kb) if sys.platform == "darwin" else _processes_linux(min_rss_kb)
+    )
+
+
+def _processes_linux(min_rss_kb: int = 0) -> list[Proc]:
     """Every process at or above `min_rss_kb`, biggest first.
 
     Filtered on RSS *before* reading cmdline: the RSS read is one line per pid
@@ -247,6 +355,61 @@ def processes(min_rss_kb: int = 0) -> list[Proc]:
     return out
 
 
+# ps's ELAPSED column: "[[dd-]hh:]mm:ss" -- there is no darwin `etimes` (that's
+# a Linux/procps-only extension), so we parse the colon-separated form and
+# turn it into an absolute started_at ourselves, the same shape /proc gives us.
+_ETIME_RE = re.compile(r"^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$")
+
+
+def _parse_etime(text: str) -> float:
+    """`ps -o etime=` as seconds elapsed. Anything unparseable -> 0.0 (treated
+    the same as "unknown start time" already is on Linux: age reads as 0).
+    """
+    m = _ETIME_RE.match(text.strip())
+    if not m:
+        return 0.0
+    days, hours, mins, secs = m.groups()
+    return int(days or 0) * 86400 + int(hours or 0) * 3600 + int(mins) * 60 + float(secs)
+
+
+def _processes_darwin(min_rss_kb: int = 0) -> list[Proc]:
+    """One `ps` call for every process: pid, ppid, rss, elapsed time, and the
+    full command line, in that column order so a `split(None, 4)` cleanly
+    separates the four fixed fields from the command (which may itself
+    contain spaces).
+
+    No per-pid syscalls the way the /proc walk needs -- `ps` already did that
+    walk -- so the tradeoff is one process spawn per snapshot instead of zero.
+    `rss` is already in 1024-byte units, same convention as /proc/<pid>/statm.
+    """
+    out: list[Proc] = []
+    now = time.time()
+    for line in _run("ps", "-axo", "pid=,ppid=,rss=,etime=,args=").splitlines():
+        parts = line.split(None, 4)
+        if len(parts) < 4:
+            continue
+        try:
+            pid, ppid, rss = int(parts[0]), int(parts[1]), int(parts[2])
+        except ValueError:
+            continue
+        if rss < min_rss_kb or rss == 0:
+            continue
+        args = parts[4] if len(parts) > 4 else ""
+        comm = os.path.basename(args.split(" ", 1)[0]) if args else ""
+        out.append(
+            Proc(
+                pid=pid,
+                ppid=ppid,
+                comm=comm,
+                rss_kb=rss,
+                started_at=now - _parse_etime(parts[3]),
+                cmdline=args,
+            )
+        )
+    out.sort(key=lambda p: p.rss_kb, reverse=True)
+    return out
+
+
 def attribute(procs: list[Proc], *, pid_to_session: dict[int, str] | None = None) -> None:
     """Fill in `session_id` on each proc, in place.
 
@@ -257,6 +420,13 @@ def attribute(procs: list[Proc], *, pid_to_session: dict[int, str] | None = None
 
     `pid_to_session` maps claude pids to session ids (from the bus). Without it,
     ancestry still resolves a pid, and the caller can map it later.
+
+    On darwin, `_cwd` and `resolve_claude_pid` still read /proc directly (that
+    ancestry walk is `context.py`'s, out of this module's scope) and simply
+    find nothing there — same "degrade to empty" contract, no crash. So on
+    darwin only the path route (cmdline against the scratchpad pattern) can
+    attribute a process; ancestry attribution is a follow-up, not something
+    this fix claims to cover.
     """
     lookup = pid_to_session or {}
     for p in procs:

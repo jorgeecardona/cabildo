@@ -87,14 +87,12 @@ macOS: identity resolution has a `ps`-backed backend on macOS behind the same
 
 **Linux-only, for now:**
 
-- The daemon's `mem`/`orphans` conditions and the `cabildo mem` command
-  (`cabildo/procs.py`, `monitor.py`) — full-machine memory pressure and
-  "process whose owning agent is gone" detection. Both need enumerating every
-  process on the box each sweep (`/proc`'s directory-of-pids), which has no
-  equally cheap macOS equivalent without an extra dependency; the `ps`-per-pid
-  approach used for identity resolution doesn't scale to "all ~500 processes,
-  every few seconds." These degrade to reporting nothing on macOS (an empty
-  snapshot, not a crash) rather than raising.
+- Memory-**pressure** stall detection (`monitor.py`'s `/proc/pressure/memory`
+  reads and the daemon's PSI-based conditions). macOS exposes only a discrete
+  pressure *level*, not PSI's rolling stall-time average, so `pressure()`
+  reports empty there rather than faking one. Memory *attribution* itself —
+  `cabildo mem`, per-agent RSS, and orphan detection in `cabildo/procs.py` — now
+  has a darwin backend (`ps`/`vm_stat`/`sysctl`) and works on both platforms.
 - `cabildo service` (systemd --user units) — macOS has no systemd.
   `cabildo service install --print` still prints the `ExecStart` command so
   you can wrap it in a launchd plist or your own supervisor by hand.

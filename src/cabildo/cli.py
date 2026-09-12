@@ -379,7 +379,7 @@ def cmd_mem(args) -> int:
             + (
                 f" · stalled {snap.stall_pct:.1f}% of the last minute"
                 if snap.pressure
-                else f" {C.DIM}· no PSI{C.OFF}"
+                else f" {C.DIM}· no PSI ({'Linux-only' if sys.platform != 'linux' else 'not in this kernel'}){C.OFF}"
             )
             + (f" → {col}{level}{C.OFF}" if level else "")
         )
