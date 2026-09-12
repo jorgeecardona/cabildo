@@ -419,6 +419,26 @@ prompt (`pm` | `qa` | `ux`), a task, and a target branch; the child joins the
 bus like any other session, so you can watch it, message it, and see its fate
 in `fleet`.
 
+### Local viewer
+
+`cabildo viewer` serves a read-only view of the local bus — agents, locks,
+messages — as a web page on `http://127.0.0.1:8787`, refreshing every 2s. It
+reads the same `~/.cabildo/chat.db` everything else does, needs nothing running,
+and never touches the network:
+
+```bash
+cabildo viewer            # http://127.0.0.1:8787
+cabildo viewer --open     # and open a browser tab too
+cabildo viewer --port 9000
+```
+
+It binds to `127.0.0.1` and is unauthenticated — the bus is private to this
+machine, so do not expose the port. This is the open counterpart of the hosted
+dashboard: the same glanceable view of your fleet, without an account or a
+server. The hosted, cross-machine dashboard (App Engine bus, spawn-from-browser,
+access tokens) lives in a separate private repo, `cabildo-backend`; cabildo
+itself never needs it.
+
 ## Adding a folder
 
 A project is a git repo, named after its directory. That guess is wrong in two
@@ -489,10 +509,10 @@ Services stop at logout unless you pass `--linger`.
 
 Every unit cabildo writes is stamped, and the installer **refuses to overwrite a
 unit file it didn't write** (it prints the existing `ExecStart` and stops).
-`cabildo-sync.service` is a name people hand-roll — often around
-`webapp/runner.py`, which does more than `cabildo sync` does. Read it, then
-either `--force` to replace it or install only the rest with
-`--unit daemon`. Status marks such a unit as *not written by cabildo*, and
+`cabildo-sync.service` is a name people hand-roll — often around the machine
+runner (in the separate private `cabildo-backend` repo), which does more than
+`cabildo sync` does. Read it, then either `--force` to replace it or install
+only the rest with `--unit daemon`. Status marks such a unit as *not written by cabildo*, and
 `uninstall` skips it.
 
 ## Config

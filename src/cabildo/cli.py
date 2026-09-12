@@ -24,6 +24,7 @@ is unaffected by whether any agent happens to be awake.
     python -m cabildo.cli cost -d 7 --rate 3    # what running cabildo cost you
     python -m cabildo.cli sync                   # push your sessions to the hosted dashboard
     python -m cabildo.cli add -p paas .          # put this folder on the bus (name + .mcp.json)
+    python -m cabildo.cli viewer                  # read-only web view of the local bus on localhost
     python -m cabildo.cli service install        # run the daemon as a systemd --user service
 
 Stdlib only, like the rest of the package.
@@ -1139,6 +1140,12 @@ def cloud_uplink_levels() -> tuple:
 # --------------------------------------------------------------------------- #
 # Entry point
 # --------------------------------------------------------------------------- #
+def cmd_viewer(args) -> int:
+    from . import viewer
+
+    return viewer.serve(args.host, args.port, args.open)
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="cabildo", description=(__doc__ or "").split("\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1326,6 +1333,13 @@ def main(argv: list[str] | None = None) -> int:
     sv.add_argument("--print", dest="print_only", action="store_true",
                     help="install: print the unit files instead of writing them")
     sv.set_defaults(fn=cmd_service)
+
+    vw = sub.add_parser("viewer",
+                        help="read-only web view of the local bus on localhost")
+    vw.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)")
+    vw.add_argument("--port", type=int, default=8787, help="port (default: 8787)")
+    vw.add_argument("--open", action="store_true", help="open a browser tab")
+    vw.set_defaults(fn=cmd_viewer)
 
     args = p.parse_args(argv)
     return args.fn(args)
