@@ -25,6 +25,7 @@ is unaffected by whether any agent happens to be awake.
     python -m cabildo.cli sync                   # push your sessions to the hosted dashboard
     python -m cabildo.cli add -p paas .          # put this folder on the bus (name + .mcp.json)
     python -m cabildo.cli viewer                  # read-only web view of the local bus on localhost
+    python -m cabildo.cli doctor                   # verify the install + flag platform gaps
     python -m cabildo.cli service install        # run the daemon as a systemd --user service
 
 Stdlib only, like the rest of the package.
@@ -1319,6 +1320,43 @@ def cmd_viewer(args) -> int:
     return viewer.serve(args.host, args.port, args.open)
 
 
+_DOCTOR_GLYPH = {
+    "ok": (C.GREEN, "✓"),
+    "warn": (C.YELLOW, "⚠"),
+    "fail": (C.RED, "✗"),
+    "na": (C.DIM, "○"),
+}
+
+
+def cmd_doctor(args) -> int:
+    """One health check across the whole install: the six hooks, both MCP
+    servers, the bus DB (reachable + WAL), the daemon, and the platform features
+    cabildo needs on THIS machine. Exit non-zero only when something is genuinely
+    broken — a WARN (a platform gap, no daemon running) is flagged but passes.
+    """
+    from . import doctor
+
+    checks = doctor.run()
+    for c in checks:
+        col, glyph = _DOCTOR_GLYPH.get(c.status, (C.DIM, "?"))
+        print(f"  {col}{glyph}{C.OFF} {C.BOLD}{c.name:<17}{C.OFF} {c.detail}")
+        if c.fix:
+            print(f"      {C.DIM}→ {c.fix}{C.OFF}")
+
+    n_fail = sum(c.status == doctor.FAIL for c in checks)
+    n_warn = sum(c.status == doctor.WARN for c in checks)
+    if n_fail:
+        print(
+            f"\n{C.RED}{C.BOLD}{n_fail} problem(s){C.OFF} — fix the {C.RED}✗{C.OFF} line(s) above."
+        )
+        return 1
+    if n_warn:
+        print(f"\n{C.GREEN}ok{C.OFF} {C.DIM}— {n_warn} warning(s); nothing broken.{C.OFF}")
+        return 0
+    print(f"\n{C.GREEN}{C.BOLD}healthy{C.OFF} — everything wired.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="cabildo", description=(__doc__ or "").split("\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1593,6 +1631,11 @@ def main(argv: list[str] | None = None) -> int:
     vw.add_argument("--port", type=int, default=8787, help="port (default: 8787)")
     vw.add_argument("--open", action="store_true", help="open a browser tab")
     vw.set_defaults(fn=cmd_viewer)
+
+    dr = sub.add_parser(
+        "doctor", help="verify the install (hooks, MCP, DB, daemon) and flag platform gaps"
+    )
+    dr.set_defaults(fn=cmd_doctor)
 
     args = p.parse_args(argv)
     return args.fn(args)

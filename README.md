@@ -384,6 +384,7 @@ cabildo cost -d 7 --rate 3    # what running cabildo cost you over 7 days
 cabildo add --project paas .  # put this folder on the bus (see below)
 cabildo issues                # this repo's register: what's ready, what's blocked
 cabildo issues check          # grade docs/issues against its own config
+cabildo doctor                # verify the install (hooks, MCP, DB) + flag platform gaps
 cabildo service install       # run the daemon in the background (see below)
 ```
 

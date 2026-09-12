@@ -4,6 +4,21 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-09-12
+
+### Added
+
+- **`cabildo doctor`** — one command that verifies the whole install and flags
+  what won't work on this machine. It checks the six hooks are wired in
+  `~/.claude/settings.json`, that the `cabildo` bus server is registered (user or
+  project scope) and the per-repo `issues` server is wired where a `docs/issues/`
+  exists, that the SQLite bus is reachable and in WAL, and whether a daemon is
+  live. Crucially it also flags the platform features cabildo leans on that a
+  given OS may lack — `/proc` process identity, `notify-send`, and
+  `systemd --user` — so the macOS gaps surface at check time instead of as an
+  agent that mysteriously never joins the bus. Exits non-zero only on a genuine
+  break; platform gaps and a missing (optional) daemon are warnings.
+
 ## [0.1.4] - 2026-09-12
 
 ### Fixed
