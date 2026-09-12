@@ -4,6 +4,17 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-09-12
+
+### Fixed
+
+- **`show_issue` no longer overruns `SHOW_LIMIT`.** The truncation footer embeds
+  the issue's absolute path, whose length is unbounded, so a long path pushed the
+  output past the cap (a red suite on macOS, where pytest temp dirs live under
+  `/private/var/folders/...`). The footer's rendered length, path included, is
+  now budgeted against `SHOW_LIMIT`, so body + footer stays within the cap
+  regardless of path length. (#1)
+
 ## [0.1.3] - 2026-09-12
 
 ### Added
