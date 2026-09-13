@@ -4,7 +4,28 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
-## [0.1.12] - 2026-09-13
+## [0.1.13] - 2026-09-13
+
+### Added
+
+- **Codex delivery + cooperative coordination (#10)** — `cabildo codex` now also
+  wires Codex lifecycle hooks (merged into `~/.codex/hooks.json`, non-clobbering
+  like `.mcp.json`). New `codex_hooks.py` handles `SessionStart` (register +
+  presence banner), `UserPromptSubmit` (unread + machine conditions),
+  `PreToolUse` (the claim guard — denies via `permissionDecision:"deny"`, the
+  same client-agnostic `cabildo.guard` logic Claude runs), and `PostToolUse`
+  (mid-turn urgent delivery). `context.py` gains `resolve_codex_pid` (the Codex
+  counterpart of `resolve_claude_pid`), so the `SessionStart` hook binds Codex's
+  real `session_id` to the owning `codex` process and the MCP server resolves
+  back to it — stable identity across MCP reconnect. New `cabildo-codex-hook`
+  entry point. Delivery is boundary-driven (same pull model as Claude; no idle
+  wake). Enforcement is honest and documented in a README matrix: `PreToolUse`
+  deny is real on both clients (Bash-command guards + MCP tool calls); claim
+  *visibility* is mutual (a Codex-held lease denies a Claude edit and vice
+  versa, verified); `file:`-lease enforcement on Codex *edits* is a follow-up
+  because Codex edits via `apply_patch`, whose path shape isn't mapped yet.
+  Codex requires trusting hooks (`/hooks`) before they run. Live Codex behavior
+  (process topology, real deny) is not auto-tested — needs Codex installed.
 
 ### Added
 

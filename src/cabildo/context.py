@@ -144,9 +144,49 @@ def _exe_id(argv: list[str]) -> str:
     return argv[0].lower()
 
 
-def _is_claude(pid: int) -> bool:
+def _exe_is(pid: int, needle: str) -> bool:
+    """True if `pid`'s executable identifies as `needle` (and isn't cabildo's own
+    binary). One predicate behind both the claude and codex walks.
+    """
     exe = _exe_id(_argv(pid))
-    return "claude" in exe and "cabildo" not in exe
+    return needle in exe and "cabildo" not in exe
+
+
+def _is_claude(pid: int) -> bool:
+    return _exe_is(pid, "claude")
+
+
+def _is_codex(pid: int) -> bool:
+    return _exe_is(pid, "codex")
+
+
+def _resolve_agent_pid(is_match, start_pid: int | None, include_self: bool) -> int:
+    """Nearest ancestor (optionally self) whose exe matches `is_match`, or 0.
+
+    The shared walk behind resolve_claude_pid/resolve_codex_pid: exe-only
+    identification, nothing cached, a dead/unreadable pid ends the walk rather
+    than guessing. See resolve_claude_pid for the full rationale.
+    """
+    start = start_pid if start_pid is not None else os.getpid()
+    if include_self and start > 1 and is_match(start):
+        return start
+    pid = _ppid(start)
+    seen: set[int] = set()
+    while pid and pid > 1 and pid not in seen:
+        seen.add(pid)
+        if is_match(pid):
+            return pid
+        pid = _ppid(pid)
+    return 0
+
+
+def resolve_codex_pid(start_pid: int | None = None, *, include_self: bool = False) -> int:
+    """Nearest `codex` ancestor pid, 0 if none. The Codex counterpart of
+    resolve_claude_pid: the codex process a Codex hook and the cabildo MCP
+    server both descend from, used as the owner-pid rendezvous anchor so a Codex
+    session's real id (bound by its SessionStart hook) and its MCP server agree.
+    """
+    return _resolve_agent_pid(_is_codex, start_pid, include_self)
 
 
 def resolve_claude_pid(start_pid: int | None = None, *, include_self: bool = False) -> int:
@@ -179,17 +219,7 @@ def resolve_claude_pid(start_pid: int | None = None, *, include_self: bool = Fal
     identity here is exe-only (see `_exe_id`) and is never inherited from a
     pid's *previous* occupant.
     """
-    start = start_pid if start_pid is not None else os.getpid()
-    if include_self and start > 1 and _is_claude(start):
-        return start
-    pid = _ppid(start)
-    seen: set[int] = set()
-    while pid and pid > 1 and pid not in seen:
-        seen.add(pid)
-        if _is_claude(pid):
-            return pid
-        pid = _ppid(pid)
-    return 0
+    return _resolve_agent_pid(_is_claude, start_pid, include_self)
 
 
 # --------------------------------------------------------------------------- #

@@ -1,6 +1,6 @@
 [project]
 name = "cabildo"
-version = "0.1.12"
+version = "0.1.13"
 description = "IPC bus + chat room for coordinating parallel Claude Code agents: messaging, presence, and advisory locks with hook-level enforcement"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -51,6 +51,7 @@ cabildo = "cabildo.cli:main"
 cabildo-mcp = "cabildo.mcp_server:main"
 cabildo-issues-mcp = "cabildo.issues_mcp:main"
 cabildo-hook = "cabildo.hooks.cli:main"
+cabildo-codex-hook = "cabildo.codex_hooks:main"
 
 [dependency-groups]
 dev = ["ruff>=0.6", "pyright>=1.1.390", "pytest>=8"]

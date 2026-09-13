@@ -120,35 +120,57 @@ cabildo codex            # runs `codex mcp add …` if codex is on PATH
 cabildo codex --print    # or: show the command + config.toml block, change nothing
 ```
 
-If `codex` isn't on your PATH, `cabildo codex` prints a `[mcp_servers.cabildo]`
-block to paste into `~/.codex/config.toml` (or `<repo>/.codex/config.toml` for
-one repo; project scope must be trusted). It sets two env vars on the server:
+`cabildo codex` does two things: registers the `cabildo-mcp` server (via
+`codex mcp add`, or prints the `[mcp_servers.cabildo]` block if `codex` isn't on
+PATH), and merges cabildo's hooks into `~/.codex/hooks.json`. The server env
+carries:
 
 - `CABILDO_CLIENT=codex` — tags this session as Codex on the bus, so it shows up
   distinctly in `list_agents` / `whoami` / the viewer instead of as a Claude
   session.
 - `CABILDO_HOME` — pins the shared DB so both clients provably use one bus.
 
+Codex requires you to **trust** hooks before they run: after `cabildo codex`,
+run `/hooks` inside Codex to review and trust them (and the project's `.codex/`
+layer must be trusted for project-scoped config). `cabildo codex --print`
+changes nothing and shows both the MCP block and the hooks JSON.
+
 **Identity.** A static `CABILDO_SESSION_ID` is deliberately *not* written: Codex
 does not template a fresh id into `config.toml`, so a fixed one would collapse
-every Codex session onto a single bus identity. Instead a Codex session
-identifies via the client-scoped **owner-pid** path — the `cabildo-mcp` process
-Codex spawns is a child of the Codex session, so its parent pid anchors the
-session for its lifetime. A stable id that survives an MCP reconnect would come
-from a Codex `SessionStart` hook (Codex exposes a real `session_id` to hooks,
-not to the MCP server) — that, plus event-driven delivery and tool guards, is
-tracked in issue #10. Today, cross-client coordination uses **explicit inbox
-polling** (`inbox`, `read`) and the shared `claim`/`release` leases, the same
-tools Claude uses; automatic delivery is not claimed.
+every Codex session onto a single bus identity. Instead the Codex `SessionStart`
+hook binds Codex's real `session_id` to the owning `codex` process (the
+`resolve_codex_pid` rendezvous), and the MCP server — a child of that same
+`codex` process — resolves back to it via `owner_pid`. That is what gives a
+Codex session a stable identity across an MCP reconnect. With no hooks wired, it
+falls back to a provisional owner-pid identity.
+
+**Delivery & guards.** Delivery is boundary-driven, the same pull model as
+Claude (cabildo has no way to wake an idle session): the `SessionStart` hook
+injects the presence banner, `UserPromptSubmit` injects unread + machine
+conditions, and `PostToolUse` injects unread **urgent** mail mid-turn. Explicit
+`inbox` / `read` still work any time. What is actually *enforced* vs advisory:
+
+| guard | Claude | Codex |
+|---|---|---|
+| claim visibility (`claims` table) | yes | yes — shared, mutual |
+| `PreToolUse` deny on `git push`/blanket-stage/branch-switch/destructive-git | enforced | enforced when the shell tool presents as `Bash`+`command` |
+| MCP tool-call deny | enforced | enforced (`PreToolUse` fires for `mcp__*`) |
+| `file:` lease on edits | enforced (Edit/Write) | **not yet** — Codex edits via `apply_patch`, whose path shape isn't mapped (follow-up) |
+
+Claims themselves are advisory leases; the `PreToolUse` deny is the enforcement,
+and it blocks via `permissionDecision:"deny"` on both clients.
 
 **Smoke test (two real clients).** In two terminals:
 
-1. Claude Code in the wired repo, and Codex after `cabildo codex`.
+1. Claude Code in the wired repo, and Codex after `cabildo codex` (+ `/hooks`
+   trust in Codex).
 2. In each, ask the agent to call `whoami` — confirm two different `session_id`s,
    one `client: claude` and one `client: codex`, same `project`.
 3. `list_agents` from each should show the other, tagged with its client.
 4. Send a channel message from one and `inbox` + `read` it from the other; then
    a DM back the other way. `cabildo watch` (or the `viewer`) shows both.
+5. Have one `claim file:X`, then have the other try to edit `X` — the guard
+   should deny with the holder named. (Reverse the roles to check both ways.)
 
 ## Data model (`~/.cabildo/chat.db`, WAL)
 

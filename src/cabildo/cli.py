@@ -1024,6 +1024,8 @@ def cmd_codex(args) -> int:
                 f"{C.DIM}codex not on PATH; remove the {C.OFF}[mcp_servers.cabildo]{C.DIM} "
                 f"block from {user_cfg} yourself.{C.OFF}"
             )
+        hp, hwhat = codex_config.remove_hooks()
+        print(f"{C.YELLOW}hooks{C.OFF} {C.DIM}—{C.OFF} {hp} ({hwhat})")
         return 0
 
     argv = codex_config.add_argv(project, home)
@@ -1033,6 +1035,8 @@ def cmd_codex(args) -> int:
         print(f"{C.DIM}would run:{C.OFF} {' '.join(argv)}")
         print(f"\n{C.DIM}or paste into {user_cfg} (or {proj_cfg} for this repo only):{C.OFF}")
         print(block)
+        print(f"{C.DIM}and merge these hooks into {codex_config.hooks_path()}:{C.OFF}")
+        print(codex_config.hooks_preview())
         return 0
 
     if codex_config.codex_on_path():
@@ -1052,6 +1056,18 @@ def cmd_codex(args) -> int:
         f"  {C.DIM}CABILDO_CLIENT=codex tags this session as Codex on the bus; "
         f"CABILDO_HOME pins the shared DB. Restart Codex to pick it up.{C.OFF}"
     )
+
+    try:
+        hp, hwhat = codex_config.apply_hooks()
+        color = C.DIM if hwhat == "unchanged" else C.GREEN
+        print(f"  {color}{hwhat}{C.OFF} {hp} {C.DIM}— delivery + claim-guard hooks{C.OFF}")
+        print(
+            f"  {C.DIM}Codex requires trust for hooks: run {C.OFF}/hooks{C.DIM} in Codex to "
+            f"review and trust them (project scope must be trusted too).{C.OFF}"
+        )
+    except (ValueError, OSError) as e:
+        print(f"  {C.RED}could not write hooks.json: {e}{C.OFF}", file=sys.stderr)
+        return 1
     return 0
 
 
