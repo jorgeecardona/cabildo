@@ -4,6 +4,20 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-09-13
+
+### Added
+
+- **Agent instructions (#5)** — root `AGENTS.md` (Overview/Build/Test/Style/Gotchas)
+  plus a one-line `CLAUDE.md` (`@AGENTS.md`) so Claude Code reads the same
+  instructions; `CLAUDE.local.md` gitignored for personal overrides.
+
+### Changed
+
+- Release re-cut: 0.1.10 was already published to PyPI by the #6 merge, so the
+  subsequent docs merge needed a fresh version to publish. No source changes
+  over 0.1.10 beyond the docs above.
+
 ## [0.1.10] - 2026-09-13
 
 ### Added
