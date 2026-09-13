@@ -4,6 +4,27 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-09-13
+
+### Added
+
+- **Client-independent session identity and lifecycle (#6)** — the `sessions`
+  table gains `client` ('claude', 'codex', ...) and a generic `owner_pid` (the
+  OS process whose death retires the session), via an additive migration that
+  backfills every existing row to `client='claude'`, `owner_pid=claude_pid`.
+  `mcp_server._me` now resolves identity in four tiers — `CABILDO_TAG`, an
+  explicit `CABILDO_SESSION_ID` (+`CABILDO_CLIENT`), the Claude PID rendezvous,
+  then a client-scoped provisional id — so a client that states its own session
+  id gets an exact identity across MCP reconnect, resume, and threads sharing
+  one host process, where host PID alone is ambiguous. `reap_dead_sessions`
+  keys on `owner_pid` (falling back to `claude_pid`), retiring crashed sessions
+  of any client and releasing their claims. `client` is surfaced through
+  `whoami`, `list_agents`, and the local viewer. Existing Claude behavior
+  (hooks, the `pid-<n>` rendezvous, memory attribution) is unchanged. Codex was
+  not live-tested here — that is #9/#10; this is the schema + resolver
+  foundation, covered by unit tests (migration, concurrent clients,
+  reconnect/resume, thread-sharing isolation, crash cleanup, claim release).
+
 ## [0.1.9] - 2026-09-12
 
 ### Added
