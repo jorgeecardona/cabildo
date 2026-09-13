@@ -10,7 +10,7 @@ cabildo is an IPC bus and chat room for coordinating parallel Claude Code agents
 
 - Toolchain (moon, uv) is pinned in `.prototools`; `proto install` brings it up.
 - `uv sync` installs dependencies. The package is stdlib-only at runtime; the only runtime dependency is `mcp`.
-- `python scripts/install.py` (aka `make install`) does the full editable install: it also registers the MCP server and wires the git hooks.
+- `python scripts/install.py` (aka `make install`) does the full editable install: it also registers the MCP server and wires the git hooks. `--client {claude,codex,both}` selects which client(s) to wire (default `claude`); `--print` is a non-mutating dry run.
 - `make install-hooks` once, to point git at the tracked `.githooks/` (pre-commit + pre-push).
 - `make build` builds the sdist and wheel into `dist/`.
 

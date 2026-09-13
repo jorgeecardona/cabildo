@@ -4,6 +4,31 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+### Added
+
+- **Installer client selection + non-mutating preview (#12)** — `scripts/install.py`
+  gains `--client {claude,codex,both}` (default `claude`, preserving the historical
+  behavior). `--client codex` delegates to `cabildo codex` and never touches
+  `~/.claude/settings.json`; `--client both` wires both onto one bus. `--print` is
+  now a genuine dry run: it installs nothing, migrates no data, registers no server,
+  and writes no hooks — it only prints the exact commands and config it would apply
+  (including the real `codex mcp add cabildo --env CABILDO_CLIENT=codex -- cabildo-mcp`
+  command and the `[mcp_servers.cabildo]` block / hooks JSON). Missing executables
+  fail clearly (`uv`, `claude`), a failed `claude mcp add` is fatal rather than a
+  silent warning, and a missing `codex` falls back to printing the paste-in block.
+  Hook command paths are shell-quoted so a venv under a directory with spaces still
+  produces a valid command (a no-op for ordinary paths, so re-running stays
+  idempotent). No server-side `--client` flag exists — Codex identity is carried by
+  the `CABILDO_CLIENT=codex` env, not a flag.
+- **Cross-process transport test (#12)** — `tests/test_transport_subprocess.py` runs
+  two independently identified sessions in separate OS processes against one shared
+  `CABILDO_HOME`, exercising a project-channel message with an explicit read receipt,
+  DMs in both directions, a conflicting claim (held → denied → released → re-taken),
+  and restart identity (one `CABILDO_SESSION_ID` resolving across two launches). It
+  is labeled a transport test, distinct from the live-client smoke test #9/#10 own.
+  `tests/test_install.py` covers client-selection dispatch, non-mutating `--print`,
+  clear failures, safe path quoting, and settings idempotence.
+
 ## [0.1.13] - 2026-09-13
 
 ### Added

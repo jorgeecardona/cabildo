@@ -28,7 +28,20 @@ python scripts/install.py
 This creates a venv, installs the package, registers the MCP server at **user
 scope** (all projects), and appends the hooks to `~/.claude/settings.json`
 (existing hooks are preserved; re-running is idempotent). Pass `--print` to see
-what it would do first.
+what it would do first — a dry run that changes nothing (no venv, no install, no
+registration, no hook writes).
+
+Pick which client(s) to wire with `--client`:
+
+```bash
+python scripts/install.py                    # Claude Code (default)
+python scripts/install.py --client codex     # Codex only — delegates to `cabildo codex`
+python scripts/install.py --client both      # both clients on one bus
+```
+
+`--client codex` does not touch `~/.claude/settings.json`; `--client claude`
+(the default) leaves Codex alone. Missing tools fail clearly (`uv`/`claude`), and
+a missing `codex` falls back to printing the config block to paste.
 
 Or from PyPI:
 
