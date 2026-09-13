@@ -9,6 +9,9 @@ build/
 .moon/cache/
 site/
 
+# personal/machine-specific agent overrides stay local
+CLAUDE.local.md
+
 # conversation logs stay local
 logs/
 .pytest_cache/
