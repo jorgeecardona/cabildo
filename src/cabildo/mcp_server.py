@@ -26,14 +26,52 @@ ACTION_NAMES = sorted(ACTIONS)
 # --------------------------------------------------------------------------- #
 # Identity resolution
 # --------------------------------------------------------------------------- #
+def _client() -> str:
+    """Which agent runtime owns this MCP server.
+
+    Explicit via CABILDO_CLIENT — Codex (and any future non-Claude client) sets
+    it before launching the server, since the PID rendezvous can only recognize
+    a `claude` ancestor on its own. Absent the env, we are the Claude client,
+    the only one whose ancestry resolve_claude_pid() can find unaided.
+    """
+    return (os.environ.get("CABILDO_CLIENT") or "claude").strip().lower() or "claude"
+
+
+def _owner_pid(client: str) -> int:
+    """The OS pid whose death should retire this session.
+
+    For claude it is the `claude` ancestor the rendezvous already finds — the
+    process the hooks and this server both descend from. For any other client
+    the MCP server is launched as a direct child of the client, so the parent
+    pid is the closest liveness anchor available without client-specific process
+    discovery. Never the server's own pid: that dies with the connection, not
+    the session, and would make every reconnect look like a crash.
+    """
+    if client == "claude":
+        return resolve_claude_pid()
+    ppid = os.getppid()
+    return ppid if ppid > 1 else 0
+
+
 def _me(conn) -> str:
     """Resolve *this* session's id and refresh its liveness.
 
-    Order matters. CABILDO_TAG is exact when present: we inherit it from the
-    same `claude` the SessionStart hook ran under, so both ends agree without
-    inferring anything. The PID rendezvous is the fallback for ordinary
-    terminal sessions, and it is a guess — for a spawned `claude -p` it found a
-    different claude entirely and split one agent across two bus identities.
+    Order matters, strongest evidence first:
+
+    1. CABILDO_TAG — exact for a spawned agent: inherited from the same launch
+       the SessionStart hook ran under, so both ends agree without inference.
+    2. CABILDO_SESSION_ID — an id the client states outright. This is the
+       client-independent path and the answer to the ambiguous cases in #6
+       (MCP reconnect, resumed session, several threads sharing one host
+       process): a client that can set env before launching us gets an exact
+       identity, Claude or not, without any ancestry guessing.
+    3. The Claude PID rendezvous — bind to the id the hook recorded for the
+       owning `claude`. Only meaningful for the claude client; a guess, but a
+       good one for an ordinary terminal.
+    4. Provisional owner-pid fallback — mint an id keyed by the owning process
+       so we still function when the hook is missing (claude) or the client
+       sent no explicit id. Scoped to the client so a reused pid never fuses two
+       runtimes; a later hook run reconciles Claude's real id.
     """
     tag = os.environ.get("CABILDO_TAG")
     if tag:
@@ -41,15 +79,56 @@ def _me(conn) -> str:
         if sid is not None:
             store.touch(conn, sid)
             return sid
-    pid = resolve_claude_pid()
-    sid = store.session_for_pid(conn, pid)
-    if sid is None:
-        # Provisional: register keyed by PID so we still work if the hook is
-        # missing/misconfigured. The hook will reconcile the real id later.
-        cwd = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-        root, name = git_project(cwd)
-        sid = f"pid-{pid or os.getpid()}"
-        store.register_session(conn, sid, cwd=cwd, project=root, project_name=name, claude_pid=pid)
+
+    client = _client()
+    owner = _owner_pid(client)
+
+    explicit = (os.environ.get("CABILDO_SESSION_ID") or "").strip()
+    if explicit:
+        if store.get_session(conn, explicit) is None:
+            cwd = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+            root, name = git_project(cwd)
+            store.register_session(
+                conn,
+                explicit,
+                cwd=cwd,
+                project=root,
+                project_name=name,
+                client=client,
+                owner_pid=owner,
+                claude_pid=owner if client == "claude" else None,
+            )
+        store.touch(conn, explicit)
+        return explicit
+
+    if client == "claude":
+        sid = store.session_for_pid(conn, owner)
+        if sid is not None:
+            store.touch(conn, sid)
+            return sid
+    else:
+        sid = store.session_for_owner(conn, owner, client)
+        if sid is not None:
+            store.touch(conn, sid)
+            return sid
+
+    # Provisional. Keep claude's historic `pid-<pid>` id (existing rows,
+    # _resolve_recipient's 'pid-...' shorthand); prefix other clients so their
+    # provisional ids never collide with claude's.
+    cwd = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    root, name = git_project(cwd)
+    anchor = owner or os.getpid()
+    sid = f"pid-{anchor}" if client == "claude" else f"{client}-pid-{anchor}"
+    store.register_session(
+        conn,
+        sid,
+        cwd=cwd,
+        project=root,
+        project_name=name,
+        client=client,
+        owner_pid=owner,
+        claude_pid=owner if client == "claude" else None,
+    )
     store.touch(conn, sid)
     return sid
 
@@ -116,6 +195,7 @@ def whoami() -> dict[str, Any]:
         return {
             "session_id": sid,
             "handle": row["handle"] if row else None,
+            "client": (row["client"] if row else None) or "claude",
             "project": row["project_name"] if row else None,
             "subscriptions": store.subscriptions_of(conn, sid),
             "unread": store.unread_summary(conn, sid)["count"],
@@ -152,6 +232,8 @@ def list_agents(all_projects: bool = False) -> list[dict[str, Any]]:
                 "session_id": r["session_id"],
                 "handle": r["handle"],
                 "name": store.display_name(r),
+                # SELECT * over a migrated sessions table: the column is always present.
+                "client": r["client"] or "claude",
                 "project": r["project_name"],
                 "cwd": r["cwd"],
             }

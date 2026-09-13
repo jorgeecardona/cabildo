@@ -59,7 +59,21 @@ CREATE TABLE IF NOT EXISTS sessions (
     cwd           TEXT,
     project       TEXT,
     project_name  TEXT,
+    -- claude_pid is the Claude-specific rendezvous key: the owning `claude`
+    -- process the SessionStart hook and the MCP server both descend from. It
+    -- stays for the Claude PID walk and for memory attribution (procs.py). For
+    -- the generic, client-independent lifecycle use owner_pid below.
     claude_pid    INTEGER,
+    -- Which agent runtime owns this session: 'claude', 'codex', ... Lets one
+    -- local bus hold sessions from different clients without confusing their
+    -- identities. Defaults to 'claude' (the only client whose ancestry the PID
+    -- rendezvous recognizes unaided; every pre-existing row was a Claude row).
+    client        TEXT NOT NULL DEFAULT 'claude',
+    -- The OS pid whose death retires this session, independent of client. For
+    -- claude it mirrors claude_pid; for other clients it is the client process
+    -- the MCP server is a child of. reap_dead_sessions keys on this. NULL for
+    -- pseudo-sessions with no owning process (the human, the daemon).
+    owner_pid     INTEGER,
     -- Set for spawned agents via CABILDO_TAG in the environment. The PID
     -- rendezvous guesses; a tag is told. Both the SessionStart hook and the MCP
     -- server inherit the same env from the same `claude`, so they agree by
@@ -71,9 +85,10 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_pid ON sessions(claude_pid);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
--- idx_sessions_tag is created in _migrate(), not here: on an existing database
--- the CREATE TABLE above is a no-op, so indexing `tag` from this script throws
--- "no such column" before the migration has a chance to add it.
+-- idx_sessions_tag and idx_sessions_owner_pid are created in _migrate(), not
+-- here: on an existing database the CREATE TABLE above is a no-op, so indexing
+-- a freshly-added column from this script throws "no such column" before the
+-- migration has a chance to add it.
 
 CREATE TABLE IF NOT EXISTS topics (
     name        TEXT PRIMARY KEY,
@@ -281,9 +296,22 @@ def _migrate(conn: sqlite3.Connection) -> None:
     have = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
     if "tag" not in have:
         conn.execute("ALTER TABLE sessions ADD COLUMN tag TEXT")
-    # Unconditional: the column now exists either way (fresh via SCHEMA, old via
-    # the ALTER above), and this is the only place it is safe to index it.
+    if "client" not in have:
+        # NOT NULL DEFAULT backfills every existing row to 'claude' in place:
+        # before this migration the bus only ever held Claude sessions.
+        conn.execute("ALTER TABLE sessions ADD COLUMN client TEXT NOT NULL DEFAULT 'claude'")
+    if "owner_pid" not in have:
+        conn.execute("ALTER TABLE sessions ADD COLUMN owner_pid INTEGER")
+        # One-time backfill, right after the column appears: every pre-existing
+        # session's lifecycle was owned by its claude_pid, so the generic
+        # owner_pid path sees exactly the identity the old claude_pid path saw.
+        # Guarded by the "not in have" check so it runs once, not on every open;
+        # a fresh DB has no rows and this is a harmless no-op there.
+        conn.execute("UPDATE sessions SET owner_pid=claude_pid WHERE owner_pid IS NULL")
+    # Unconditional: the columns now exist either way (fresh via SCHEMA, old via
+    # the ALTERs above), and this is the only place it is safe to index them.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_tag ON sessions(tag)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_owner_pid ON sessions(owner_pid)")
 
     have = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
     if "origin" not in have:
@@ -331,28 +359,52 @@ def register_session(
     project_name: str | None = None,
     claude_pid: int | None = None,
     tag: str | None = None,
+    client: str | None = None,
+    owner_pid: int | None = None,
 ) -> None:
     """Idempotent upsert of a session + its default subscriptions. Called from
     the SessionStart hook (authoritative session_id) and, defensively, from the
     MCP server. Only overwrites columns we were actually given.
+
+    `client` names the owning agent runtime ('claude', 'codex', ...) and
+    `owner_pid` the OS pid whose death retires the session. When `owner_pid` is
+    not given it mirrors `claude_pid`, so existing Claude callers (the hooks)
+    get the generic lifecycle for free without passing anything new. `client`
+    left None preserves an existing row's value (a re-register never downgrades
+    a 'codex' row to 'claude') and defaults to 'claude' only on first insert.
     """
     now = _now()
+    if owner_pid is None:
+        owner_pid = claude_pid
     row = conn.execute(
         "SELECT session_id FROM sessions WHERE session_id=?", (session_id,)
     ).fetchone()
     if row is None:
         conn.execute(
             "INSERT INTO sessions(session_id, cwd, project, project_name, claude_pid, "
-            "tag, status, created_at, last_seen_at) VALUES (?,?,?,?,?,?, 'active', ?, ?)",
-            (session_id, cwd, project, project_name, claude_pid, tag, now, now),
+            "tag, client, owner_pid, status, created_at, last_seen_at) "
+            "VALUES (?,?,?,?,?,?,?,?, 'active', ?, ?)",
+            (
+                session_id,
+                cwd,
+                project,
+                project_name,
+                claude_pid,
+                tag,
+                client or "claude",
+                owner_pid,
+                now,
+                now,
+            ),
         )
     else:
         conn.execute(
             "UPDATE sessions SET "
             "cwd=COALESCE(?,cwd), project=COALESCE(?,project), "
             "project_name=COALESCE(?,project_name), claude_pid=COALESCE(?,claude_pid), "
-            "tag=COALESCE(?,tag), status='active', last_seen_at=? WHERE session_id=?",
-            (cwd, project, project_name, claude_pid, tag, now, session_id),
+            "tag=COALESCE(?,tag), client=COALESCE(?,client), owner_pid=COALESCE(?,owner_pid), "
+            "status='active', last_seen_at=? WHERE session_id=?",
+            (cwd, project, project_name, claude_pid, tag, client, owner_pid, now, session_id),
         )
     if tag:
         # Close the loop with the spawn ledger: the daemon recorded this tag
@@ -435,6 +487,26 @@ def session_for_pid(conn: sqlite3.Connection, claude_pid: int) -> str | None:
     row = conn.execute(
         "SELECT session_id FROM sessions WHERE claude_pid=? ORDER BY last_seen_at DESC LIMIT 1",
         (claude_pid,),
+    ).fetchone()
+    return row["session_id"] if row else None
+
+
+def session_for_owner(conn: sqlite3.Connection, owner_pid: int, client: str) -> str | None:
+    """Client-independent rendezvous: the most-recently-seen active session of
+    `client` owned by `owner_pid`.
+
+    Weaker than the Claude PID walk or an explicit CABILDO_SESSION_ID: a host
+    process shared by several sessions (multiple Codex threads in one process)
+    is ambiguous by owner pid alone, so this returns the freshest one and is
+    only used as a last resort before minting a provisional id. Scoped to a
+    single `client` so a reused pid can never fuse a Claude and a Codex session.
+    """
+    if not owner_pid:
+        return None
+    row = conn.execute(
+        "SELECT session_id FROM sessions WHERE owner_pid=? AND client=? AND status='active' "
+        "ORDER BY last_seen_at DESC LIMIT 1",
+        (owner_pid, client),
     ).fetchone()
     return row["session_id"] if row else None
 
@@ -975,24 +1047,27 @@ def _pid_alive(pid: int) -> bool:
 
 
 def reap_dead_sessions(conn: sqlite3.Connection, is_alive=None) -> int:
-    """Mark 'active' sessions ended when their owning `claude` process is gone.
+    """Mark 'active' sessions ended when their owning process is gone.
 
     The SessionEnd hook is the clean path, but a killed terminal or crashed
-    claude never fires it, leaving zombie 'active' rows that accumulate unread
+    client never fires it, leaving zombie 'active' rows that accumulate unread
     forever and clutter list_agents (74 rows, ~48 'active', ~5 truly running as
-    of this writing). A session whose claude_pid no longer resolves to a live
-    process is ended via end_session (which also releases its claims and closes
-    its spawn rows). Under-reaps by design: a recycled PID that now belongs to
-    some other live process just isn't reaped, which is the safe direction.
-    Sessions with no recorded pid are left to last_seen aging.
+    of this writing). Liveness keys on owner_pid — the client-independent owning
+    process — falling back to claude_pid for any pre-migration row not yet
+    rewritten (owner_pid was backfilled from claude_pid, so the two agree for
+    Claude). A session whose owning pid no longer resolves to a live process is
+    ended via end_session (which also releases its claims and closes its spawn
+    rows). Under-reaps by design: a recycled PID that now belongs to some other
+    live process just isn't reaped, which is the safe direction. Sessions with
+    no recorded pid (the human, the daemon) are left to last_seen aging.
     """
     alive = is_alive or _pid_alive
     rows = conn.execute(
-        "SELECT session_id, claude_pid FROM sessions WHERE status='active'"
+        "SELECT session_id, owner_pid, claude_pid FROM sessions WHERE status='active'"
     ).fetchall()
     reaped = 0
     for r in rows:
-        pid = r["claude_pid"]
+        pid = r["owner_pid"] or r["claude_pid"]
         if pid and not alive(pid):
             end_session(conn, r["session_id"])
             reaped += 1

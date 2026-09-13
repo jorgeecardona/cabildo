@@ -47,6 +47,7 @@ def _state() -> dict[str, Any]:
             agents.append(
                 {
                     "name": store.display_name(r),
+                    "client": (r["client"] if "client" in k else None) or "claude",
                     "project": (r["project_name"] if "project_name" in k else None) or "",
                     "cwd": (r["cwd"] if "cwd" in k else "") or "",
                     "last_seen": _iso(r["last_seen_at"]),
@@ -197,6 +198,7 @@ _PAGE = r"""<!DOCTYPE html>
   .row{padding:10px 16px;border-bottom:1px solid var(--panel-2);display:flex;gap:10px;align-items:baseline}
   .row:last-child{border-bottom:0}
   .id{font:12px var(--mono);color:var(--violet)}
+  .client{font:11px var(--mono);color:var(--bg);background:var(--accent);padding:1px 7px;border-radius:20px}
   .proj{font:11px var(--mono);color:var(--faint);background:var(--panel-2);padding:1px 7px;border-radius:20px}
   .cwd{font:11px var(--mono);color:var(--faint);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .ago{color:var(--faint);font:11px var(--mono);white-space:nowrap}
@@ -262,6 +264,7 @@ async function tick(){
   d.agents.forEach(a=>{
     const r=el("div","row");
     r.append(el("span","id",a.name));
+    if(a.client && a.client!=="claude") r.append(el("span","client",a.client));
     if(a.project) r.append(el("span","proj",a.project));
     r.append(el("span","cwd",a.cwd||""));
     r.append(el("span","ago",a.ago+"s ago"));
