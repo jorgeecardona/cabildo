@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repo. Humans: read README.md and C
 
 ## Overview
 
-cabildo is an IPC bus and chat room for coordinating parallel Claude Code agents: messaging, presence, and advisory locks with hook-level enforcement. It is a normal Python package (a stdio MCP server plus hook scripts); all state lives in one shared SQLite DB, with no daemon and no network.
+cabildo is an IPC bus and chat room for coordinating parallel Claude Code agents: messaging, presence, and advisory locks with hook-level enforcement. It is a normal Python package (a stdio MCP server plus hook scripts); all state lives in one shared SQLite DB, with no daemon and no network. Sessions are client-tagged (`sessions.client`), so Codex can share the same bus — `cabildo codex` wires it via `codex mcp add` (or prints the `~/.codex/config.toml` block); Codex sessions identify by `CABILDO_CLIENT=codex` + the owner-pid path in `mcp_server._me`.
 
 ## Build
 

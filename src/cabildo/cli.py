@@ -995,6 +995,66 @@ def cmd_add(args) -> int:
     return 0
 
 
+def cmd_codex(args) -> int:
+    """Wire Codex onto the same bus as Claude Code. Delegates to `codex mcp add`
+    when Codex is installed; otherwise prints the `~/.codex/config.toml` block to
+    paste. Preserves the existing Claude flow — this touches only Codex config.
+    """
+    import subprocess
+
+    from . import codex_config, store
+    from .context import _git_project
+
+    target = os.path.realpath(os.path.expanduser(args.path))
+    if not os.path.isdir(target):
+        print(f"{C.RED}not a directory:{C.OFF} {target}", file=sys.stderr)
+        return 2
+    _, git_name = _git_project(Path(target))
+    project = (args.project or git_name).strip().lower()
+    home = str(store.home())
+    user_cfg, proj_cfg = codex_config.config_paths()
+
+    if args.remove:
+        if codex_config.codex_on_path():
+            res = subprocess.run(codex_config.remove_argv(), capture_output=True, text=True)
+            out = (res.stdout or res.stderr).strip()
+            print(f"{C.YELLOW}codex mcp remove cabildo{C.OFF} {C.DIM}—{C.OFF} {out or 'done'}")
+        else:
+            print(
+                f"{C.DIM}codex not on PATH; remove the {C.OFF}[mcp_servers.cabildo]{C.DIM} "
+                f"block from {user_cfg} yourself.{C.OFF}"
+            )
+        return 0
+
+    argv = codex_config.add_argv(project, home)
+    block = codex_config.toml_block(project, home)
+
+    if args.print_only:
+        print(f"{C.DIM}would run:{C.OFF} {' '.join(argv)}")
+        print(f"\n{C.DIM}or paste into {user_cfg} (or {proj_cfg} for this repo only):{C.OFF}")
+        print(block)
+        return 0
+
+    if codex_config.codex_on_path():
+        res = codex_config.run_add(project, home)
+        if res.returncode == 0:
+            print(f"{C.GREEN}registered{C.OFF} cabildo with Codex {C.DIM}(codex mcp add){C.OFF}")
+        else:
+            print(f"{C.RED}codex mcp add failed:{C.OFF} {(res.stderr or res.stdout).strip()}")
+            print(f"{C.DIM}paste this into {user_cfg} instead:{C.OFF}\n{block}")
+            return 1
+    else:
+        print(f"{C.YELLOW}codex not on PATH{C.OFF} — paste this into {C.BOLD}{user_cfg}{C.OFF}:")
+        print(block)
+        print(f"{C.DIM}(or {proj_cfg} for this repo only; project scope must be trusted).{C.OFF}")
+
+    print(
+        f"  {C.DIM}CABILDO_CLIENT=codex tags this session as Codex on the bus; "
+        f"CABILDO_HOME pins the shared DB. Restart Codex to pick it up.{C.OFF}"
+    )
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # The project register
 # --------------------------------------------------------------------------- #
@@ -1523,6 +1583,22 @@ def main(argv: list[str] | None = None) -> int:
         help="show what would be written, change nothing",
     )
     ad.set_defaults(fn=cmd_add)
+
+    cx = sub.add_parser(
+        "codex", help="wire Codex onto the same bus (codex mcp add, or print the config block)"
+    )
+    cx.add_argument("path", nargs="?", default=".", help="folder to derive the project name from")
+    cx.add_argument(
+        "-p", "--project", metavar="NAME", help="project name to pin (default: repo dir name)"
+    )
+    cx.add_argument(
+        "--print",
+        dest="print_only",
+        action="store_true",
+        help="show what would be done, change nothing",
+    )
+    cx.add_argument("--remove", action="store_true", help="undo: drop cabildo from Codex's config")
+    cx.set_defaults(fn=cmd_codex)
 
     iss = sub.add_parser(
         "issues", help="this project's docs/issues register: what's ready, what's blocked"

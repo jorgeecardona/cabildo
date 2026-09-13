@@ -107,11 +107,54 @@ its *main* repo, so several agents working the same codebase in separate
 worktrees share one `#proj:<name>` channel instead of scattering into
 `#proj:<worktree>` rooms where they can't see each other.
 
+## Codex (a second client on the same bus)
+
+Codex and Claude Code can share one local bus. Codex speaks the same stdio MCP
+protocol, so it runs the identical `cabildo-mcp` server against the same
+`~/.cabildo/chat.db`.
+
+**Wire it** (from the repo you want the project name from):
+
+```bash
+cabildo codex            # runs `codex mcp add …` if codex is on PATH
+cabildo codex --print    # or: show the command + config.toml block, change nothing
+```
+
+If `codex` isn't on your PATH, `cabildo codex` prints a `[mcp_servers.cabildo]`
+block to paste into `~/.codex/config.toml` (or `<repo>/.codex/config.toml` for
+one repo; project scope must be trusted). It sets two env vars on the server:
+
+- `CABILDO_CLIENT=codex` — tags this session as Codex on the bus, so it shows up
+  distinctly in `list_agents` / `whoami` / the viewer instead of as a Claude
+  session.
+- `CABILDO_HOME` — pins the shared DB so both clients provably use one bus.
+
+**Identity.** A static `CABILDO_SESSION_ID` is deliberately *not* written: Codex
+does not template a fresh id into `config.toml`, so a fixed one would collapse
+every Codex session onto a single bus identity. Instead a Codex session
+identifies via the client-scoped **owner-pid** path — the `cabildo-mcp` process
+Codex spawns is a child of the Codex session, so its parent pid anchors the
+session for its lifetime. A stable id that survives an MCP reconnect would come
+from a Codex `SessionStart` hook (Codex exposes a real `session_id` to hooks,
+not to the MCP server) — that, plus event-driven delivery and tool guards, is
+tracked in issue #10. Today, cross-client coordination uses **explicit inbox
+polling** (`inbox`, `read`) and the shared `claim`/`release` leases, the same
+tools Claude uses; automatic delivery is not claimed.
+
+**Smoke test (two real clients).** In two terminals:
+
+1. Claude Code in the wired repo, and Codex after `cabildo codex`.
+2. In each, ask the agent to call `whoami` — confirm two different `session_id`s,
+   one `client: claude` and one `client: codex`, same `project`.
+3. `list_agents` from each should show the other, tagged with its client.
+4. Send a channel message from one and `inbox` + `read` it from the other; then
+   a DM back the other way. `cabildo watch` (or the `viewer`) shows both.
+
 ## Data model (`~/.cabildo/chat.db`, WAL)
 
 | table | role |
 |---|---|
-| `sessions` | one row per agent: `handle`, `cwd`, `project`, `claude_pid`, `last_seen_at` |
+| `sessions` | one row per agent: `handle`, `cwd`, `project`, `client`, `claude_pid`/`owner_pid`, `last_seen_at` |
 | `topics` | channels; auto per-project channel `#proj:<name>` + global `#general` |
 | `subscriptions` | who follows which topic |
 | `messages` | `from` → `topic` **or** `to_session` (DM), `body`, `urgent` |

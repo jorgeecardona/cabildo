@@ -4,7 +4,25 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
-## [0.1.11] - 2026-09-13
+## [0.1.12] - 2026-09-13
+
+### Added
+
+- **Codex MCP setup (#9)** — `cabildo codex` wires Codex onto the same local bus
+  as Claude Code. It delegates to `codex mcp add` when Codex is on PATH, and
+  otherwise prints the `[mcp_servers.cabildo]` block for `~/.codex/config.toml`
+  (also the `--print` preview); Codex owns its own config, so unrelated servers
+  and hand edits are preserved. New `codex_config.py` builds the command/TOML;
+  the Claude install flow is untouched. The server is given `CABILDO_CLIENT=codex`
+  (so a Codex session is distinct in `list_agents`/`whoami`/the viewer) and
+  `CABILDO_HOME` (so both clients share one DB). A static `CABILDO_SESSION_ID` is
+  deliberately not written — it would collapse every Codex session onto one
+  identity; Codex sessions use the client-scoped owner-pid path from #6. README
+  gains a Codex section with a two-client smoke-test procedure. Live Codex is not
+  auto-tested (needs Codex installed); a mixed-client integration test drives the
+  real MCP tools as one Claude + one Codex session on a temp DB — discovery,
+  channel + DM both directions, read receipts. Event-driven delivery and tool
+  guards for Codex remain #10.
 
 ### Added
 
