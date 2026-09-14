@@ -366,6 +366,12 @@ def deny_reason(
     me = store.get_session(conn, session_id)
     if me is None or not me["project"]:
         return None
+    if tool_name == "apply_patch":
+        for path in _patch_paths(tool_input.get("command"), me["cwd"]):
+            reason = _deny_file(conn, me, path)
+            if reason:
+                return reason
+        return None
     if tool_name == "Bash" and me["project_name"]:
         command = tool_input.get("command") or ""
         return (
@@ -380,6 +386,25 @@ def deny_reason(
         if path:
             return _deny_file(conn, me, str(path))
     return None
+
+
+def _patch_paths(command: Any, cwd: str | None) -> list[str]:
+    """Paths touched by Codex's `apply_patch` envelope, resolved to absolute and
+    de-duplicated. Covers additions, deletions, updates, and both ends of a move
+    (the source `*** Update File:` plus its `*** Move to:` destination).
+    """
+    if not isinstance(command, str):
+        return []
+    prefixes = ("*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: ")
+    paths = []
+    for line in command.splitlines():
+        for prefix in prefixes:
+            if line.startswith(prefix):
+                path = line[len(prefix) :].strip()
+                if path:
+                    paths.append(os.path.normpath(os.path.join(cwd or os.getcwd(), path)))
+                break
+    return list(dict.fromkeys(paths))
 
 
 def _file_resource(me: sqlite3.Row, path: str) -> str:
@@ -407,6 +432,15 @@ def autoclaim_on_edit(
     almost never made by hand, so nothing was ever enforced. Editing a file now
     *is* claiming it.
     """
+    if tool_name == "apply_patch":
+        me = store.get_session(conn, session_id)
+        if me is None:
+            return None
+        resources = [
+            autoclaim_on_edit(conn, session_id, "Edit", {"file_path": path})
+            for path in _patch_paths(tool_input.get("command"), me["cwd"])
+        ]
+        return next((r for r in resources if r), None)
     key = _FILE_TOOLS.get(tool_name)
     if not key:
         return None

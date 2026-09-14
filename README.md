@@ -168,7 +168,7 @@ conditions, and `PostToolUse` injects unread **urgent** mail mid-turn. Explicit
 | claim visibility (`claims` table) | yes | yes — shared, mutual |
 | `PreToolUse` deny on `git push`/blanket-stage/branch-switch/destructive-git | enforced | enforced when the shell tool presents as `Bash`+`command` |
 | MCP tool-call deny | enforced | enforced (`PreToolUse` fires for `mcp__*`) |
-| `file:` lease on edits | enforced (Edit/Write) | **not yet** — Codex edits via `apply_patch`, whose path shape isn't mapped (follow-up) |
+| `file:` lease on edits | enforced (Edit/Write) | enforced — every path in the `apply_patch` envelope (add/update/delete, both ends of a move) |
 
 Claims themselves are advisory leases; the `PreToolUse` deny is the enforcement,
 and it blocks via `permissionDecision:"deny"` on both clients.

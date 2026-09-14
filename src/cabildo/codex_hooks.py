@@ -25,10 +25,11 @@ Output contract (verified against the Codex hooks docs):
 Enforcement scope on Codex (be honest about it — see README): the Bash-command
 guards (push/blanket-stage/branch-switch/destructive-git) fire when Codex's
 shell tool presents as `tool_name="Bash"` with a `command` field, and MCP-tool
-denials match by name. Codex's native edit tool is `apply_patch`, whose
-file-path shape is not yet mapped, so `file:` claim enforcement on Codex *edits*
-is a documented follow-up; claim *visibility* is already mutual (the guard reads
-the shared claims table regardless of who holds the lease).
+denials match by name. Codex's native edit tool is `apply_patch`: the guard maps
+every path in its envelope (adds, updates, deletes, and both ends of a move) to
+`file:` leases, so claim enforcement on Codex *edits* is mutual with Claude Code
+— as is claim *visibility* (the guard reads the shared claims table regardless of
+who holds the lease).
 
 Never raises: a broken hook must not break the Codex session.
 """

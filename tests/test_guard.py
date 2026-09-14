@@ -321,3 +321,39 @@ def test_reading_and_restoring_are_not_branch_switches(conn):
     for cmd in ("git status", "git branch", "git checkout", "git log --oneline"):
         r = guard.deny_reason(conn, "a", "Bash", {"command": cmd})
         assert r is None or "moves the branch" not in r, cmd
+
+
+# --------------------------------------------------------------------------- #
+# Codex `apply_patch` — file leases across every path the envelope touches
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("operation", ["Add File", "Update File", "Delete File", "Move to"])
+def test_apply_patch_is_denied_when_it_touches_a_held_file(conn, clock, operation):
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    # bob holds locked.py; alice's patch reaches for it under each operation kind
+    guard.autoclaim_on_edit(conn, "b", "Edit", {"file_path": f"{ALPHA}/locked.py"})
+    patch = f"*** Begin Patch\n*** Update File: free.py\n*** {operation}: locked.py\n*** End Patch"
+    reason = guard.deny_reason(conn, "a", "apply_patch", {"command": patch})
+    assert reason is not None
+    assert "@bob" in reason
+
+
+def test_apply_patch_auto_claims_every_path_including_both_move_ends(conn, clock):
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    # `src/../a.py` normalizes to a.py; the move names both a.py (source) and b.py (dest)
+    patch = "*** Begin Patch\n*** Update File: src/../a.py\n*** Move to: b.py\n*** End Patch"
+    assert guard.deny_reason(conn, "a", "apply_patch", {"command": patch}) is None
+    guard.autoclaim_on_edit(conn, "a", "apply_patch", {"command": patch})
+    # both ends of the move are now alice's, so bob is denied on each
+    for path in ("a.py", "b.py"):
+        reason = guard.deny_reason(conn, "b", "Edit", {"file_path": f"{ALPHA}/{path}"})
+        assert reason is not None and "@alice" in reason
+
+
+def test_apply_patch_without_paths_is_a_no_op(conn, clock):
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    empty = "*** Begin Patch\n*** End Patch"
+    assert guard.deny_reason(conn, "a", "apply_patch", {"command": empty}) is None
+    assert guard.autoclaim_on_edit(conn, "a", "apply_patch", {"command": empty}) is None
+    assert store.list_claims(conn, project=ALPHA) == []

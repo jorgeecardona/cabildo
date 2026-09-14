@@ -4,6 +4,17 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-09-14
+
+### Added
+
+- `file:` claim enforcement for Codex `apply_patch` edits. The guard maps every
+  path in the patch envelope (adds, updates, deletes, and both ends of a move)
+  to a file lease, so a Codex edit is denied when another agent holds one of
+  those paths and auto-claims all of them when allowed. This closes the
+  follow-up noted in `codex_hooks`: Claude Code and Codex now enforce each
+  other's file leases, not just share their visibility.
+
 ## [0.1.14] - 2026-09-14
 
 ### Added
