@@ -1,0 +1,55 @@
+# cabildo config.toml (example — copy, do not rename this file into place)
+#
+# Copy the tables you want into one of, highest precedence first:
+#   <repo>/.cabildo/config.toml    committed, travels with the checkout
+#   ~/.cabildo/config.toml         this machine, all projects
+#
+# The two files merge table by table, so a repo can set [push] and still inherit
+# [watch] from the global file. cabildo only READS these: the runtime is
+# stdlib-only and the stdlib has no TOML writer, so the JSON registry in
+# ~/.cabildo/cloud.json stays the writable store. A missing or malformed file is
+# skipped, never fatal.
+#
+# In the GLOBAL file only, a [project.<name>] section scopes the tables to one
+# project, so a single machine-wide file can differ per repo:
+#
+#   [project.cabildo]
+#   push = { mode = "land" }
+#
+# Below are the tables cabildo understands. [push] and [watch] change behaviour
+# today; the rest are read but not yet wired to a call site.
+
+# --- wired today -----------------------------------------------------------
+
+[push]
+# "land"   (default) keep the push guard: while a peer is live on the project a
+#          bare `git push` is denied and routed to `request land`.
+# "manual" opt out: a plain `git push` is allowed even with peers live.
+mode = "land"
+
+[watch]
+# Default channel for `cabildo watch` when you pass no -t:
+#   "project"    this repo's own channel (proj:<name>)
+#   "proj:foo"   a literal channel name
+# Leave it unset to keep the current default of all channels.
+topic = "project"
+
+# --- recognised, read but not yet wired ------------------------------------
+
+[uplink]
+# How much of this project reaches the hosted cloud: none | presence | messages
+# | content. Committing this in a private repo makes the privacy policy travel
+# with the repo instead of living only in ~/.cabildo/cloud.json.
+level = "none"
+
+[notify]
+enabled = true
+quiet_hours = "22:00-08:00"
+
+[land]
+target = "main"    # default branch for `request land`
+
+[spawn]
+model = "sonnet"   # default model for helper agents
+max_agents = 4
+max_depth = 2

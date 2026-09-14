@@ -184,6 +184,17 @@ def test_holding_the_push_lock_is_the_escape_hatch(conn, clock):
     assert _bash(conn, "b", "git push origin main") is not None  # bob may not
 
 
+def test_push_manual_mode_bypasses_the_guard(conn, clock, home):
+    # A project can opt out of the push guard via config: `[push].mode = manual`.
+    # The guard then steps aside even with a live peer that would otherwise route
+    # the push to `land`.
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    assert _bash(conn, "a", "git push origin main") is not None  # baseline: denied
+    (home / "config.toml").write_text('[project.alpha]\npush = { mode = "manual" }\n')
+    assert _bash(conn, "a", "git push origin main") is None  # opted out
+
+
 def test_push_denial_survives_an_expired_lease(conn, clock):
     # The lease lapsing must not turn into a free-for-all: peers are still here.
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")

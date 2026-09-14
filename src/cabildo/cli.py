@@ -40,7 +40,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import store
+from . import config, store
 from .store import HUMAN_HANDLE, HUMAN_SESSION
 
 
@@ -186,12 +186,14 @@ def _select(conn, topic: str | None, after_id: int, limit: int) -> list[dict]:
 def cmd_watch(args) -> int:
     # On a real terminal, watch is a chatroom: the human reads AND talks from
     # the same screen. Piped (or --no-input), it stays a plain greppable tail.
+    # An unset -t falls back to [watch].topic from config (e.g. "project", this
+    # repo's own channel), else all channels.
+    topic = args.topic or config.watch_topic()
     if sys.stdin.isatty() and sys.stdout.isatty() and not args.no_input:
         from . import tui
 
-        return tui.main(topic=args.topic, tail=args.tail)
+        return tui.main(topic=topic, tail=args.tail)
     conn = store.connect()
-    topic = args.topic
     scope = f"#{topic.lstrip('#')}" if topic else "all channels"
     print(f"{C.DIM}watching {scope} — ctrl-c to stop{C.OFF}\n")
 

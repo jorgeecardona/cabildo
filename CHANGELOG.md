@@ -4,6 +4,19 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+### Added
+
+- **Layered `config.toml`**: optional read-only TOML settings, with precedence
+  repo-local `.cabildo/config.toml` over `~/.cabildo/config.toml` over built-in
+  defaults, merged table by table. A `[project.<name>]` section in the global
+  file scopes keys to one repo. cabildo only reads these files (the runtime is
+  stdlib-only and has no TOML writer), so `cloud.json` stays the writable
+  registry, and a malformed file is skipped rather than fatal. Two keys are
+  wired: `[push].mode = "manual"` opts a project out of the push guard, and
+  `[watch].topic = "project"` defaults `cabildo watch` to the repo's own
+  channel. `[uplink]`, `[notify]`, `[land]`, and `[spawn]` are recognised and
+  read generically; wiring follows. See `.cabildo/config.example.toml`.
+
 ## [0.1.15] - 2026-09-14
 
 ### Added

@@ -253,6 +253,33 @@ so a crashed agent never deadlocks the bus. `SessionEnd` also drops a session's
 locks. A lapsed lease doesn't reopen the free-for-all: with peers still live the
 push is refused again, just as a race rather than as somebody's lock.
 
+### Project and machine config (`config.toml`)
+
+Two optional, human-edited files tune behaviour, highest precedence first:
+
+- `<repo>/.cabildo/config.toml`: committed beside the land gate, so a policy
+  travels with the checkout and applies to everyone working it.
+- `~/.cabildo/config.toml`: this machine, all projects. A `[project.<name>]`
+  section scopes keys to one repo.
+
+They merge table by table, so a repo can set `[push]` and inherit `[watch]` from
+the global file. cabildo only ever *reads* them: the runtime is stdlib-only and
+the stdlib has no TOML writer, so `~/.cabildo/cloud.json` stays the writable
+registry and these files stay yours to edit. A missing or malformed file is
+skipped, never fatal.
+
+Two keys are wired today (see `.cabildo/config.example.toml` for the rest):
+
+```
+[push]
+mode = "manual"    # opt this project out of the push guard above: a plain
+                   # `git push` is allowed even with peers live. Default "land".
+
+[watch]
+topic = "project"  # `cabildo watch` with no -t defaults to this repo's own
+                   # channel instead of all channels.
+```
+
 ### What the daemon will and won't land
 
 `land` is a request, and the daemon judges it before acting:

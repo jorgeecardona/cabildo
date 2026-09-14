@@ -43,7 +43,7 @@ from fnmatch import fnmatch
 from pathlib import PurePosixPath
 from typing import Any
 
-from . import store
+from . import config, store
 from .context import tree_root
 
 # Working-tree-destroying git ops. Each matches only as its own shell command
@@ -175,6 +175,8 @@ def _held_by_me(conn: sqlite3.Connection, resource: str, session_id: str) -> boo
 def _deny_push(conn: sqlite3.Connection, me: sqlite3.Row, command: str) -> str | None:
     if not _is_push(command):
         return None
+    if config.push_mode(me["cwd"], me["project_name"]) == "manual":
+        return None  # this project opted out of the push guard (.cabildo/config.toml)
     resource = f"push:{me['project_name']}"
     row = _held_by_other(conn, resource, me["session_id"])
     if row:
