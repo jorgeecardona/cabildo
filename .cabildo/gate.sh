@@ -10,11 +10,17 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# Jorge's venv when it's there, otherwise whatever python3 is on PATH — the
-# daemon may run this from a systemd unit with a thinner environment.
+# Pick the interpreter, in order: an explicit $PYTHON; the repo's own venv
+# (uv-managed and editable, so it tracks src/); Jorge's ~/.venv; then whatever
+# python3 is on PATH. The repo venv comes before ~/.venv on purpose: a stale
+# package install in ~/.venv silently tests old code, which is exactly the false
+# "gate passed" this file exists to prevent. The daemon may run this from a
+# service unit with a thinner environment, hence the fallbacks.
 PY="${PYTHON:-}"
 if [[ -z "$PY" ]]; then
-    if [[ -x "$HOME/.venv/bin/python" ]]; then PY="$HOME/.venv/bin/python"; else PY="python3"; fi
+    if [[ -x ".venv/bin/python" ]]; then PY=".venv/bin/python"
+    elif [[ -x "$HOME/.venv/bin/python" ]]; then PY="$HOME/.venv/bin/python"
+    else PY="python3"; fi
 fi
 
 echo "gate: $("$PY" --version) · $(git rev-parse --short HEAD)"
