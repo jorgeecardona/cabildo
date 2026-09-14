@@ -4,8 +4,31 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-09-14
+
 ### Added
 
+- **Peer-to-peer LAN sync (#7)** — `cabildo lan` shares a project's message bus
+  with peers on the local network, with nothing leaving the subnet. Each peer
+  UDP-broadcasts a beacon (`255.255.255.255`, so it never routes off-LAN) and
+  serves its rows over TCP; peers discover each other and PULL, so the sync is
+  bidirectional by both sides pulling and the serving side only ever reads. New
+  messages are deduped by `guid`, stamped `origin='lan'`, and — crucially — the
+  App Engine uplink now excludes `origin='lan'`, so a LAN peer's messages never
+  silently escape to the hosted mirror. Single-machine SQLite stays the default;
+  this is opt-in. Flags: `-l/--loop`, `--interval`, `--port`, `--project`,
+  `--secret` (an optional shared secret both peers must present). Stdlib only —
+  no new runtime dependency. This first increment covers messages for one
+  project; presence/claim sync and encrypted/authenticated pairing are the
+  follow-up (the RTC-over-backbone transport). LAN v1 is trusted-LAN: the secret
+  gates the pull handshake, but there is no transport encryption.
+- **Global message `guid` (#7)** — `messages` gains a `guid` column (uuid4,
+  additive migration that backfills existing rows and adds a unique index).
+  `store.post_message` mints one per locally-born message and is now idempotent
+  by guid (`ON CONFLICT DO NOTHING`); the cloud downlink and the LAN transport
+  pass the original guid + `created_at` so the same message merges once across
+  machines instead of re-inserting. This also closes a latent double-insert on a
+  lost sync cursor.
 - **Installer client selection + non-mutating preview (#12)** — `scripts/install.py`
   gains `--client {claude,codex,both}` (default `claude`, preserving the historical
   behavior). `--client codex` delegates to `cabildo codex` and never touches

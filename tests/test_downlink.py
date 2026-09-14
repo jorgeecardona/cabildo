@@ -89,6 +89,9 @@ def test_origin_column_is_added_to_an_existing_bus(conn):
     CREATE TABLE IF NOT EXISTS is a no-op against a live file.
     """
     conn.execute("ALTER TABLE messages RENAME TO messages_old")
+    # A pre-guid bus has no guid unique index; the rename left the name attached
+    # to the shadow table, so drop it to model the old bus faithfully.
+    conn.execute("DROP INDEX IF EXISTS idx_messages_guid")
     conn.execute(
         "CREATE TABLE messages ("
         " id INTEGER PRIMARY KEY AUTOINCREMENT, created_at REAL NOT NULL,"

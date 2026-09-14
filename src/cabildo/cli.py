@@ -733,6 +733,30 @@ def cmd_sync(args) -> int:
     return 0
 
 
+def cmd_lan(args) -> int:
+    """Share this project's bus with peers on the local network — no cloud.
+
+    Beacons on the LAN, discovers peers sharing the same project, and pulls
+    their messages into the local bus (deduped by guid, stamped origin='lan' so
+    they never leak up to the hosted mirror). One round by default; --loop keeps
+    serving and syncing. Single-machine SQLite stays the default; this is opt-in.
+    """
+    from . import lan
+    from .context import git_project
+
+    project = args.project or git_project(os.getcwd())[1]
+    if not project:
+        print(f"{C.DIM}no project here; pass --project <name>{C.OFF}", file=sys.stderr)
+        return 2
+    return lan.run(
+        project,
+        port=args.port,
+        loop=args.loop,
+        interval=args.interval,
+        secret=args.secret,
+    )
+
+
 def cmd_share(args) -> int:
     """Manage which projects may push their conversation content (your prompts +
     Claude's replies) to the hosted dashboard. Opt-in per project: everything
@@ -1531,6 +1555,20 @@ def main(argv: list[str] | None = None) -> int:
         "--set-token", metavar="TOKEN", help="save a cloud token to ~/.cabildo/cloud.json and exit"
     )
     sy.set_defaults(fn=cmd_sync)
+
+    ln = sub.add_parser("lan", help="share this bus with peers on the local network (no cloud)")
+    ln.add_argument(
+        "-l", "--loop", action="store_true", help="keep serving + syncing (default: one round)"
+    )
+    ln.add_argument(
+        "--interval", type=float, default=5.0, help="loop/discovery seconds (default: 5)"
+    )
+    ln.add_argument("--port", type=int, default=0, help="TCP port to serve on (default: ephemeral)")
+    ln.add_argument("--project", help="project to share (default: the current git project)")
+    ln.add_argument(
+        "--secret", help="shared secret both peers must present (default: open on the LAN)"
+    )
+    ln.set_defaults(fn=cmd_lan)
 
     sh = sub.add_parser(
         "share", help="opt a project's conversation content into the dashboard (default: list)"

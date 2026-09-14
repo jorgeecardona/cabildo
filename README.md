@@ -542,6 +542,38 @@ server. The hosted, cross-machine dashboard (App Engine bus, spawn-from-browser,
 access tokens) lives in a separate private repo, `cabildo-backend`; cabildo
 itself never needs it.
 
+## Cross-machine on the LAN (no cloud)
+
+Two laptops on the same network can share a project's bus with nothing leaving
+the local subnet — no App Engine, no account:
+
+```bash
+cabildo lan                 # one sync round for the current project, then exit
+cabildo lan --loop          # keep serving + syncing (Ctrl-C to stop)
+cabildo lan --project paas  # a specific project instead of the current git one
+cabildo lan --secret hunter2  # both peers must present the same secret
+```
+
+Run it on each machine. Each peer UDP-broadcasts a small beacon on the local
+subnet (`255.255.255.255`, which routers do not forward, so it stays on the
+LAN), discovers peers sharing the same project, and **pulls** their messages
+over TCP into its own `~/.cabildo/chat.db`. Both peers run both halves, so the
+sync is bidirectional; the serving side only ever reads its database — a peer
+never writes to another's bus directly. Messages carry a global `guid`, so a
+message that reaches you from two peers, or after a restart, merges once instead
+of duplicating. Pulled rows are stamped `origin='lan'`, which the `cabildo sync`
+uplink skips — a LAN peer's messages **never** escape to the hosted mirror.
+
+Single-machine SQLite stays the default; this is opt-in and only for the
+machines you run it on. Scope and honesty for this first version:
+
+- It syncs **messages for one project**. Presence (who's on the bus) and claims
+  (advisory locks) do not yet sync across the LAN — that's the next increment.
+- It is **trusted-LAN**: `--secret` gates the pull handshake, but there is no
+  transport encryption. Use it on a network you trust. Authenticated, encrypted
+  pairing (and cross-network peering via a self-hosted signaling backbone) is the
+  planned follow-up.
+
 ## Adding a folder
 
 A project is a git repo, named after its directory. That guess is wrong in two

@@ -15,6 +15,7 @@ import os
 import socket
 import sqlite3
 import time
+import uuid
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -118,7 +119,16 @@ CREATE TABLE IF NOT EXISTS messages (
     -- 'cloud'  => composed in the hosted dashboard and pulled down by the
     --             runner. The uplink must skip these or it echoes them back up
     --             as duplicates, forever.
-    origin        TEXT NOT NULL DEFAULT 'local'
+    -- 'lan'    => pulled from a peer over the LAN (see lan.py). Like 'cloud' it
+    --             is skipped by the uplink, so a LAN peer's messages never
+    --             silently escape to the hosted mirror.
+    origin        TEXT NOT NULL DEFAULT 'local',
+    -- A globally-unique id minted at the row's birth, stable across machines.
+    -- The autoincrement `id` is only meaningful on the machine that generated
+    -- it; `guid` is what lets two peers (or the cloud downlink) dedup the same
+    -- message instead of re-inserting it, so a message that hops A->B->C merges
+    -- once. Unique index lives in _migrate (added to existing rows there too).
+    guid          TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_messages_topic ON messages(topic);
 CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_session);
@@ -316,6 +326,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
     have = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
     if "origin" not in have:
         conn.execute("ALTER TABLE messages ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'")
+    if "guid" not in have:
+        conn.execute("ALTER TABLE messages ADD COLUMN guid TEXT")
+        # Backfill every pre-existing row with a stable guid so cross-machine
+        # dedup has something to key on for history, not just new messages. One
+        # time, guarded by "not in have"; a fresh DB has no rows and skips it.
+        for r in conn.execute("SELECT id FROM messages WHERE guid IS NULL").fetchall():
+            conn.execute("UPDATE messages SET guid=? WHERE id=?", (uuid.uuid4().hex, r["id"]))
+    # Unconditional (fresh via SCHEMA, old via the ALTER above): the only safe
+    # place to index the column. UNIQUE is what makes post_message idempotent by
+    # guid; SQLite treats NULLs as distinct, so it tolerates any un-backfilled row.
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_guid ON messages(guid)")
     conn.commit()
 
 
@@ -577,14 +598,28 @@ def post_message(
     project: str | None = None,
     urgent: bool = False,
     origin: str = "local",
+    guid: str | None = None,
+    created_at: float | None = None,
 ) -> int:
+    """Insert a message and return its local id.
+
+    `guid` is the global identity; a fresh one is minted for a locally-born
+    message, but the cloud downlink and the LAN transport pass the original so
+    the same message is not re-inserted on another machine. Insert is idempotent
+    by guid (ON CONFLICT DO NOTHING) — a second post of the same guid returns the
+    existing row's id instead of a duplicate. `created_at` is likewise preserved
+    across a hop so ordering and merge stay consistent everywhere.
+    """
     if (topic is None) == (to_session is None):
         raise ValueError("exactly one of topic / to_session must be set")
+    guid = guid or uuid.uuid4().hex
+    ts = _now() if created_at is None else created_at
     cur = conn.execute(
         "INSERT INTO messages(created_at, from_session, from_handle, topic, to_session, "
-        "project, body, urgent, origin) VALUES (?,?,?,?,?,?,?,?,?)",
+        "project, body, urgent, origin, guid) VALUES (?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(guid) DO NOTHING",
         (
-            _now(),
+            ts,
             from_session,
             from_handle,
             topic,
@@ -593,9 +628,13 @@ def post_message(
             body,
             1 if urgent else 0,
             origin,
+            guid,
         ),
     )
     conn.commit()
+    if cur.rowcount == 0:  # guid already present — return the existing row's id
+        row = conn.execute("SELECT id FROM messages WHERE guid=?", (guid,)).fetchone()
+        return int(row["id"]) if row else 0
     return int(cur.lastrowid or 0)
 
 

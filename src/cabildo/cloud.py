@@ -480,7 +480,11 @@ def sync_once(base: str, token: str) -> dict:
         # already in the cloud; mirroring it back up would duplicate it forever.
         has_origin = any(r["name"] == "origin" for r in conn.execute("PRAGMA table_info(messages)"))
         has_proj = any(r["name"] == "project" for r in conn.execute("PRAGMA table_info(messages)"))
-        not_echo = " AND COALESCE(origin,'local')<>'cloud'" if has_origin else ""
+        # Skip anything not born here: 'cloud' rows came down the downlink (echoing
+        # them up duplicates forever) and 'lan' rows came from a LAN peer — those
+        # must never silently escape to the hosted mirror (that is the point of the
+        # local-only transport in lan.py).
+        not_echo = " AND COALESCE(origin,'local') NOT IN ('cloud','lan')" if has_origin else ""
         proj_col = ", project" if has_proj else ""
         msgs = conn.execute(
             f"SELECT id, from_session, from_handle, topic, to_session, body, urgent"
