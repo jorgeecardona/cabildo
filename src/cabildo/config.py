@@ -60,7 +60,13 @@ def _read(path: Path) -> dict[str, Any]:
     try:
         with path.open("rb") as fh:
             return tomllib.load(fh)
-    except (FileNotFoundError, NotADirectoryError, PermissionError, tomllib.TOMLDecodeError, OSError):
+    except (
+        FileNotFoundError,
+        NotADirectoryError,
+        PermissionError,
+        tomllib.TOMLDecodeError,
+        OSError,
+    ):
         return {}
 
 
