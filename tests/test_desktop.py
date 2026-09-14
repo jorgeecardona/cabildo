@@ -1,8 +1,9 @@
 """desktop.py: the darwin backend (issue #4) plus a couple of Linux regression checks.
 
-Runs on Linux CI only, so darwin is never the *real* sys.platform here — every darwin
-test flips `desktop._DARWIN` directly and mocks `shutil.which`/`subprocess.run`. That
-mirrors how the Linux path is already exercised: nothing here talks to a real notifier.
+Both branches are pinned by fixture (`darwin` sets `_DARWIN` True, `linux` sets it
+False) rather than trusting the host, so the whole suite runs the same on Linux CI and
+on a macOS laptop. Every test mocks `shutil.which`/`subprocess.run`: nothing here talks
+to a real notifier.
 """
 
 from __future__ import annotations
@@ -38,6 +39,17 @@ def _run(returncode=0, stdout="", stderr=""):
 def darwin(monkeypatch):
     """Pretend to be macOS for the duration of a test."""
     monkeypatch.setattr(desktop, "_DARWIN", True)
+
+
+@pytest.fixture
+def linux(monkeypatch):
+    """Pretend to be Linux for the duration of a test.
+
+    `_DARWIN` is a module constant baked at import, so on a developer's Mac it
+    is True and the Linux regression tests would take the osascript branch. Pin
+    it False, mirroring the `darwin` fixture, so both branches run on any host.
+    """
+    monkeypatch.setattr(desktop, "_DARWIN", False)
 
 
 # --------------------------------------------------------------------------- #
@@ -320,8 +332,8 @@ def test_darwin_ask_no_options_returns_none_without_shelling_out(darwin, monkeyp
 # --------------------------------------------------------------------------- #
 # Linux path -- unchanged, quick regression check
 # --------------------------------------------------------------------------- #
-def test_linux_available_unaffected_by_darwin_branch(monkeypatch):
-    # _DARWIN is False under real test collection (this suite runs on Linux CI).
+def test_linux_available_unaffected_by_darwin_branch(linux, monkeypatch):
+    # The `linux` fixture pins _DARWIN False so the Linux branch runs on any host.
     assert desktop._DARWIN is False
     monkeypatch.setattr(
         desktop.shutil,
@@ -332,7 +344,7 @@ def test_linux_available_unaffected_by_darwin_branch(monkeypatch):
     assert desktop.available() is True
 
 
-def test_linux_notify_still_uses_notify_send(monkeypatch):
+def test_linux_notify_still_uses_notify_send(linux, monkeypatch):
     monkeypatch.setattr(
         desktop.shutil,
         "which",
@@ -350,7 +362,7 @@ def test_linux_notify_still_uses_notify_send(monkeypatch):
     assert captured["args"][0] == "notify-send"
 
 
-def test_linux_ask_still_uses_notify_send_action(monkeypatch):
+def test_linux_ask_still_uses_notify_send_action(linux, monkeypatch):
     monkeypatch.setattr(
         desktop.shutil,
         "which",

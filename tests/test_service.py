@@ -4,8 +4,8 @@
 Nothing here talks to a real systemd or launchd — systemctl/launchctl are
 stubbed and the unit/agent dir is redirected through env vars, so the suite
 can run on a box with no session manager (CI) without installing anything on
-the developer's laptop, and the macOS half runs from Linux by faking
-sys.platform.
+the developer's laptop. Either half runs on any host by pinning sys.platform
+through the `linux` and `darwin` fixtures.
 """
 
 from __future__ import annotations
@@ -27,7 +27,19 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture
-def units_home(tmp_path, monkeypatch):
+def linux(monkeypatch):
+    """Pretend to be Linux for the duration of a test.
+
+    The systemd half of this suite must render systemd units regardless of the
+    host, so pin the platform instead of trusting sys.platform. Mirrors the
+    `darwin` fixture below; without it these tests emit a launchd plist on a
+    developer's Mac and fail.
+    """
+    monkeypatch.setattr(service.sys, "platform", "linux")
+
+
+@pytest.fixture
+def units_home(tmp_path, monkeypatch, linux):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.delenv("CABILDO_HOME", raising=False)
     return tmp_path / "config" / "systemd" / "user"
@@ -36,7 +48,7 @@ def units_home(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 # Rendering
 # --------------------------------------------------------------------------- #
-def test_daemon_unit_is_dry_run_by_default():
+def test_daemon_unit_is_dry_run_by_default(linux):
     text = service.render(service.daemon_unit())
     assert "-m cabildo.daemon" in text
     assert "--allow-push" not in text and "--allow-spawn" not in text
@@ -44,7 +56,7 @@ def test_daemon_unit_is_dry_run_by_default():
     assert "Restart=always" in text
 
 
-def test_daemon_unit_forwards_the_dangerous_dials():
+def test_daemon_unit_forwards_the_dangerous_dials(linux):
     text = service.render(
         service.daemon_unit(
             allow_push=True,
@@ -60,7 +72,7 @@ def test_daemon_unit_forwards_the_dangerous_dials():
     assert "--budget 250000 --budget-days 3" in text
 
 
-def test_notifications_need_the_session_bus_address():
+def test_notifications_need_the_session_bus_address(linux):
     """notify-send without DBUS_SESSION_BUS_ADDRESS autolaunches a private bus
     and pops notifications nobody sees — the classic 'works in my terminal'.
     """
@@ -70,7 +82,7 @@ def test_notifications_need_the_session_bus_address():
     assert "--no-notify" in off
 
 
-def test_path_is_frozen_into_the_unit(monkeypatch):
+def test_path_is_frozen_into_the_unit(linux, monkeypatch):
     """Systemd --user's default PATH has no ~/.local/bin, which is where
     `claude` usually lives — so spawn would fail only once it mattered.
     """
@@ -78,14 +90,14 @@ def test_path_is_frozen_into_the_unit(monkeypatch):
     assert 'Environment="PATH=/opt/tools/bin:/usr/bin"' in service.render(service.daemon_unit())
 
 
-def test_cabildo_home_travels_when_set(monkeypatch):
+def test_cabildo_home_travels_when_set(linux, monkeypatch):
     monkeypatch.setenv("CABILDO_HOME", "/data/bus")
     assert 'Environment="CABILDO_HOME=/data/bus"' in service.render(service.daemon_unit())
     monkeypatch.delenv("CABILDO_HOME")
     assert "CABILDO_HOME" not in service.render(service.daemon_unit())
 
 
-def test_sync_unit_loops_and_keeps_the_token_out_of_the_unit():
+def test_sync_unit_loops_and_keeps_the_token_out_of_the_unit(linux):
     text = service.render(service.sync_unit(interval=30, base="https://example.test"))
     assert "cabildo.cli sync --loop --interval 30" in text
     assert "--base https://example.test" in text
@@ -93,7 +105,7 @@ def test_sync_unit_loops_and_keeps_the_token_out_of_the_unit():
     assert "RestartSec=30" in text  # back off harder than the daemon
 
 
-def test_quoting_survives_a_path_with_spaces(monkeypatch):
+def test_quoting_survives_a_path_with_spaces(linux, monkeypatch):
     monkeypatch.setattr(service, "_python", lambda: "/home/a b/py")
     assert 'ExecStart="/home/a b/py" -m cabildo.daemon' in service.render(service.daemon_unit())
 
