@@ -4,9 +4,9 @@ enforced ones at the tool-call boundary.
 Four conventions are enforced, all scoped to the session's own project:
 
   * ``file:<path>`` — a write to a matching path is denied, whether it arrives
-    as Edit/Write/NotebookEdit, a Codex ``apply_patch``, or a shell write that
-    would otherwise slip past the lease (``echo > f``, ``tee f``, ``sed -i f``,
-    ``dd of=f``, a literal ``open(...,'w')`` under ``python -c``).
+    as Edit/MultiEdit/Write/NotebookEdit, a Codex ``apply_patch``, or a shell
+    write that would otherwise slip past the lease (``echo > f``, ``tee f``,
+    ``sed -i f``, ``dd of=f``, a literal ``open(...,'w')`` under ``python -c``).
     Paths are matched repo-relative and absolute, with fnmatch globbing so a
     claim like ``file:cabildo/hooks/*`` covers the directory. And, crucially,
     an *allowed* edit auto-takes a short lease on that path (``autoclaim_on_edit``)
@@ -87,7 +87,12 @@ _INTERPRETERS = {"python", "python3", "perl", "ruby", "node"}
 # the literal-string form is caught; a path built from a variable is not.
 _OPEN_WRITE = re.compile(r"""open\(\s*['"]([^'"]+)['"]\s*,\s*['"][^'"]*[wax]""")
 
-_FILE_TOOLS = {"Edit": "file_path", "Write": "file_path", "NotebookEdit": "notebook_path"}
+_FILE_TOOLS = {
+    "Edit": "file_path",
+    "MultiEdit": "file_path",
+    "Write": "file_path",
+    "NotebookEdit": "notebook_path",
+}
 
 # How long an auto-claim taken on edit lasts. Short, and refreshed on every
 # re-edit, so an agent that moves on releases the file within minutes without

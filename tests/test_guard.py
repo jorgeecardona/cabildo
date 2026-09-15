@@ -84,6 +84,23 @@ def test_autoclaim_ignored_for_non_file_tools(conn, clock):
     assert store.list_claims(conn) == []
 
 
+def test_multiedit_is_gated_like_edit(conn, clock):
+    # MultiEdit writes a file too; it must honor and take leases just like Edit.
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    guard.autoclaim_on_edit(conn, "b", "Edit", {"file_path": f"{ALPHA}/src/x.py"})
+    reason = _edit(conn, "a", f"{ALPHA}/src/x.py", tool="MultiEdit")
+    assert reason is not None and "@bob" in reason
+
+
+def test_multiedit_auto_claims_the_file(conn, clock):
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    assert _edit(conn, "a", f"{ALPHA}/src/x.py", tool="MultiEdit") is None
+    guard.autoclaim_on_edit(conn, "a", "MultiEdit", {"file_path": f"{ALPHA}/src/x.py"})
+    assert "@alice" in (_edit(conn, "b", f"{ALPHA}/src/x.py") or "")
+
+
 # --------------------------------------------------------------------------- #
 # Destructive git in a shared working tree
 # --------------------------------------------------------------------------- #
