@@ -40,7 +40,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import config, store
+from . import __version__, config, store
 from .store import HUMAN_HANDLE, HUMAN_SESSION
 
 
@@ -1461,6 +1461,9 @@ def cmd_doctor(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="cabildo", description=(__doc__ or "").split("\n")[0])
+    # `--version` fires during parsing and exits before the required-subcommand
+    # check, so `cabildo --version` works without naming a subcommand.
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     w = sub.add_parser("watch", help="chatroom on a tty; plain tail when piped")
