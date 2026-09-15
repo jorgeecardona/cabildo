@@ -1,5 +1,5 @@
-"""PreToolUse guard: auto-claim on edit, file-lease enforcement, and denial of
-tree-destroying git ops when other agents share the working tree.
+"""PreToolUse guard: auto-claim on edit, file-lease enforcement (Edit/Write and
+shell writes alike), and denial of tree-destroying git ops by default.
 """
 
 from __future__ import annotations
@@ -122,9 +122,23 @@ def test_destructive_git_denied_when_peer_active(conn, clock, command):
 
 
 @pytest.mark.parametrize("command", DESTRUCTIVE)
-def test_destructive_git_allowed_when_alone(conn, clock, command):
+def test_destructive_git_denied_even_when_alone(conn, clock, command):
+    # Denied by default whether or not a peer is here: the op discards work the
+    # agent cannot bring back, dangerous even to a lone agent's own tree.
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
-    assert _bash(conn, "a", command) is None  # no peers -> no block
+    reason = _bash(conn, "a", command)
+    assert reason is not None, command
+    assert "destructive" in reason.lower() or "opt out" in reason
+
+
+def test_destructive_git_off_mode_bypasses_the_guard(conn, clock, home):
+    # A project opts out of the destructive guard via config: `[destructive].mode
+    # = off`. The guard then steps aside even with a live peer.
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    assert _bash(conn, "a", "git reset --hard") is not None  # baseline: denied
+    (home / "config.toml").write_text('[project.alpha]\ndestructive = { mode = "off" }\n')
+    assert _bash(conn, "a", "git reset --hard") is None  # opted out
 
 
 @pytest.mark.parametrize("command", SAFE)
@@ -367,4 +381,73 @@ def test_apply_patch_without_paths_is_a_no_op(conn, clock):
     empty = "*** Begin Patch\n*** End Patch"
     assert guard.deny_reason(conn, "a", "apply_patch", {"command": empty}) is None
     assert guard.autoclaim_on_edit(conn, "a", "apply_patch", {"command": empty}) is None
+    assert store.list_claims(conn, project=ALPHA) == []
+
+
+# --------------------------------------------------------------------------- #
+# Shell writes — the hole Edit/Write/apply_patch did not cover
+# --------------------------------------------------------------------------- #
+# Each of these writes src/x.py, which bob holds; none of them is an Edit/Write.
+SHELL_WRITES = [
+    "echo x > src/x.py",
+    "echo x >src/x.py",
+    "echo x >> src/x.py",
+    "echo x >| src/x.py",
+    "make build &> src/x.py",
+    "cmd 2> src/x.py",
+    "generate | tee src/x.py",
+    "generate | tee -a src/x.py",
+    "sed -i 's/a/b/' src/x.py",
+    "sed -i -e 's/a/b/' src/x.py",
+    "sed --in-place 's/a/b/' src/x.py",
+    "dd if=/dev/zero of=src/x.py",
+    "python -c \"open('src/x.py','w').write('h')\"",
+    'python3 -c \'open("src/x.py", "a")\'',
+]
+
+
+@pytest.mark.parametrize("command", SHELL_WRITES)
+def test_shell_write_to_a_held_file_is_denied(conn, clock, command):
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    guard.autoclaim_on_edit(conn, "b", "Edit", {"file_path": f"{ALPHA}/src/x.py"})
+    reason = _bash(conn, "a", command)
+    assert reason is not None, command
+    assert "@bob" in reason
+
+
+# Writes that must NOT be mistaken for a redirect into src/x.py.
+SHELL_NON_WRITES = [
+    "cat src/x.py",  # read, not write
+    "grep foo src/x.py",
+    "cmd 2>&1 | grep src/x.py",  # descriptor dup, not a file redirect
+    'python -c "print(1 > 0)"',  # `>` inside a quoted comparison
+    "diff old.py src/x.py",
+    "sed 's/a/b/' src/x.py",  # no -i: prints, does not rewrite
+    "echo done > other.py",  # writes a different, unheld file
+]
+
+
+@pytest.mark.parametrize("command", SHELL_NON_WRITES)
+def test_shell_non_write_is_not_denied(conn, clock, command):
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    guard.autoclaim_on_edit(conn, "b", "Edit", {"file_path": f"{ALPHA}/src/x.py"})
+    assert _bash(conn, "a", command) is None, command
+
+
+def test_shell_write_auto_claims_the_file(conn, clock):
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    # alice writes via the shell (allowed) -> auto-claims src/x.py
+    assert _bash(conn, "a", "echo x > src/x.py") is None
+    guard.autoclaim_on_edit(conn, "a", "Bash", {"command": "echo x > src/x.py"})
+    # bob now reaches for the same file, by shell or by Edit, and is denied
+    assert "@alice" in (_bash(conn, "b", "sed -i s/a/b/ src/x.py") or "")
+    assert "@alice" in (_edit(conn, "b", f"{ALPHA}/src/x.py") or "")
+
+
+def test_shell_write_without_targets_claims_nothing(conn, clock):
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    assert guard.autoclaim_on_edit(conn, "a", "Bash", {"command": "ls -la"}) is None
     assert store.list_claims(conn, project=ALPHA) == []

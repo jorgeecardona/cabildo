@@ -23,10 +23,11 @@ section overrides the top-level tables for that one project.
 Nothing here raises: a missing file is empty, and a malformed file is skipped
 rather than taking down the guard or the CLI that reads it.
 
-Recognised tables (only ``push`` and ``watch`` are wired to behaviour today; the
-rest are read generically and wired one call site at a time):
+Recognised tables (``push``, ``destructive`` and ``watch`` are wired to behaviour
+today; the rest are read generically and wired one call site at a time):
 
-    [push]    mode = "land" | "manual"      # guard._deny_push
+    [push]        mode = "land" | "manual"     # guard._deny_push
+    [destructive] mode = "guard" | "off"        # guard._deny_destructive_git
     [watch]   topic, interval, tail         # cli.cmd_watch
     [uplink]  level = "none" | ...          # cloud
     [notify]  enabled, quiet_hours          # desktop / notify
@@ -134,6 +135,19 @@ def push_mode(cwd: str | None = None, project_name: str | None = None) -> str:
     """
     mode = str(get(cwd, "push", "mode", project_name=project_name, default="land")).lower()
     return mode if mode in ("land", "manual") else "land"
+
+
+def destructive_mode(cwd: str | None = None, project_name: str | None = None) -> str:
+    """``[destructive].mode`` for this project: "off" or the default "guard".
+
+    "guard" (the default) denies tree-destroying git ops (`reset --hard`, a
+    discarding `checkout`/`restore`, `clean -f`, `stash`) whether or not another
+    agent shares the tree -- an autonomous agent should not throw away work it
+    cannot bring back. "off" turns the guard off for repos that want it. An
+    unknown value falls back to "guard", the safe policy.
+    """
+    mode = str(get(cwd, "destructive", "mode", project_name=project_name, default="guard")).lower()
+    return mode if mode in ("guard", "off") else "guard"
 
 
 def watch_topic(cwd: str | None = None, project_name: str | None = None) -> str | None:

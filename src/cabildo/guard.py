@@ -3,7 +3,10 @@ enforced ones at the tool-call boundary.
 
 Four conventions are enforced, all scoped to the session's own project:
 
-  * ``file:<path>`` — an Edit/Write/NotebookEdit on a matching path is denied.
+  * ``file:<path>`` — a write to a matching path is denied, whether it arrives
+    as Edit/Write/NotebookEdit, a Codex ``apply_patch``, or a shell write that
+    would otherwise slip past the lease (``echo > f``, ``tee f``, ``sed -i f``,
+    ``dd of=f``, a literal ``open(...,'w')`` under ``python -c``).
     Paths are matched repo-relative and absolute, with fnmatch globbing so a
     claim like ``file:cabildo/hooks/*`` covers the directory. And, crucially,
     an *allowed* edit auto-takes a short lease on that path (``autoclaim_on_edit``)
@@ -16,10 +19,11 @@ Four conventions are enforced, all scoped to the session's own project:
   * blanket staging in a shared working tree — ``git add -A``, ``git add .``,
     ``git commit -a`` — is denied while another agent shares the same checkout,
     because it sweeps their half-written files into your commit.
-  * destructive git in a shared working tree — ``git reset --hard``, a
-    discarding ``checkout``/``restore``, ``clean -f``, ``stash`` — is denied
-    while any *other* agent is active on the project, because those wipe the
-    whole tree's uncommitted work, not just one claimed file.
+  * destructive git — ``git reset --hard``, a discarding ``checkout``/
+    ``restore``, ``clean -f``, ``stash`` — is denied by default whether or not
+    another agent is active, because it wipes the tree's uncommitted work, not
+    just one claimed file, and an autonomous agent should not throw away changes
+    it cannot bring back. A repo opts out with ``[destructive].mode = "off"``.
 
 The last three are one story: concurrent agents on one repo collide at commit
 and push, and every recovery from that collision (reset, revert, force-push)
@@ -70,6 +74,18 @@ _STAGE_ALL = {"-A", "--all", "-u", "--update", "--no-ignore-removal", ".", ":/"}
 # git's own options that swallow the next token, so the subcommand is found past
 # `git -C /repo add`.
 _GIT_OPT_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
+
+# Shell redirects that write a *file* (the token after them is the path), as
+# opposed to descriptor duplication (`>&`, `2>&1`) or a pipe. `>|` is the
+# noclobber-override form; `&>`/`&>>` send stdout+stderr to the file.
+_WRITE_REDIRECTS = {">", ">>", ">|", "&>", "&>>"}
+# Shell metacharacters shlex(punctuation_chars=True) returns as their own tokens.
+# A token made only of these is an operator, never a path.
+_PUNCT = set("<>|&;()")
+_INTERPRETERS = {"python", "python3", "perl", "ruby", "node"}
+# Best-effort: a literal open('path', 'w'|'a'|'x'…) inside `python -c "…"`. Only
+# the literal-string form is caught; a path built from a variable is not.
+_OPEN_WRITE = re.compile(r"""open\(\s*['"]([^'"]+)['"]\s*,\s*['"][^'"]*[wax]""")
 
 _FILE_TOOLS = {"Edit": "file_path", "Write": "file_path", "NotebookEdit": "notebook_path"}
 
@@ -337,23 +353,168 @@ def _deny_file(conn: sqlite3.Connection, me: sqlite3.Row, path: str) -> str | No
 
 
 def _deny_destructive_git(conn: sqlite3.Connection, me: sqlite3.Row, command: str) -> str | None:
-    """Deny a working-tree-destroying git op while other agents are live on the
-    project. Unlike push/file locks this is not tied to a claim: the op wipes
-    the whole shared tree, so the trigger is simply 'someone else is here'.
+    """Deny a working-tree-destroying git op. Denied by default whether or not
+    another agent shares the tree -- the op discards uncommitted work an
+    autonomous agent cannot bring back, which is dangerous even to a lone agent's
+    own tree. A repo opts out with ``[destructive].mode = "off"``. When peers do
+    share the tree the reason names them, because then it wipes *their* work too.
     """
     label = next((lbl for rx, lbl in _DESTRUCTIVE_GIT if rx.search(command)), None)
     if label is None:
         return None
+    if config.destructive_mode(me["cwd"], me["project_name"]) == "off":
+        return None  # this project opted out (.cabildo/config.toml)
+    optout = 'opt out per-repo with `[destructive].mode = "off"` in .cabildo/config.toml'
     peers = store.active_sessions(conn, project=me["project"], exclude=me["session_id"])
-    if not peers:
-        return None
-    who = ", ".join(store.display_name(p) for p in peers[:5])
+    if peers:
+        who = ", ".join(store.display_name(p) for p in peers[:5])
+        return (
+            f"cabildo: `{label}` in a shared working tree with {len(peers)} other "
+            f"active agent(s) ({who}) can wipe their uncommitted work. Coordinate "
+            "via `send`, or isolate in your own git worktree (`git worktree add`). "
+            f"Re-run once no one else is working the tree, or {optout}."
+        )
     return (
-        f"cabildo: `{label}` in a shared working tree with {len(peers)} other "
-        f"active agent(s) ({who}) can wipe their uncommitted work. Coordinate "
-        "via `send`, or isolate in your own git worktree (`git worktree add`). "
-        "Re-run once no one else is working the tree."
+        f"cabildo: `{label}` clears uncommitted work across the whole tree, and an "
+        "autonomous agent should not throw away changes it cannot bring back. "
+        f"Commit or stash-list what matters first. If you really mean it, {optout}."
     )
+
+
+def _shell_tokens(command: str) -> list[str]:
+    """A shell command tokenised with redirects/pipes as their own tokens and
+    quotes respected, so a `>` inside ``"print(1 > 0)"`` is not read as a
+    redirect. Unparseable input yields nothing — same contract as _argvs.
+    """
+    lx = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lx.whitespace_split = True
+    try:
+        return list(lx)
+    except ValueError:  # unbalanced quotes; not ours to fix
+        return []
+
+
+def _is_operator(tok: str) -> bool:
+    return bool(tok) and all(c in _PUNCT for c in tok)
+
+
+def _split_pipeline(tokens: list[str]) -> list[list[str]]:
+    """The word tokens grouped into one argv per simple command, splitting on
+    every operator token (`|`, `;`, `&&`, a redirect, …). Redirect *targets*
+    land in their own single-word group, which no writer-command check matches,
+    so they are harmless here — redirects are handled separately by path.
+    """
+    out: list[list[str]] = []
+    cur: list[str] = []
+    for tok in tokens:
+        if _is_operator(tok):
+            if cur:
+                out.append(cur)
+            cur = []
+        else:
+            cur.append(tok)
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _sed_in_place(args: list[str]) -> bool:
+    """True if a sed argv edits its files in place (`-i`, `-i.bak`, a bundled
+    `-ni`, or `--in-place`).
+    """
+    for a in args:
+        if a.startswith("--in-place"):
+            return True
+        if a.startswith("-") and not a.startswith("--") and "i" in a[1:]:
+            return True
+    return False
+
+
+def _sed_files(args: list[str]) -> list[str]:
+    """The files a `sed -i` argv rewrites. With an `-e`/`-f` script option every
+    positional is a file; otherwise the first positional is the inline script and
+    the rest are files. Best-effort, precision-first.
+    """
+    script_opt = ("-e", "-f", "--expression", "--file")
+    has_script_opt = any(
+        a in script_opt or a.startswith(("--expression=", "--file=")) for a in args
+    )
+    positionals: list[str] = []
+    skip = False
+    for a in args:
+        if skip:
+            skip = False
+            continue
+        if a.startswith("-"):
+            if a in script_opt:
+                skip = True  # its value is the next token
+            continue
+        positionals.append(a)
+    return positionals if has_script_opt else positionals[1:]
+
+
+def _interp_code(args: list[str]) -> str | None:
+    """The code string an interpreter is asked to run inline (`-c`/`-e`)."""
+    for i, a in enumerate(args):
+        if a in ("-c", "-e") and i + 1 < len(args):
+            return args[i + 1]
+        if a.startswith("-c") and len(a) > 2:
+            return a[2:]
+    return None
+
+
+def _writer_targets(argv: list[str]) -> list[str]:
+    """Files a single non-redirect command evidently writes: `tee f`, `sed -i f`,
+    `dd of=f`, or a literal open(...,'w') under `python -c`.
+    """
+    if not argv:
+        return []
+    cmd = os.path.basename(argv[0])
+    args = argv[1:]
+    if cmd == "tee":
+        return [a for a in args if not a.startswith("-")]
+    if cmd == "sed" and _sed_in_place(args):
+        return _sed_files(args)
+    if cmd == "dd":
+        return [a[len("of=") :] for a in args if a.startswith("of=") and len(a) > 3]
+    if cmd in _INTERPRETERS:
+        code = _interp_code(args)
+        return _OPEN_WRITE.findall(code) if code else []
+    return []
+
+
+def _shell_write_paths(command: str, cwd: str | None) -> list[str]:
+    """Absolute, de-duplicated paths a Bash command evidently *writes*: `>`/`>>`
+    redirects, `tee`, `sed -i`, `dd of=`, and a literal open(...,'w') in
+    `python -c`. Best-effort and precision-first — it catches the ordinary shell
+    write that walks straight past a file lease, it does not try to out-parse bash
+    (a path built from a variable, an exotic writer, is not caught).
+    """
+    tokens = _shell_tokens(command)
+    if not tokens:
+        return []
+    raw: list[str] = []
+    for i, tok in enumerate(tokens[:-1]):
+        if tok in _WRITE_REDIRECTS and not _is_operator(tokens[i + 1]):
+            raw.append(tokens[i + 1])
+    for argv in _split_pipeline(tokens):
+        raw.extend(_writer_targets(argv))
+    base = cwd or os.getcwd()
+    paths = [os.path.normpath(os.path.join(base, p)) for p in raw if p]
+    return list(dict.fromkeys(paths))
+
+
+def _deny_shell_write(conn: sqlite3.Connection, me: sqlite3.Row, command: str) -> str | None:
+    """Deny a shell command that writes a file another agent holds a lease on.
+    This closes the gap Edit/Write/apply_patch already covered: a `sed -i`,
+    `echo > f` or `tee f` on a claimed file would otherwise walk straight past
+    the lease.
+    """
+    for path in _shell_write_paths(command, me["cwd"]):
+        reason = _deny_file(conn, me, path)
+        if reason:
+            return reason
+    return None
 
 
 def deny_reason(
@@ -381,6 +542,7 @@ def deny_reason(
             or _deny_blanket_stage(conn, me, command)
             or _deny_branch_switch(conn, me, command)
             or _deny_destructive_git(conn, me, command)
+            or _deny_shell_write(conn, me, command)
         )
     key = _FILE_TOOLS.get(tool_name)
     if key:
@@ -434,13 +596,16 @@ def autoclaim_on_edit(
     almost never made by hand, so nothing was ever enforced. Editing a file now
     *is* claiming it.
     """
-    if tool_name == "apply_patch":
+    if tool_name in ("apply_patch", "Bash"):
         me = store.get_session(conn, session_id)
         if me is None:
             return None
+        if tool_name == "apply_patch":
+            written = _patch_paths(tool_input.get("command"), me["cwd"])
+        else:
+            written = _shell_write_paths(tool_input.get("command") or "", me["cwd"])
         resources = [
-            autoclaim_on_edit(conn, session_id, "Edit", {"file_path": path})
-            for path in _patch_paths(tool_input.get("command"), me["cwd"])
+            autoclaim_on_edit(conn, session_id, "Edit", {"file_path": path}) for path in written
         ]
         return next((r for r in resources if r), None)
     key = _FILE_TOOLS.get(tool_name)
