@@ -451,3 +451,19 @@ def test_shell_write_without_targets_claims_nothing(conn, clock):
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
     assert guard.autoclaim_on_edit(conn, "a", "Bash", {"command": "ls -la"}) is None
     assert store.list_claims(conn, project=ALPHA) == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cmd > /dev/null 2>&1",
+        "make build > /tmp/build.log",
+        "generate | tee /var/log/out",
+    ],
+)
+def test_out_of_project_shell_write_is_not_auto_claimed(conn, clock, command):
+    # A redirect to a throwaway path outside the project must not litter the
+    # claims table (regression: /dev/null and /tmp/build.log were being claimed).
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    assert guard.autoclaim_on_edit(conn, "a", "Bash", {"command": command}) is None
+    assert store.list_claims(conn) == []

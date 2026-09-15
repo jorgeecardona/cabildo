@@ -398,6 +398,13 @@ def _is_operator(tok: str) -> bool:
     return bool(tok) and all(c in _PUNCT for c in tok)
 
 
+def _under_project(path: str, project: str | None) -> bool:
+    """True if an absolute path lies inside the project tree."""
+    if not project:
+        return False
+    return str(PurePosixPath(path)).startswith(project.rstrip("/") + "/")
+
+
 def _split_pipeline(tokens: list[str]) -> list[list[str]]:
     """The word tokens grouped into one argv per simple command, splitting on
     every operator token (`|`, `;`, `&&`, a redirect, …). Redirect *targets*
@@ -603,7 +610,16 @@ def autoclaim_on_edit(
         if tool_name == "apply_patch":
             written = _patch_paths(tool_input.get("command"), me["cwd"])
         else:
-            written = _shell_write_paths(tool_input.get("command") or "", me["cwd"])
+            # Only in-project writes are auto-claimed: a shell redirect to
+            # /dev/null or /tmp/build.log is not a coordination target, and
+            # auto-claiming it would both litter the claims table and falsely
+            # block a peer writing the same throwaway path. An explicit `claim`
+            # on such a path still enforces via _deny_file.
+            written = [
+                p
+                for p in _shell_write_paths(tool_input.get("command") or "", me["cwd"])
+                if _under_project(p, me["project"])
+            ]
         resources = [
             autoclaim_on_edit(conn, session_id, "Edit", {"file_path": path}) for path in written
         ]
