@@ -13,8 +13,9 @@
 Typing posts as @jorge. `@name hello` DMs an agent; `/u ...` sends urgent
 (agents with the Stop hook cannot idle past it); `/p <project>` jumps to that
 project's channel (`/p` alone lists them), and `/t topic` retargets to any
-channel. The view always shows every channel and DM on the bus — this is the
-operator's console, not a subscriber's.
+channel. ↑/↓ recall lines you've already sent (readline-style), distinct from
+PgUp/PgDn which scroll the message pane. The view always shows every channel and
+DM on the bus — this is the operator's console, not a subscriber's.
 
 Stdlib only (curses), like the rest of the package.
 """
@@ -33,7 +34,7 @@ SIDEBAR_W = 24  # hidden when the terminal is too narrow to afford it
 MIN_COLS_FOR_SIDEBAR = 72
 POLL_MS = 200  # input timeout doubles as the DB poll interval
 ROSTER_EVERY = 2.0  # seconds between roster/claims refreshes
-HINT = "@name=DM · /u=urgent · /p <project>=go · /t topic · PgUp/PgDn · /q=quit"
+HINT = "@name=DM · /u=urgent · /p <project>=go · /t topic · ↑↓ history · PgUp/PgDn scroll · /q=quit"
 
 
 def resolve_topic(name: str, existing: set[str]) -> str:
@@ -91,6 +92,54 @@ def parse(line: str) -> tuple[str, dict]:
     return "send", {"body": line, "urgent": urgent, "to": None}
 
 
+class InputHistory:
+    """Readline-style recall of the lines the human has submitted.
+
+    `record` adds a submitted line; `up`/`down` walk the ring. The live draft is
+    stashed on the first `up` and restored when `down` steps past the newest
+    entry, so browsing history never loses what you were typing. Pure — no curses,
+    so it is unit-tested directly.
+    """
+
+    def __init__(self) -> None:
+        self.items: list[str] = []
+        self.idx: int | None = None  # None = composing live, not browsing
+        self.draft = ""
+
+    def record(self, line: str) -> None:
+        """Remember a submitted line and return to live composing. Blank lines and
+        an immediate repeat of the last entry are not stored (shell behaviour).
+        """
+        self.idx, self.draft = None, ""
+        if line.strip() and (not self.items or self.items[-1] != line):
+            self.items.append(line)
+
+    def up(self, current: str) -> str | None:
+        """The previous entry to show, or None if there is nothing to recall.
+        `current` is the live buffer, stashed on the first step back.
+        """
+        if not self.items:
+            return None
+        if self.idx is None:
+            self.draft = current
+            self.idx = len(self.items) - 1
+        else:
+            self.idx = max(0, self.idx - 1)
+        return self.items[self.idx]
+
+    def down(self) -> str | None:
+        """The next entry to show, the stashed draft when stepping past the newest,
+        or None when not currently browsing (leave the buffer untouched).
+        """
+        if self.idx is None:
+            return None
+        self.idx += 1
+        if self.idx >= len(self.items):
+            self.idx, draft, self.draft = None, self.draft, ""
+            return draft
+        return self.items[self.idx]
+
+
 # --------------------------------------------------------------------------- #
 # The app
 # --------------------------------------------------------------------------- #
@@ -106,6 +155,7 @@ class Chat:
         self.msgs: list[dict] = []  # raw message dicts, oldest first
         self.lines: list[list] = []  # wrapped [(text, attr), ...] segments per row
         self.buf = ""  # input buffer
+        self.hist = InputHistory()  # ↑/↓ recall of lines you've sent
         self.offset = 0  # scrollback: rows up from the bottom
         self.last_id = 0
         self.roster: list = []
@@ -274,8 +324,10 @@ class Chat:
     # ---- actions ---------------------------------------------------------- #
     def submit(self) -> bool:
         """Returns False when the app should exit."""
+        raw = self.buf
         kind, p = parse(self.buf)
         self.buf, self.notice = "", None
+        self.hist.record(raw)
         if kind == "quit":
             return False
         if kind == "noop":
@@ -331,6 +383,14 @@ class Chat:
             return True
         if ch == curses.KEY_BACKSPACE:
             self.buf = self.buf[:-1]
+        elif ch == curses.KEY_UP:
+            recalled = self.hist.up(self.buf)
+            if recalled is not None:
+                self.buf = recalled
+        elif ch == curses.KEY_DOWN:
+            recalled = self.hist.down()
+            if recalled is not None:
+                self.buf = recalled
         elif ch == curses.KEY_PPAGE:
             self.offset += max(1, (self.scr.getmaxyx()[0] - 3) // 2)
         elif ch == curses.KEY_NPAGE:

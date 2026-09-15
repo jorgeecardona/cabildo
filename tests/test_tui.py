@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from cabildo.tui import parse, resolve_topic
+from cabildo.tui import InputHistory, parse, resolve_topic
 
 
 @pytest.mark.parametrize("line", ["/q", "/quit", "/exit"])
@@ -83,3 +83,55 @@ def test_resolve_topic_maps_bare_name_to_project_channel():
     assert resolve_topic("general", existing) == "general"  # exact match wins
     assert resolve_topic("proj:paas", existing) == "proj:paas"  # already qualified
     assert resolve_topic("brand-new", existing) == "brand-new"  # unknown -> verbatim
+
+
+# --------------------------------------------------------------------------- #
+# InputHistory — ↑/↓ recall of sent lines
+# --------------------------------------------------------------------------- #
+def test_history_up_walks_backwards_then_down_returns():
+    h = InputHistory()
+    for line in ("first", "second", "third"):
+        h.record(line)
+    # up from a fresh, empty draft recalls newest -> oldest
+    assert h.up("") == "third"
+    assert h.up("third") == "second"
+    assert h.up("second") == "first"
+    assert h.up("first") == "first"  # clamped at the oldest
+    # down walks back toward newest
+    assert h.down() == "second"
+    assert h.down() == "third"
+
+
+def test_history_down_restores_the_stashed_draft():
+    h = InputHistory()
+    h.record("sent")
+    assert h.up("half-typed") == "sent"  # draft stashed on first step back
+    assert h.down() == "half-typed"  # stepping past newest restores it
+    assert h.down() is None  # no longer browsing -> leave the buffer alone
+
+
+def test_history_empty_and_not_browsing_are_noops():
+    h = InputHistory()
+    assert h.up("draft") is None  # nothing recorded
+    assert h.down() is None  # not browsing
+    h.record("x")
+    assert h.down() is None  # down without a prior up does nothing
+
+
+def test_history_skips_blanks_and_immediate_repeats():
+    h = InputHistory()
+    h.record("")
+    h.record("   ")
+    h.record("keep")
+    h.record("keep")  # immediate duplicate not stored
+    h.record("other")
+    assert h.items == ["keep", "other"]
+
+
+def test_recording_resets_browsing_position():
+    h = InputHistory()
+    h.record("a")
+    h.record("b")
+    assert h.up("") == "b"  # browsing
+    h.record("c")  # submitting a new line returns to live composing
+    assert h.up("") == "c"  # next up starts from the newest again
