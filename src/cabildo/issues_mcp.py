@@ -304,8 +304,12 @@ def close_issue(name: str, fixed_in: str) -> str:
     folder = _folder()
     updated = issues.close(folder, name, fixed_in=fixed_in)
     _lease(updated.slug, take=False)
+    ready = issues.newly_ready(folder, updated.slug)
     left = len(issues.board(folder).ready)
-    return f"closed {updated.path.name} (fixed_in {updated.fixed_in}) — {left} ready now"
+    msg = f"closed {updated.path.name} (fixed_in {updated.fixed_in}) — {left} ready now"
+    if ready:
+        msg += "; unblocked: " + ", ".join(i.slug for i in ready)
+    return msg
 
 
 @mcp.tool(structured_output=False)
@@ -439,13 +443,19 @@ def agenda_highlight(name: str, scope: str = "project") -> str:
 
 @mcp.tool(structured_output=False)
 def agenda_done(name: str, scope: str = "project") -> str:
-    """Mark a task done. No sha needed — an agenda task is not a commit."""
+    """Mark a task done. No sha needed — an agenda task is not a commit. Names any task
+    that was waiting on it and is now ready.
+    """
     try:
         folder = _agenda_folder(scope)
         updated = agenda.mark_done(folder, name)
     except (ValueError, issues.IssueFormatError) as exc:
         return f"no change: {exc}"
-    return f"done: {updated.path.name}"
+    ready = issues.newly_ready(folder, updated.slug, agenda.config(folder))
+    msg = f"done: {updated.path.name}"
+    if ready:
+        msg += " — now ready: " + ", ".join(i.slug for i in ready)
+    return msg
 
 
 @mcp.tool(structured_output=False)

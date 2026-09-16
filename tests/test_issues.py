@@ -974,3 +974,15 @@ def test_board_ranks_ready_and_mine_by_tier(agenda):
     write(agenda, "03-08-2026-ma.md", "title: MineA\nstatus: open\narea: x\ntier: NOW\nowner: me")
     b = issues.board(agenda, owner="me")
     assert [i.title for i in b.mine] == ["MineA", "MineB"]
+
+
+def test_newly_ready_lists_what_a_close_unblocks(agenda):
+    write(agenda, "03-08-2026-blocker.md", "title: B\nstatus: open\narea: x\ntier: NOW")
+    write(
+        agenda,
+        "03-08-2026-dep.md",
+        "title: D\nstatus: open\narea: x\ntier: NOW\nblocked_by:\n  - blocker",
+    )
+    assert issues.newly_ready(agenda, "blocker") == []  # blocker still open -> nothing freed
+    write(agenda, "03-08-2026-blocker.md", "title: B\nstatus: done\narea: x\ntier: NOW")
+    assert [i.slug for i in issues.newly_ready(agenda, "blocker")] == ["dep"]

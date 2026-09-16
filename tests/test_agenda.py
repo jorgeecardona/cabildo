@@ -293,3 +293,10 @@ def test_agenda_handoff_tool_appends_a_note(agenda_tools):
     assert "handoff noted" in out
     shown = agenda_tools.agenda_show("a-task", scope="global")
     assert "resume at the parser" in shown and "## Handoff" in shown
+
+
+def test_agenda_done_surfaces_newly_ready(agenda_tools):
+    agenda_tools.agenda_add("blocker", "NOW", scope="global")
+    agenda_tools.agenda_add("dependent", "NOW", blocked_by=["blocker"], scope="global")
+    out = agenda_tools.agenda_done("blocker", scope="global")
+    assert "now ready: dependent" in out

@@ -579,6 +579,25 @@ class Board:
     done: int
 
 
+def newly_ready(
+    folder: pathlib.Path, closed_slug: str, config: Config | None = None
+) -> list[Issue]:
+    """Open issues that named `closed_slug` as a blocker and now have no open blocker
+    left — the work that just became pickup-able because it closed. Empty when nothing
+    was waiting on it.
+    """
+    config = load_config(folder) if config is None else config
+    found, _ = load_all(folder, config)
+    open_slugs = {i.slug for i in found if i.open}
+    return [
+        i
+        for i in found
+        if i.open
+        and closed_slug in i.blocked_by
+        and not any(s in open_slugs for s in i.blocked_by)
+    ]
+
+
 def board(folder: pathlib.Path, config: Config | None = None, *, owner: str | None = None) -> Board:
     config = load_config(folder) if config is None else config
     issues, _ = load_all(folder, config)
