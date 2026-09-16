@@ -208,6 +208,13 @@ class Config:
     #: The field whose declared `values` order ranks the board. Defaults to `priority` when a
     #: field of that name declares values, which is what these folders already called it.
     rank_by: str = ""
+    #: Require `fixed_in` on a `done` issue. On by default: a code register closes an issue by
+    #: naming the sha that landed it. A register that is not tracking code (a personal agenda, say)
+    #: turns this off, so `done` is just done with no sha to cite.
+    closed_needs_fixed_in: bool = True
+    #: Fields of which at most one issue in the register may carry a value — an exclusive flag such
+    #: as a single "focus of the day". A second one set is a `check` error naming the conflict.
+    singleton_fields: tuple[str, ...] = ()
 
     @property
     def ranking(self) -> Field | None:
@@ -304,6 +311,8 @@ def load_config(folder: pathlib.Path) -> Config:
         index_done=bool(raw.get("index_done", False)),
         index_group_by=str(raw.get("index_group_by", "") or ""),
         rank_by=str(raw.get("rank_by", "") or ""),
+        closed_needs_fixed_in=bool(raw.get("closed_needs_fixed_in", True)),
+        singleton_fields=tuple(raw.get("singleton_fields", ()) or ()),
     )
 
 
@@ -596,6 +605,8 @@ def board(folder: pathlib.Path, config: Config | None = None, *, owner: str | No
             ready.append(issue)
 
     ready.sort(key=config.rank_key)
+    mine.sort(key=config.rank_key)
+    waiting.sort(key=lambda w: config.rank_key(w.issue))
     return Board(
         ready=tuple(ready),
         waiting=tuple(waiting),
@@ -708,7 +719,7 @@ def check(folder: pathlib.Path, config: Config | None = None) -> list[Problem]:
             problems.append(
                 Problem(p, f"unknown area {issue.area!r} — one of {', '.join(config.areas)}")
             )
-        if issue.status is Status.DONE and not issue.fixed_in:
+        if config.closed_needs_fixed_in and issue.status is Status.DONE and not issue.fixed_in:
             problems.append(
                 Problem(
                     p,
@@ -775,9 +786,29 @@ def check(folder: pathlib.Path, config: Config | None = None) -> list[Problem]:
         problems.extend(_broken_links(issue, folder))
 
     problems.extend(_cycles(issues))
+    problems.extend(_singletons(issues, config))
     problems.extend(_crossrefs(folder, issues, config))
     problems.extend(_index_problems(folder, issues, config))
     return problems
+
+
+def _singletons(issues: tuple[Issue, ...], config: Config) -> list[Problem]:
+    """Enforce that an exclusive field is set on at most one issue.
+
+    A "focus of the day" flag means nothing if two issues carry it; the point of the field is that
+    exactly one does. Each offender is named the others, so the fix is obvious from any one file.
+    """
+    out: list[Problem] = []
+    for name in config.singleton_fields:
+        holders = [i for i in issues if i.extra.get(name)]
+        if len(holders) <= 1:
+            continue
+        others = ", ".join(h.path.name for h in holders)
+        for issue in holders:
+            out.append(
+                Problem(issue.path, f"`{name}` is exclusive but is set on {len(holders)}: {others}")
+            )
+    return out
 
 
 def _crossrefs(folder: pathlib.Path, issues: tuple[Issue, ...], config: Config) -> list[Problem]:

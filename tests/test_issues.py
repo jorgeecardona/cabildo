@@ -902,3 +902,63 @@ def test_the_cue_survives_a_broken_register(tmp_path):
     d.mkdir(parents=True)
     (d / issues.CONFIG_NAME).write_text("this is not valid toml {{{")
     assert notify.register_line(str(tmp_path)) is None
+
+
+# --------------------------------------------------------------------------- #
+# Agenda-style registers: done without a sha, an exclusive flag, tier ranking
+# --------------------------------------------------------------------------- #
+AGENDA_CONFIG = """
+index = false
+closed_needs_fixed_in = false
+rank_by = "tier"
+singleton_fields = ["highlight"]
+
+[fields.tier]
+values = ["NOW", "NEXT", "LATER"]
+
+[fields.today]
+values = ["true"]
+
+[fields.highlight]
+values = ["true"]
+"""
+
+
+@pytest.fixture
+def agenda(tmp_path):
+    d = tmp_path / "agenda"
+    d.mkdir()
+    (d / issues.CONFIG_NAME).write_text(AGENDA_CONFIG)
+    return d
+
+
+def test_closed_needs_fixed_in_false_allows_done_without_a_sha(agenda):
+    write(agenda, "03-08-2026-shipped.md", "title: Shipped\nstatus: done\narea: x\ntier: NOW")
+    assert issues.check(agenda) == []
+
+
+def test_closed_needs_fixed_in_true_still_demands_a_sha(folder):
+    # The default (a code register) is unchanged: done must cite the sha that landed it.
+    write(folder, "03-08-2026-done.md", "title: D\nstatus: done\narea: ci\nscope: S")
+    assert any("fixed_in" in p.message for p in issues.check(folder))
+
+
+def test_singleton_field_allows_one_and_flags_two(agenda):
+    write(agenda, "03-08-2026-a.md", "title: A\nstatus: open\narea: x\ntier: NOW\nhighlight: true")
+    assert issues.check(agenda) == []  # exactly one focus is fine
+    write(agenda, "04-08-2026-b.md", "title: B\nstatus: open\narea: x\ntier: NEXT\nhighlight: true")
+    problems = [p for p in issues.check(agenda) if "exclusive" in p.message]
+    assert {p.path.name for p in problems} == {"03-08-2026-a.md", "04-08-2026-b.md"}
+
+
+def test_board_ranks_ready_and_mine_by_tier(agenda):
+    write(agenda, "03-08-2026-later.md", "title: Later\nstatus: open\narea: x\ntier: LATER")
+    write(agenda, "03-08-2026-now.md", "title: Now\nstatus: open\narea: x\ntier: NOW")
+    write(agenda, "03-08-2026-next.md", "title: Next\nstatus: open\narea: x\ntier: NEXT")
+    b = issues.board(agenda)
+    assert [i.title for i in b.ready] == ["Now", "Next", "Later"]
+    # ownership does not lose the tier order
+    write(agenda, "03-08-2026-mb.md", "title: MineB\nstatus: open\narea: x\ntier: LATER\nowner: me")
+    write(agenda, "03-08-2026-ma.md", "title: MineA\nstatus: open\narea: x\ntier: NOW\nowner: me")
+    b = issues.board(agenda, owner="me")
+    assert [i.title for i in b.mine] == ["MineA", "MineB"]
