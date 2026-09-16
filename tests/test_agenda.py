@@ -138,3 +138,63 @@ def test_agenda_tools_today_and_exclusive_highlight(agenda_tools):
     agenda_tools.agenda_highlight("second", scope="global")  # moves the single highlight
     board = agenda_tools.agenda_board(scope="global")
     assert board.count("★") == 1
+
+
+# --------------------------------------------------------------------------- #
+# Importing a flat roadmap.md into per-task files
+# --------------------------------------------------------------------------- #
+SAMPLE_ROADMAP = """\
+# Roadmap
+
+## NOW
+- [ ] First task: do the thing (ABC-1). @today
+  a note line
+  another note line
+- [~] Second task, in progress
+
+## NEXT
+- [x] Already done in next (ABC-2)
+- [ ] Plain next @highlight
+- [ ] Second highlight tries to sneak in @highlight
+
+## DONE
+- [x] An old finished thing
+"""
+
+
+def test_parse_roadmap_maps_marks_tiers_flags_and_body():
+    tasks, warnings = agenda.parse_roadmap(SAMPLE_ROADMAP)
+    first = tasks[0]
+    assert first.tier == "NOW" and first.status is issues.Status.OPEN and first.today
+    assert first.jira == "ABC-1"
+    assert first.body == "a note line\nanother note line"
+    assert tasks[1].status is issues.Status.IN_PROGRESS
+    done_next = next(t for t in tasks if t.title.startswith("Already done"))
+    assert done_next.tier == "NEXT" and done_next.status is issues.Status.DONE
+    old = next(t for t in tasks if t.title == "An old finished thing")
+    assert old.tier is None and old.status is issues.Status.DONE  # DONE heading = status, not tier
+    # exactly one highlight survives, the second is dropped with a warning
+    assert sum(t.highlight for t in tasks) == 1
+    assert any("second @highlight" in w.lower() or "highlight" in w.lower() for w in warnings)
+
+
+def test_import_tasks_writes_clean_files(tmp_path):
+    folder = tmp_path / "agenda"
+    tasks, _ = agenda.parse_roadmap(SAMPLE_ROADMAP)
+    counts = agenda.import_tasks(folder, tasks, owner="me")
+    assert counts == {"open": 3, "in-progress": 1, "done": 2}
+    assert agenda.check(folder) == []  # migrated register is green
+    found, broken = issues.load_all(folder, agenda.config(folder))
+    assert broken == ()
+    assert sum(bool(i.extra.get("highlight")) for i in found) == 1
+    # in-progress carries an owner (the register requires one); done needs no sha
+    ip = next(i for i in found if i.status is issues.Status.IN_PROGRESS)
+    assert ip.owner == "me"
+
+
+def test_import_tasks_avoids_filename_collisions(tmp_path):
+    folder = tmp_path / "agenda"
+    dup = "## NOW\n- [ ] Same title here now\n- [ ] Same title here now\n"
+    agenda.import_tasks(folder, agenda.parse_roadmap(dup)[0])
+    files = [p.name for p in folder.glob("*.md")]
+    assert len(files) == 2 and len(set(files)) == 2  # two distinct filenames

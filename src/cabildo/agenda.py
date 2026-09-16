@@ -22,8 +22,10 @@ file.
 from __future__ import annotations
 
 import dataclasses
+import datetime as _dt
 import os
 import pathlib
+import re
 
 from . import issues, store
 
@@ -214,3 +216,140 @@ def board(folder: pathlib.Path, *, owner: str | None = None) -> issues.Board:
 
 def check(folder: pathlib.Path) -> list[issues.Problem]:
     return issues.check(folder, config(folder))
+
+
+# --------------------------------------------------------------------------- #
+# Importing a flat roadmap.md (a checklist under `## TIER` headings) into files
+# --------------------------------------------------------------------------- #
+_SECTION_RE = re.compile(r"^##\s+(.+?)\s*$")
+_ITEM_RE = re.compile(r"^- \[([ xX~])\]\s*(.*)$")
+#: A tracker key such as ABC-123. Generic on purpose; captured into the `jira`
+#: field so the source text stays readable.
+_TICKET_RE = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
+_MARK_STATUS = {
+    " ": issues.Status.OPEN,
+    "x": issues.Status.DONE,
+    "X": issues.Status.DONE,
+    "~": issues.Status.IN_PROGRESS,
+}
+
+
+@dataclasses.dataclass
+class RoadmapTask:
+    title: str
+    tier: str | None
+    status: issues.Status
+    today: bool
+    highlight: bool
+    jira: str
+    body: str
+
+
+def parse_roadmap(text: str) -> tuple[list[RoadmapTask], list[str]]:
+    """Parse a flat agenda file into tasks. Top-level ``- [ ]`` / ``- [x]`` / ``- [~]``
+    items become tasks (open / done / in-progress); the enclosing ``## TIER`` heading
+    is the tier (a ``## DONE`` heading carries no tier, only the done status); indented
+    lines are the body; ``@today`` / ``@highlight`` are flags; the first tracker key on
+    the line is the jira field. Returns (tasks, warnings). The highlight is made
+    exclusive here, so importing a file with several keeps only the first.
+    """
+    tasks: list[RoadmapTask] = []
+    warnings: list[str] = []
+    tier: str | None = None
+    current: RoadmapTask | None = None
+    body: list[str] = []
+
+    def flush() -> None:
+        nonlocal current
+        if current is not None:
+            current.body = "\n".join(body).strip()
+            tasks.append(current)
+        current = None
+        body.clear()
+
+    for line in text.splitlines():
+        section = _SECTION_RE.match(line)
+        if section:
+            flush()
+            name = section.group(1).strip().upper()
+            tier = name if name in TIERS else None
+            continue
+        item = _ITEM_RE.match(line)
+        if item:
+            flush()
+            rest = item.group(2).strip()
+            today = "@today" in rest
+            highlight = "@highlight" in rest
+            rest = rest.replace("@today", "").replace("@highlight", "")
+            rest = re.sub(r"\s{2,}", " ", rest).strip()
+            ticket = _TICKET_RE.search(rest)
+            current = RoadmapTask(
+                title=rest,
+                tier=tier,
+                status=_MARK_STATUS[item.group(1)],
+                today=today,
+                highlight=highlight,
+                jira=ticket.group(0) if ticket else "",
+                body="",
+            )
+            continue
+        if current is not None and line.strip():
+            body.append(line.strip())
+    flush()
+
+    lit = [t for t in tasks if t.highlight]
+    for extra in lit[1:]:
+        extra.highlight = False
+        warnings.append(f"dropped a second @highlight on: {extra.title[:60]}")
+    return tasks, warnings
+
+
+def _unique_slug(folder: pathlib.Path, slug: str, taken: set[str]) -> str:
+    """A slug not already used in this import or on disk, so two similar titles do
+    not collide on one filename.
+    """
+    base = slug or "task"
+    candidate = base
+    n = 2
+    while candidate in taken or any(folder.glob(f"*-{candidate}.md")):
+        candidate = f"{base}-{n}"
+        n += 1
+    return candidate
+
+
+def import_tasks(
+    folder: pathlib.Path, tasks: list[RoadmapTask], *, owner: str = "me"
+) -> dict[str, int]:
+    """Write parsed tasks into the agenda folder as issue files. In-progress tasks get
+    `owner` (the register requires one). Returns counts per status.
+    """
+    ensure(folder)
+    cfg = config(folder)
+    taken: set[str] = set()
+    counts = {"open": 0, "in-progress": 0, "done": 0}
+    filed = _dt.date.today().isoformat()
+    for task in tasks:
+        extra: dict[str, str | tuple[str, ...]] = {}
+        if task.tier:
+            extra["tier"] = task.tier
+        if task.today:
+            extra["today"] = FLAG
+        if task.highlight:
+            extra["highlight"] = FLAG
+        if task.jira:
+            extra["jira"] = task.jira
+        slug = _unique_slug(folder, issues.slugify(task.title), taken)
+        taken.add(slug)
+        issue = issues.Issue(
+            path=folder / cfg.filename(filed, slug),
+            title=task.title,
+            status=task.status,
+            area=DEFAULT_AREA,
+            filed=filed,
+            owner=owner if task.status is issues.Status.IN_PROGRESS else None,
+            extra=extra,
+            body="\n" + task.body if task.body else "\n",
+        )
+        issues.save(issue, cfg)
+        counts[task.status.value] += 1
+    return counts
