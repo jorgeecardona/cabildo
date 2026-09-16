@@ -182,9 +182,14 @@ def register_line(cwd: str | None, handle: str | None = None) -> str | None:
     return line
 
 
+# Once this many *other* agents are live on a project, a starting session is nudged
+# to claim its task before editing, so a crowded swarm does not duplicate work.
+WIP_NUDGE_PEERS = 3
+
+
 def session_banner(conn: sqlite3.Connection, session_id: str) -> str:
     """Fuller status for SessionStart: who you are, who else is online on this
-    project, active locks, unread count.
+    project, active locks, unread count, and a WIP nudge when it is crowded.
     """
     me = store.get_session(conn, session_id)
     name = store.display_name(me, session_id)
@@ -202,6 +207,12 @@ def session_banner(conn: sqlite3.Connection, session_id: str) -> str:
             for p in peers[:8]
         )
         lines.append(f"{len(peers)} other agent(s) here: {who}")
+        if len(peers) >= WIP_NUDGE_PEERS:
+            lines.append(
+                f"⚠ {len(peers) + 1} agents live here. Claim your task first "
+                "(claim / agenda_claim) before you edit — an unclaimed start is how two "
+                "agents end up doing the same work."
+            )
     else:
         lines.append("No other agents currently active on this project.")
 

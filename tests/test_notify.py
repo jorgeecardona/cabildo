@@ -1,0 +1,34 @@
+"""The SessionStart banner, and its WIP nudge when a project gets crowded."""
+
+from __future__ import annotations
+
+from cabildo import notify
+from tests.conftest import make_session
+
+P = "/repo/x"
+
+
+def _peers(conn, n):
+    for i in range(n):
+        make_session(conn, f"peer{i}", handle=f"peer{i}", project=P, project_name="x")
+
+
+def test_no_wip_nudge_below_the_threshold(conn):
+    make_session(conn, "me", handle="me", project=P, project_name="x")
+    _peers(conn, notify.WIP_NUDGE_PEERS - 1)
+    assert "Claim your task first" not in notify.session_banner(conn, "me")
+
+
+def test_wip_nudge_when_the_project_is_crowded(conn):
+    make_session(conn, "me", handle="me", project=P, project_name="x")
+    _peers(conn, notify.WIP_NUDGE_PEERS)
+    banner = notify.session_banner(conn, "me")
+    assert "Claim your task first" in banner
+    assert f"{notify.WIP_NUDGE_PEERS + 1} agents live" in banner
+
+
+def test_no_nudge_when_alone(conn):
+    make_session(conn, "solo", handle="solo", project=P, project_name="x")
+    banner = notify.session_banner(conn, "solo")
+    assert "Claim your task first" not in banner
+    assert "No other agents" in banner
