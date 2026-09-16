@@ -27,7 +27,7 @@ import os
 import pathlib
 import re
 
-from . import issues, store
+from . import issues, store, usage
 
 #: The generic agenda config written into a fresh agenda folder. A user edits it in
 #: place: narrow `jira.pattern` to their tracker, add `areas`, and so on.
@@ -225,6 +225,23 @@ def check(folder: pathlib.Path) -> list[issues.Problem]:
 # are exactly the ones holding its `issue:<slug>` bus lease. Warmth comes from how
 # recently the session was seen, not from guessing.
 WARM_WINDOW = 120.0  # seen this recently => warm/running
+COST_LOOKBACK = 86400.0  # attribute the last day's session usage to its task
+
+
+def _session_usage(since: float) -> dict[str, dict]:
+    """Per-session token totals and a cost-shaped weight since `since`, keyed by the
+    session id (which matches the bus session id). Best-effort: no usage files => {}.
+    """
+    agg: dict[str, dict] = {}
+    try:
+        for r in usage.records(since):
+            a = agg.setdefault(r["session"], {"weighted": 0.0, "tokens_in": 0, "tokens_out": 0})
+            a["weighted"] += r["weighted"]
+            a["tokens_in"] += r["in"]
+            a["tokens_out"] += r["out"]
+    except Exception:
+        return {}
+    return agg
 
 
 def _session_state(age: float) -> str:
@@ -291,20 +308,33 @@ def _item(issue: issues.Issue, sessions: list[dict]) -> dict:
         "status": issue.status.value,
         "blocked_by": list(issue.blocked_by),
         "sessions": sessions,
+        # cost-shaped weight of the sessions on this task (claim = flow), so a task's
+        # spend is the spend of whoever is working it. Raw dollars need pricing; this
+        # is the same weighted proxy `cabildo usage` reports.
+        "cost_weighted": round(sum(s.get("cost_weighted", 0.0) for s in sessions), 1),
     }
 
 
-def view(conn, folder: pathlib.Path) -> dict:
+def view(conn, folder: pathlib.Path, *, since: float | None = None) -> dict:
     """The structured agenda for a skill to render: Today, the tier Roadmap, and the
     session-derived signals (live_wip, drift, fragmentation, gaps, to_track). Tasks
-    carry their matched sessions from the bus; with no bus, the structure still comes
-    back with empty session lists. Jira *status* is not fetched here — the returned
-    `jira` is the key string only; the skill composes live status via ops-mcp.
+    carry their matched sessions from the bus, each with the recent token/cost usage
+    of that session (claim = flow, so cost lands on the task). With no bus, the
+    structure still comes back with empty session lists. Jira *status* is not fetched
+    here — the returned `jira` is the key string only; the skill composes live status
+    via ops-mcp.
     """
     cfg = config(folder)
     all_issues, _ = issues.load_all(folder, cfg)
     open_issues = [i for i in all_issues if i.open]
     by_slug_sessions = {i.slug: matched_sessions(conn, i.slug) for i in open_issues}
+    usage_by = _session_usage(store._now() - COST_LOOKBACK if since is None else since)
+    for sess_list in by_slug_sessions.values():
+        for s in sess_list:
+            u = usage_by.get(s["session_id"], {})
+            s["cost_weighted"] = round(u.get("weighted", 0.0), 1)
+            s["tokens_in"] = u.get("tokens_in", 0)
+            s["tokens_out"] = u.get("tokens_out", 0)
     items = {i.slug: _item(i, by_slug_sessions[i.slug]) for i in open_issues}
 
     today = [items[i.slug] for i in open_issues if i.extra.get("today")]
@@ -349,6 +379,7 @@ def view(conn, folder: pathlib.Path) -> dict:
             "open": len(open_issues),
             "today": len(today),
             "done": sum(1 for i in all_issues if not i.open),
+            "cost_weighted_today": round(sum(t["cost_weighted"] for t in today), 1),
         },
     }
 

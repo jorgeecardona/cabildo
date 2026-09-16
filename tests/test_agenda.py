@@ -267,3 +267,23 @@ def test_view_without_a_bus_still_returns_the_structure(tmp_path):
     assert v["today"][0]["sessions"] == []
     assert v["signals"]["drift"] == []
     assert v["counts"]["open"] == 1
+
+
+def test_view_attaches_cost_from_usage_to_the_claimed_task(conn, tmp_path, monkeypatch):
+    from cabildo import usage
+    from tests.conftest import make_session
+
+    folder = agenda.ensure(tmp_path / "ag")
+    agenda.add(folder, title="Costly task", tier="NOW", today=True)
+    make_session(conn, "sx", handle="dev")
+    _claim(conn, "sx", "costly-task")
+    monkeypatch.setattr(
+        usage,
+        "records",
+        lambda since: iter([{"session": "sx", "weighted": 12.5, "in": 100, "out": 20}]),
+    )
+    v = agenda.view(conn, folder)
+    do = next(t for t in v["today"] if t["slug"] == "costly-task")
+    assert do["cost_weighted"] == 12.5  # the session's cost lands on its task
+    assert do["sessions"][0]["tokens_in"] == 100
+    assert v["counts"]["cost_weighted_today"] == 12.5
