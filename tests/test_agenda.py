@@ -23,18 +23,18 @@ def test_ensure_writes_the_preset(tmp_path):
     assert cfg.singleton_fields == ("highlight",)
 
 
-def test_add_places_tier_body_and_optional_jira(folder):
+def test_add_places_tier_body_and_optional_extra_fields(folder):
     p = agenda.add(
         folder,
         title="Ship the arena",
         tier="NOW",
         body="the description",
-        jira="ABC-12",
+        fields={"note": "carried as-is"},  # generic extra data, cabildo names nothing
         today=True,
     )
     issue = issues.load(p, agenda.config(folder))
     assert issue.extra["tier"] == "NOW"
-    assert issue.extra["jira"] == "ABC-12"
+    assert issue.extra["note"] == "carried as-is"
     assert issue.extra["today"] == "true"
     assert "the description" in issue.body
     assert agenda.check(folder) == []
@@ -166,9 +166,9 @@ def test_parse_roadmap_maps_marks_tiers_flags_and_body():
     tasks, warnings = agenda.parse_roadmap(SAMPLE_ROADMAP)
     first = tasks[0]
     assert first.tier == "NOW" and first.status is issues.Status.OPEN and first.today
-    assert first.jira == "ABC-1"
     assert first.body == "a note line\nanother note line"
     assert tasks[1].status is issues.Status.IN_PROGRESS
+    assert "ABC-1" in first.title  # a tracker key stays in the title, not a named field
     done_next = next(t for t in tasks if t.title.startswith("Already done"))
     assert done_next.tier == "NEXT" and done_next.status is issues.Status.DONE
     old = next(t for t in tasks if t.title == "An old finished thing")
@@ -217,12 +217,12 @@ def _claim(conn, sid, slug):
     )
 
 
-def test_view_matches_sessions_gaps_fragmentation_and_to_track(conn, tmp_path):
+def test_view_matches_sessions_gaps_and_fragmentation(conn, tmp_path):
     from tests.conftest import make_session
 
     folder = agenda.ensure(tmp_path / "ag")
-    agenda.add(folder, title="Do today", tier="NOW", today=True, jira="ABC-1")
-    agenda.add(folder, title="Also today", tier="NEXT", today=True)  # no jira, no session
+    agenda.add(folder, title="Do today", tier="NOW", today=True, fields={"note": "n1"})
+    agenda.add(folder, title="Also today", tier="NEXT", today=True)  # no session
     agenda.add(folder, title="Someday", tier="LATER")
     make_session(conn, "sa", handle="alice")
     _claim(conn, "sa", "do-today")
@@ -233,14 +233,12 @@ def test_view_matches_sessions_gaps_fragmentation_and_to_track(conn, tmp_path):
     do = next(t for t in v["today"] if t["slug"] == "do-today")
     assert [s["session"] for s in do["sessions"]] == ["@alice"]  # the exclusive holder
     assert do["sessions"][0]["running"]  # freshly seen => warm
-    assert do["jira"] == "ABC-1"
+    assert do["extra"] == {"note": "n1"}  # extra data carried through, not named by cabildo
     sig = v["signals"]
     assert sig["live_wip"] == 2  # two tasks have a warm holder
     frag = next(f for f in sig["fragmentation"] if f["session"] == "@alice")
     assert set(frag["slugs"]) == {"do-today", "someday"}  # @alice spread across both
     assert "also-today" in sig["gaps"]  # a today task nobody is on
-    assert "also-today" in sig["to_track"]  # a today task with no jira key
-    assert "someday" in sig["to_track"]
 
 
 def test_view_drift_is_a_warm_session_off_a_today_task(conn, tmp_path):

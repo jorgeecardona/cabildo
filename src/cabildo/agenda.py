@@ -2,9 +2,9 @@
 
 An agenda is nothing but an issues folder with a preset config: tasks ranked by a
 `tier` (NOW..CANDIDATES) instead of a priority, a `today` flag, a single exclusive
-`highlight`, an optional tracker key, and `done` that needs no commit sha because
-an agenda task is not a code change. Everything else — the markdown-file store, the
-board, blocked_by, the bus lease behind a claim — is the issues subsystem unchanged.
+`highlight`, and `done` that needs no commit sha because an agenda task is not a
+code change. Everything else — the markdown-file store, the board, blocked_by, the
+bus lease behind a claim — is the issues subsystem unchanged.
 
 Two places an agenda can live, chosen by `scope`:
 
@@ -13,10 +13,11 @@ Two places an agenda can live, chosen by `scope`:
   * ``global`` — one home-wide agenda spanning every project, at
     ``$CABILDO_AGENDA_DIR`` or ``<cabildo home>/agenda``.
 
-The preset shipped here is generic on purpose: the tracker field `jira` matches an
-ordinary uppercase project key, and a user narrows it (or renames it) in the
-folder's own ``config.toml``. Nothing project- or company-specific lives in this
-file.
+The preset is deliberately minimal: tier, today, highlight. cabildo does not
+presume a tracker (Jira or anything else). If a task should carry a ticket key, a
+due date, or any other reference, that is just extra data a user declares in the
+folder's own ``config.toml`` and passes as ``fields``; the view returns it under
+``extra`` without cabildo naming it. Nothing project- or company-specific lives here.
 """
 
 from __future__ import annotations
@@ -29,8 +30,8 @@ import re
 
 from . import issues, store, usage
 
-#: The generic agenda config written into a fresh agenda folder. A user edits it in
-#: place: narrow `jira.pattern` to their tracker, add `areas`, and so on.
+#: The generic agenda config written into a fresh agenda folder. Minimal on purpose;
+#: a user adds their own fields (a tracker key, a due date, tags) in place.
 PRESET_TOML = """\
 # cabildo agenda — a work agenda on the issues store. Edit freely; this is yours.
 closed_needs_fixed_in = false   # an agenda task is done when it is done, no sha
@@ -47,9 +48,10 @@ values = ["true"]
 [fields.highlight]
 values = ["true"]
 
-[fields.jira]
-# Your tracker's key shape. Narrow this to e.g. "^ABC-\\\\d+$" for one project.
-pattern = "^[A-Z][A-Z0-9]+-\\\\d+$"
+# Add your own extra fields here if you want them, e.g. a tracker key:
+#   [fields.ticket]
+#   pattern = "^[A-Z][A-Z0-9]+-\\\\d+$"
+# cabildo does not presume one; it just carries whatever you declare.
 """
 
 TIERS = ("NOW", "NEXT", "LATER", "CLEANUP", "CANDIDATES")
@@ -139,16 +141,16 @@ def add(
     tier: str,
     area: str = DEFAULT_AREA,
     body: str = "",
-    jira: str = "",
     today: bool = False,
     blocked_by: tuple[str, ...] = (),
+    fields: dict[str, str | tuple[str, ...]] | None = None,
 ) -> pathlib.Path:
-    """Create a task. `tier` places it on the board; `body` is its description."""
+    """Create a task. `tier` places it on the board; `body` is its description;
+    `fields` is any extra data the folder's config declares (a tracker key, tags …).
+    """
     if tier not in TIERS:
         raise issues.IssueFormatError(f"unknown tier {tier!r} — one of {', '.join(TIERS)}")
-    extra: dict[str, str | tuple[str, ...]] = {"tier": tier}
-    if jira:
-        extra["jira"] = jira
+    extra: dict[str, str | tuple[str, ...]] = {"tier": tier, **(fields or {})}
     if today:
         extra["today"] = FLAG
     return issues.file_issue(
@@ -297,16 +299,23 @@ def _task_claims(conn) -> dict[str, list[str]]:
     return out
 
 
+_AGENDA_FIELDS = ("tier", "today", "highlight")
+
+
 def _item(issue: issues.Issue, sessions: list[dict]) -> dict:
+    # Everything the folder declared beyond the agenda's own fields is carried through
+    # verbatim under `extra`, so a tracker key, a due date, tags — whatever a user
+    # configured — is available without cabildo naming or presuming any of it.
+    extra = {k: v for k, v in issue.extra.items() if k not in _AGENDA_FIELDS}
     return {
         "slug": issue.slug,
         "title": issue.title,
         "tier": str(issue.extra.get("tier") or ""),
-        "jira": str(issue.extra.get("jira") or ""),
         "highlight": bool(issue.extra.get("highlight")),
         "today": bool(issue.extra.get("today")),
         "status": issue.status.value,
         "blocked_by": list(issue.blocked_by),
+        "extra": extra,
         "sessions": sessions,
         # cost-shaped weight of the sessions on this task (claim = flow), so a task's
         # spend is the spend of whoever is working it. Raw dollars need pricing; this
@@ -320,9 +329,9 @@ def view(conn, folder: pathlib.Path, *, since: float | None = None) -> dict:
     session-derived signals (live_wip, drift, fragmentation, gaps, to_track). Tasks
     carry their matched sessions from the bus, each with the recent token/cost usage
     of that session (claim = flow, so cost lands on the task). With no bus, the
-    structure still comes back with empty session lists. Jira *status* is not fetched
-    here — the returned `jira` is the key string only; the skill composes live status
-    via ops-mcp.
+    structure still comes back with empty session lists. Any tracker key or other
+    extra data a task carries is returned under its `extra`; cabildo does not fetch or
+    interpret it — a caller that wants live tracker status composes it itself.
     """
     cfg = config(folder)
     all_issues, _ = issues.load_all(folder, cfg)
@@ -346,7 +355,6 @@ def view(conn, folder: pathlib.Path, *, since: float | None = None) -> dict:
 
     live_wip = sum(1 for s in by_slug_sessions.values() if any(x["running"] for x in s))
     gaps = [slug for slug in today_slugs if not by_slug_sessions.get(slug)]
-    to_track = [i.slug for i in open_issues if not i.extra.get("jira")]
 
     fragmentation: list[dict] = []
     drift: list[dict] = []
@@ -373,7 +381,6 @@ def view(conn, folder: pathlib.Path, *, since: float | None = None) -> dict:
             "drift": drift,
             "fragmentation": fragmentation,
             "gaps": gaps,
-            "to_track": to_track,
         },
         "counts": {
             "open": len(open_issues),
@@ -389,9 +396,6 @@ def view(conn, folder: pathlib.Path, *, since: float | None = None) -> dict:
 # --------------------------------------------------------------------------- #
 _SECTION_RE = re.compile(r"^##\s+(.+?)\s*$")
 _ITEM_RE = re.compile(r"^- \[([ xX~])\]\s*(.*)$")
-#: A tracker key such as ABC-123. Generic on purpose; captured into the `jira`
-#: field so the source text stays readable.
-_TICKET_RE = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 _MARK_STATUS = {
     " ": issues.Status.OPEN,
     "x": issues.Status.DONE,
@@ -407,7 +411,6 @@ class RoadmapTask:
     status: issues.Status
     today: bool
     highlight: bool
-    jira: str
     body: str
 
 
@@ -415,8 +418,8 @@ def parse_roadmap(text: str) -> tuple[list[RoadmapTask], list[str]]:
     """Parse a flat agenda file into tasks. Top-level ``- [ ]`` / ``- [x]`` / ``- [~]``
     items become tasks (open / done / in-progress); the enclosing ``## TIER`` heading
     is the tier (a ``## DONE`` heading carries no tier, only the done status); indented
-    lines are the body; ``@today`` / ``@highlight`` are flags; the first tracker key on
-    the line is the jira field. Returns (tasks, warnings). The highlight is made
+    lines are the body; ``@today`` / ``@highlight`` are flags. Any tracker key stays in
+    the title text as written. Returns (tasks, warnings). The highlight is made
     exclusive here, so importing a file with several keeps only the first.
     """
     tasks: list[RoadmapTask] = []
@@ -448,14 +451,12 @@ def parse_roadmap(text: str) -> tuple[list[RoadmapTask], list[str]]:
             highlight = "@highlight" in rest
             rest = rest.replace("@today", "").replace("@highlight", "")
             rest = re.sub(r"\s{2,}", " ", rest).strip()
-            ticket = _TICKET_RE.search(rest)
             current = RoadmapTask(
                 title=rest,
                 tier=tier,
                 status=_MARK_STATUS[item.group(1)],
                 today=today,
                 highlight=highlight,
-                jira=ticket.group(0) if ticket else "",
                 body="",
             )
             continue
@@ -502,8 +503,6 @@ def import_tasks(
             extra["today"] = FLAG
         if task.highlight:
             extra["highlight"] = FLAG
-        if task.jira:
-            extra["jira"] = task.jira
         slug = _unique_slug(folder, issues.slugify(task.title), taken)
         taken.add(slug)
         issue = issues.Issue(

@@ -388,14 +388,15 @@ def agenda_add(
     tier: str,
     body: str = "",
     area: str = "general",
-    jira: str = "",
     today: bool = False,
     blocked_by: tuple[str, ...] = (),
+    fields: dict[str, str | list[str]] = {},
     scope: str = "project",
 ) -> str:
     """Add a task. `tier` is one of NOW, NEXT, LATER, CLEANUP, CANDIDATES; `body` is its
-    description. `jira` is an optional tracker key; `blocked_by` names task slugs that must
-    close first. `today=True` flags it for today.
+    description; `blocked_by` names task slugs that must close first; `today=True` flags
+    it for today. `fields` is any extra data your agenda's config declares (a tracker
+    key, a due date, tags …) — cabildo carries it, it does not presume any of it.
     """
     try:
         folder = _agenda_folder(scope)
@@ -405,9 +406,9 @@ def agenda_add(
             tier=tier,
             area=area,
             body=body,
-            jira=jira,
             today=today,
             blocked_by=blocked_by,
+            fields=_fields(fields),
         )
     except (ValueError, issues.IssueFormatError) as exc:
         return f"not added: {exc}"
@@ -490,12 +491,13 @@ def agenda_claim(
 @mcp.tool(structured_output=False)
 def agenda_view(scope: str = "project") -> str:
     """The full agenda as structured JSON for a skill to render: Today, the tier
-    Roadmap, and session signals (live_wip, drift, fragmentation, gaps, to_track).
+    Roadmap, and session signals (live_wip, drift, fragmentation, gaps).
 
     Each task carries its matched sessions — the ones holding its `issue:<slug>` bus
     lease, so which session is on which task is ground truth (claim = flow), not a
-    keyword guess. `jira` is the key string only; the caller composes live Jira
-    status and any tracker-based suggestions itself (no Atlassian access here).
+    keyword guess — plus each session's recent token/cost usage. Any tracker key or
+    other extra data a task carries is under its `extra`; cabildo does not interpret
+    it, a caller that wants live tracker status composes that itself.
     """
     try:
         folder = _agenda_folder(scope)
