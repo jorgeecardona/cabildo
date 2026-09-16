@@ -104,3 +104,37 @@ def test_project_dir_stops_at_the_git_root(tmp_path):
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     assert agenda.project_dir(repo) is None
+
+
+# --------------------------------------------------------------------------- #
+# The agenda MCP tools — thin verbs over the store, isolated from the bus
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def agenda_tools(tmp_path, monkeypatch):
+    from cabildo import issues_mcp
+
+    monkeypatch.setenv("CABILDO_AGENDA_DIR", str(tmp_path / "home-agenda"))
+    monkeypatch.setattr(issues_mcp, "_identity", lambda: (None, None))  # no bus in these tests
+    return issues_mcp
+
+
+def test_agenda_tools_add_board_done_roundtrip(agenda_tools):
+    assert agenda_tools.agenda_add("Ship it", "NOW", scope="global").startswith("added")
+    board = agenda_tools.agenda_board(scope="global")
+    assert "Ship it" in board and "NOW" in board
+    assert agenda_tools.agenda_done("ship-it", scope="global").startswith("done")
+    assert "1 done" in agenda_tools.agenda_board(scope="global")
+
+
+def test_agenda_tools_reject_a_bad_tier(agenda_tools):
+    assert "not added" in agenda_tools.agenda_add("x", "SOMEDAY", scope="global")
+
+
+def test_agenda_tools_today_and_exclusive_highlight(agenda_tools):
+    agenda_tools.agenda_add("First", "NOW", scope="global")
+    agenda_tools.agenda_add("Second", "NEXT", scope="global")
+    assert agenda_tools.agenda_today("first", scope="global").startswith("today")
+    agenda_tools.agenda_highlight("first", scope="global")
+    agenda_tools.agenda_highlight("second", scope="global")  # moves the single highlight
+    board = agenda_tools.agenda_board(scope="global")
+    assert board.count("★") == 1

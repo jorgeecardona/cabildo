@@ -28,7 +28,7 @@ import pathlib
 
 from mcp.server.fastmcp import FastMCP
 
-from . import issues
+from . import agenda, issues
 
 mcp = FastMCP("issues")
 
@@ -319,6 +319,168 @@ def check_issues() -> str:
         found, _ = issues.load_all(folder)
         return f"{folder}: clean ({len(found)} follow-ups)"
     return "\n".join(str(p) for p in problems) + f"\n\n{len(problems)} problem(s)"
+
+
+# --------------------------------------------------------------------------- #
+# Agenda — the same store with the agenda preset, ranked by tier
+#
+# An agenda is an issues register (see cabildo.agenda) living either in this repo
+# (`scope="project"` -> docs/agenda/) or home-wide (`scope="global"`). The tools
+# below are the personal-workflow verbs; everything under them is the issues store.
+# --------------------------------------------------------------------------- #
+def _agenda_folder(scope: str) -> pathlib.Path:
+    return agenda.resolve_dir(scope, create=True)
+
+
+def _agenda_line(issue: issues.Issue) -> str:
+    bits: list[str] = []
+    if issue.extra.get("tier"):
+        bits.append(str(issue.extra["tier"]))
+    if issue.extra.get("today"):
+        bits.append("@today")
+    if issue.extra.get("highlight"):
+        bits.append("★")
+    if issue.extra.get("jira"):
+        bits.append(str(issue.extra["jira"]))
+    if issue.owner:
+        bits.append(f"@{issue.owner}")
+    bits.append(issue.status.value)
+    return f"  {issue.slug}\n    {issue.title}\n    {' · '.join(bits)}"
+
+
+@mcp.tool(structured_output=False)
+def agenda_board(scope: str = "project", limit: int = 15) -> str:
+    """**Your agenda** — tasks ranked NOW→CANDIDATES, with what is ready, yours, and waiting.
+
+    `scope="project"` reads this repo's docs/agenda/; `scope="global"` reads the one home-wide
+    agenda. Ready = nothing blocks it and nobody owns it; Waiting says what each is stuck behind.
+    """
+    try:
+        folder = _agenda_folder(scope)
+    except ValueError as exc:
+        return str(exc)
+    handle, _ = _identity()
+    b = agenda.board(folder, owner=handle)
+    lines: list[str] = []
+    if b.ready:
+        lines.append(f"READY ({len(b.ready)}):")
+        lines += [_agenda_line(i) for i in b.ready[:limit]]
+        if len(b.ready) > limit:
+            lines.append(f"  … and {len(b.ready) - limit} more")
+    else:
+        lines.append("READY — nothing unblocked and unowned.")
+    if b.mine:
+        lines.append(f"\nYOURS ({len(b.mine)}):")
+        lines += [_agenda_line(i) for i in b.mine]
+    if b.waiting:
+        lines.append(f"\nWAITING ({len(b.waiting)}):")
+        lines += [f"  {w.issue.slug} — {w.reason}" for w in b.waiting[:limit]]
+    if b.done:
+        lines.append(f"\n{b.done} done.")
+    return "\n".join(lines)
+
+
+@mcp.tool(structured_output=False)
+def agenda_add(
+    title: str,
+    tier: str,
+    body: str = "",
+    area: str = "general",
+    jira: str = "",
+    today: bool = False,
+    blocked_by: tuple[str, ...] = (),
+    scope: str = "project",
+) -> str:
+    """Add a task. `tier` is one of NOW, NEXT, LATER, CLEANUP, CANDIDATES; `body` is its
+    description. `jira` is an optional tracker key; `blocked_by` names task slugs that must
+    close first. `today=True` flags it for today.
+    """
+    try:
+        folder = _agenda_folder(scope)
+        path = agenda.add(
+            folder,
+            title=title,
+            tier=tier,
+            area=area,
+            body=body,
+            jira=jira,
+            today=today,
+            blocked_by=blocked_by,
+        )
+    except (ValueError, issues.IssueFormatError) as exc:
+        return f"not added: {exc}"
+    return f"added {path.name}"
+
+
+@mcp.tool(structured_output=False)
+def agenda_today(name: str, on: bool = True, scope: str = "project") -> str:
+    """Flag a task for today (`on=False` clears it). `name` is any unambiguous part of its slug."""
+    try:
+        folder = _agenda_folder(scope)
+        updated = agenda.set_flag(folder, name, "today", on)
+    except (ValueError, issues.IssueFormatError) as exc:
+        return f"no change: {exc}"
+    return f"{'today' if on else 'cleared'}: {updated.path.name}"
+
+
+@mcp.tool(structured_output=False)
+def agenda_highlight(name: str, scope: str = "project") -> str:
+    """Make one task the single highlight (the focus), clearing any other. Exclusive by design."""
+    try:
+        folder = _agenda_folder(scope)
+        updated = agenda.set_highlight(folder, name)
+    except (ValueError, issues.IssueFormatError) as exc:
+        return f"no change: {exc}"
+    return f"highlight: {updated.path.name}"
+
+
+@mcp.tool(structured_output=False)
+def agenda_done(name: str, scope: str = "project") -> str:
+    """Mark a task done. No sha needed — an agenda task is not a commit."""
+    try:
+        folder = _agenda_folder(scope)
+        updated = agenda.mark_done(folder, name)
+    except (ValueError, issues.IssueFormatError) as exc:
+        return f"no change: {exc}"
+    return f"done: {updated.path.name}"
+
+
+@mcp.tool(structured_output=False)
+def agenda_show(name: str, scope: str = "project") -> str:
+    """One task in full — its front matter and description body."""
+    try:
+        folder = _agenda_folder(scope)
+        path = issues.resolve(folder, name)
+    except (ValueError, issues.IssueFormatError) as exc:
+        return str(exc)
+    text = path.read_text()
+    if len(text) <= SHOW_LIMIT:
+        return text
+    footer = f"\n\n… truncated at {SHOW_LIMIT} of {len(text)} chars. Read {path} for the rest."
+    return text[: max(0, SHOW_LIMIT - len(footer))] + footer
+
+
+@mcp.tool(structured_output=False)
+def agenda_claim(name: str, release: bool = False, force: bool = False, scope: str = "project") -> str:
+    """Take a task: writes you as owner, moves it to in-progress, and takes an `issue:<slug>` bus
+    lease so another of your agents cannot start the same one. `release=True` hands it back.
+    """
+    try:
+        folder = _agenda_folder(scope)
+    except ValueError as exc:
+        return str(exc)
+    if release:
+        updated = issues.release(folder, name)
+        _lease(updated.slug, take=False)
+        return f"released {updated.path.name}"
+    handle, _ = _identity()
+    if not handle:
+        return "cannot tell who you are — the bus is not reachable. Set owner via agenda tools once it is."
+    try:
+        updated = issues.claim(folder, name, owner=handle, force=force)
+    except issues.IssueFormatError as exc:
+        return f"not claimed: {exc}"
+    return f"claimed {updated.path.name} as @{handle}" + _lease(updated.slug, take=True)
 
 
 # --------------------------------------------------------------------------- #
