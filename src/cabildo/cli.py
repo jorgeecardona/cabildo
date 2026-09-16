@@ -1158,6 +1158,27 @@ def cmd_standup(args) -> int:
     return 0
 
 
+def cmd_minutes(args) -> int:
+    """The day's conversation minutas for a project, distilled from its transcripts."""
+    import datetime as _dt
+
+    from . import minutes
+    from .context import git_project
+
+    root, name = git_project(os.getcwd())
+    project_name = args.project or name
+    day = args.date or _dt.date.today().isoformat()
+    text = minutes.render_project_day(project_name, root, day)
+    if args.write:
+        out = minutes._day_file(project_name, day)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text if text.endswith("\n") else text + "\n")
+        print(f"{C.GREEN}wrote{C.OFF} {out}")
+    else:
+        print(text)
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # The project register
 # --------------------------------------------------------------------------- #
@@ -1744,6 +1765,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     su.add_argument("--hours", type=float, default=24.0, help="lookback window (default: 24)")
     su.set_defaults(fn=cmd_standup)
+
+    mn = sub.add_parser(
+        "minutes", help="the day's conversation minutas for a project (from transcripts)"
+    )
+    mn.add_argument("-p", "--project", help="project name (default: this repo)")
+    mn.add_argument("--date", help="YYYY-MM-DD (default: today)")
+    mn.add_argument(
+        "--write",
+        action="store_true",
+        help="write to <cabildo home>/minutes/<project>/<date>.md instead of printing",
+    )
+    mn.set_defaults(fn=cmd_minutes)
 
     iss = sub.add_parser(
         "issues", help="this project's docs/issues register: what's ready, what's blocked"

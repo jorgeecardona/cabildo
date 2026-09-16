@@ -26,6 +26,14 @@ def main() -> None:
             handoff.on_session_end(conn, session_id)  # note tasks left mid-flight
         except Exception:
             pass  # a handoff must never keep a session from ending cleanly
+        try:
+            from cabildo import minutes
+
+            me = store.get_session(conn, session_id)
+            if me:
+                minutes.write_session(session_id, me["project"], me["project_name"])
+        except Exception:
+            pass  # minutas are best-effort; never block a session ending
         store.end_session(conn, session_id)
     finally:
         conn.close()
