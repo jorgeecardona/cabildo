@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from cabildo.tui import InputHistory, parse, resolve_topic
+from cabildo.tui import InputHistory, agenda_rows, parse, resolve_topic
 
 
 @pytest.mark.parametrize("line", ["/q", "/quit", "/exit"])
@@ -135,3 +135,31 @@ def test_recording_resets_browsing_position():
     assert h.up("") == "b"  # browsing
     h.record("c")  # submitting a new line returns to live composing
     assert h.up("") == "c"  # next up starts from the newest again
+
+
+# --------------------------------------------------------------------------- #
+# The agenda view in `cabildo watch`
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("line", ["/agenda", "/a"])
+def test_agenda_command_is_recognised(line):
+    assert parse(line) == ("agenda", {})
+
+
+def test_agenda_toggle_does_not_swallow_ordinary_speech():
+    # "/agendas of the meeting" is a message, not the command.
+    assert parse("/agendas of the meeting")[0] == "send"
+
+
+def test_agenda_rows_render_tiers_titles_and_markers(tmp_path):
+    from cabildo import agenda
+
+    folder = agenda.ensure(tmp_path / "ag")
+    agenda.add(folder, title="Do the thing", tier="NOW", today=True)
+    agenda.add(folder, title="Later item", tier="LATER")
+    agenda.set_highlight(folder, "do-the-thing")
+    rows = agenda_rows(agenda.board(folder))
+    text = "\n".join("".join(seg[0] for seg in row) for row in rows)
+    assert "READY" in text
+    assert "NOW" in text and "Do the thing" in text
+    assert "★" in text  # the exclusive highlight marker
+    assert "•" in text  # the @today marker
