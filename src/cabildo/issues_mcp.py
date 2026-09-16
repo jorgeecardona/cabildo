@@ -24,6 +24,7 @@ Neither is required. A repo with no cabildo DB gets the register and loses only 
 
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 
@@ -484,6 +485,30 @@ def agenda_claim(
     except issues.IssueFormatError as exc:
         return f"not claimed: {exc}"
     return f"claimed {updated.path.name} as @{handle}" + _lease(updated.slug, take=True)
+
+
+@mcp.tool(structured_output=False)
+def agenda_view(scope: str = "project") -> str:
+    """The full agenda as structured JSON for a skill to render: Today, the tier
+    Roadmap, and session signals (live_wip, drift, fragmentation, gaps, to_track).
+
+    Each task carries its matched sessions — the ones holding its `issue:<slug>` bus
+    lease, so which session is on which task is ground truth (claim = flow), not a
+    keyword guess. `jira` is the key string only; the caller composes live Jira
+    status and any tracker-based suggestions itself (no Atlassian access here).
+    """
+    try:
+        folder = _agenda_folder(scope)
+    except ValueError as exc:
+        return str(exc)
+    try:
+        from . import store
+
+        with store.connect() as conn:
+            data = agenda.view(conn, folder)
+    except Exception:
+        data = agenda.view(None, folder)  # no bus: structure without session matching
+    return json.dumps(data, indent=2)
 
 
 # --------------------------------------------------------------------------- #

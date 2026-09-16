@@ -198,3 +198,72 @@ def test_import_tasks_avoids_filename_collisions(tmp_path):
     agenda.import_tasks(folder, agenda.parse_roadmap(dup)[0])
     files = [p.name for p in folder.glob("*.md")]
     assert len(files) == 2 and len(set(files)) == 2  # two distinct filenames
+
+
+# --------------------------------------------------------------------------- #
+# The view: claim = flow. A task's sessions are who holds its issue:<slug> lease.
+# --------------------------------------------------------------------------- #
+def _claim(conn, sid, slug):
+    from cabildo import store
+
+    store.acquire_claim(
+        conn,
+        resource=f"issue:{slug}",
+        holder_session=sid,
+        holder_handle=None,
+        project=None,
+        ttl_seconds=600,
+        note=None,
+    )
+
+
+def test_view_matches_sessions_gaps_fragmentation_and_to_track(conn, tmp_path):
+    from tests.conftest import make_session
+
+    folder = agenda.ensure(tmp_path / "ag")
+    agenda.add(folder, title="Do today", tier="NOW", today=True, jira="ABC-1")
+    agenda.add(folder, title="Also today", tier="NEXT", today=True)  # no jira, no session
+    agenda.add(folder, title="Someday", tier="LATER")
+    make_session(conn, "sa", handle="alice")
+    _claim(conn, "sa", "do-today")
+    _claim(conn, "sa", "someday")  # one session across two tasks -> fragmentation
+
+    v = agenda.view(conn, folder)
+    assert {t["title"] for t in v["today"]} == {"Do today", "Also today"}
+    do = next(t for t in v["today"] if t["slug"] == "do-today")
+    assert [s["session"] for s in do["sessions"]] == ["@alice"]  # the exclusive holder
+    assert do["sessions"][0]["running"]  # freshly seen => warm
+    assert do["jira"] == "ABC-1"
+    sig = v["signals"]
+    assert sig["live_wip"] == 2  # two tasks have a warm holder
+    frag = next(f for f in sig["fragmentation"] if f["session"] == "@alice")
+    assert set(frag["slugs"]) == {"do-today", "someday"}  # @alice spread across both
+    assert "also-today" in sig["gaps"]  # a today task nobody is on
+    assert "also-today" in sig["to_track"]  # a today task with no jira key
+    assert "someday" in sig["to_track"]
+
+
+def test_view_drift_is_a_warm_session_off_a_today_task(conn, tmp_path):
+    from tests.conftest import make_session
+
+    folder = agenda.ensure(tmp_path / "ag")
+    agenda.add(folder, title="Do today", tier="NOW", today=True)
+    agenda.add(folder, title="Side quest", tier="NEXT")
+    make_session(conn, "on", handle="onit")
+    make_session(conn, "off", handle="drifter")
+    _claim(conn, "on", "do-today")  # on a today task -> not drift
+    _claim(conn, "off", "side-quest")  # warm, but off today -> drift
+
+    drift = agenda.view(conn, folder)["signals"]["drift"]
+    who = {d["session"]: d["on"] for d in drift}
+    assert who.get("@drifter") == ["side-quest"]  # held tasks, none of them a today task
+    assert "@onit" not in who  # on a today task -> not drift
+
+
+def test_view_without_a_bus_still_returns_the_structure(tmp_path):
+    folder = agenda.ensure(tmp_path / "ag")
+    agenda.add(folder, title="A task", tier="NOW", today=True)
+    v = agenda.view(None, folder)
+    assert v["today"][0]["sessions"] == []
+    assert v["signals"]["drift"] == []
+    assert v["counts"]["open"] == 1

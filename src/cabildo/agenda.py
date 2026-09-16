@@ -219,6 +219,141 @@ def check(folder: pathlib.Path) -> list[issues.Problem]:
 
 
 # --------------------------------------------------------------------------- #
+# The view — the agenda plus which live sessions are on which task (claim = flow)
+# --------------------------------------------------------------------------- #
+# Replaces flows-mcp's keyword flow-matching with ground truth: a task's sessions
+# are exactly the ones holding its `issue:<slug>` bus lease. Warmth comes from how
+# recently the session was seen, not from guessing.
+WARM_WINDOW = 120.0  # seen this recently => warm/running
+
+
+def _session_state(age: float) -> str:
+    if age < WARM_WINDOW:
+        return "warm"
+    if age < store.ACTIVE_WINDOW:
+        return "idle"
+    return "cold"
+
+
+def matched_sessions(conn, slug: str) -> list[dict]:
+    """The sessions holding this task's `issue:<slug>` lease, each with how long ago
+    it was seen and whether it is warm/idle/cold. [] when the bus is absent.
+    """
+    if conn is None:
+        return []
+    now = store._now()
+    out: list[dict] = []
+    for row in conn.execute(
+        "SELECT * FROM claims WHERE resource=? AND expires_at>? ORDER BY acquired_at",
+        (f"issue:{slug}", now),
+    ):
+        sess = store.get_session(conn, row["holder_session"])
+        if sess is None:
+            continue
+        age = now - sess["last_seen_at"]
+        state = _session_state(age)
+        out.append(
+            {
+                "session": store.display_name(sess, row["holder_session"]),
+                "session_id": row["holder_session"],
+                "last_active_s": round(age, 1),
+                "running": state == "warm",
+                "state": state,
+            }
+        )
+    return out
+
+
+def _task_claims(conn) -> dict[str, list[str]]:
+    """{session_id: [slug, ...]} of the task leases each session currently holds. A
+    task lease is exclusive (one holder), so the interesting split is the other way:
+    one session holding several tasks at once.
+    """
+    now = store._now()
+    out: dict[str, list[str]] = {}
+    for row in conn.execute(
+        "SELECT holder_session, resource FROM claims WHERE resource LIKE 'issue:%' AND expires_at>? "
+        "ORDER BY acquired_at",
+        (now,),
+    ):
+        out.setdefault(row["holder_session"], []).append(row["resource"][len("issue:") :])
+    return out
+
+
+def _item(issue: issues.Issue, sessions: list[dict]) -> dict:
+    return {
+        "slug": issue.slug,
+        "title": issue.title,
+        "tier": str(issue.extra.get("tier") or ""),
+        "jira": str(issue.extra.get("jira") or ""),
+        "highlight": bool(issue.extra.get("highlight")),
+        "today": bool(issue.extra.get("today")),
+        "status": issue.status.value,
+        "blocked_by": list(issue.blocked_by),
+        "sessions": sessions,
+    }
+
+
+def view(conn, folder: pathlib.Path) -> dict:
+    """The structured agenda for a skill to render: Today, the tier Roadmap, and the
+    session-derived signals (live_wip, drift, fragmentation, gaps, to_track). Tasks
+    carry their matched sessions from the bus; with no bus, the structure still comes
+    back with empty session lists. Jira *status* is not fetched here — the returned
+    `jira` is the key string only; the skill composes live status via ops-mcp.
+    """
+    cfg = config(folder)
+    all_issues, _ = issues.load_all(folder, cfg)
+    open_issues = [i for i in all_issues if i.open]
+    by_slug_sessions = {i.slug: matched_sessions(conn, i.slug) for i in open_issues}
+    items = {i.slug: _item(i, by_slug_sessions[i.slug]) for i in open_issues}
+
+    today = [items[i.slug] for i in open_issues if i.extra.get("today")]
+    today_slugs = {i.slug for i in open_issues if i.extra.get("today")}
+    roadmap = {
+        tier: [items[i.slug] for i in open_issues if str(i.extra.get("tier")) == tier]
+        for tier in TIERS
+    }
+
+    live_wip = sum(1 for s in by_slug_sessions.values() if any(x["running"] for x in s))
+    gaps = [slug for slug in today_slugs if not by_slug_sessions.get(slug)]
+    to_track = [i.slug for i in open_issues if not i.extra.get("jira")]
+
+    fragmentation: list[dict] = []
+    drift: list[dict] = []
+    if conn is not None:
+        claims_by_session = _task_claims(conn)
+        fragmentation = [
+            {"session": store.display_name(store.get_session(conn, sid), sid), "slugs": slugs}
+            for sid, slugs in claims_by_session.items()
+            if len(slugs) >= 2
+        ]
+        now = store._now()
+        for sess in store.active_sessions(conn):
+            if now - sess["last_seen_at"] >= WARM_WINDOW:
+                continue  # only warm sessions count as drift
+            held = claims_by_session.get(sess["session_id"], [])
+            if not any(slug in today_slugs for slug in held):
+                drift.append({"session": store.display_name(sess), "on": held or None})
+
+    return {
+        "today": today,
+        "roadmap": roadmap,
+        "signals": {
+            "live_wip": live_wip,
+            "drift": drift,
+            "fragmentation": fragmentation,
+            "gaps": gaps,
+            "to_track": to_track,
+        },
+        "counts": {
+            "open": len(open_issues),
+            "today": len(today),
+            "done": sum(1 for i in all_issues if not i.open),
+        },
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Importing a flat roadmap.md (a checklist under `## TIER` headings) into files
 # --------------------------------------------------------------------------- #
 _SECTION_RE = re.compile(r"^##\s+(.+?)\s*$")
