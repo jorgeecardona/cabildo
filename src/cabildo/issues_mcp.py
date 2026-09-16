@@ -523,10 +523,5 @@ try:
 except Exception:  # private attribute: if a FastMCP bump moves it we just ship fatter schemas
     pass
 
-
-def main() -> None:
-    mcp.run()
-
-
-if __name__ == "__main__":
-    main()
+# No `main()`: these tools are not a standalone server. `cabildo.mcp_server`
+# adopts them into the single `cabildo` server; this module only defines them.

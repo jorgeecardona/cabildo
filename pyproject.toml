@@ -1,6 +1,6 @@
 [project]
 name = "cabildo"
-version = "0.1.27"
+version = "0.1.28"
 description = "IPC bus + chat room for coordinating parallel Claude Code agents: messaging, presence, and advisory locks with hook-level enforcement"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -49,7 +49,6 @@ Documentation = "https://jorgeecardona.gitlab.io/cabildo/"
 [project.scripts]
 cabildo = "cabildo.cli:main"
 cabildo-mcp = "cabildo.mcp_server:main"
-cabildo-issues-mcp = "cabildo.issues_mcp:main"
 cabildo-hook = "cabildo.hooks.cli:main"
 cabildo-codex-hook = "cabildo.codex_hooks:main"
 
