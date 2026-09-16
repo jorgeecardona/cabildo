@@ -513,6 +513,26 @@ def agenda_view(scope: str = "project") -> str:
     return json.dumps(data, indent=2)
 
 
+@mcp.tool(structured_output=False)
+def agenda_handoff(name: str, next_step: str, scope: str = "project") -> str:
+    """Leave a handoff note on a task: what state it's in and the next step, so the
+    next agent (or you) resumes cold. Appends to the task's body under a dated
+    Handoff heading. Do this before you stop on a task you did not finish.
+    """
+    from . import handoff
+
+    try:
+        folder = _agenda_folder(scope)
+    except ValueError as exc:
+        return str(exc)
+    handle, _ = _identity()
+    try:
+        updated = handoff.append(folder, name, next_step, who=handle or "someone")
+    except issues.IssueFormatError as exc:
+        return f"no handoff: {exc}"
+    return f"handoff noted on {updated.path.name}"
+
+
 # --------------------------------------------------------------------------- #
 # Schema slimming — the tool list is the part every session pays for, always
 # --------------------------------------------------------------------------- #

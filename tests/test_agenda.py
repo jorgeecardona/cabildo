@@ -285,3 +285,11 @@ def test_view_attaches_cost_from_usage_to_the_claimed_task(conn, tmp_path, monke
     assert do["cost_weighted"] == 12.5  # the session's cost lands on its task
     assert do["sessions"][0]["tokens_in"] == 100
     assert v["counts"]["cost_weighted_today"] == 12.5
+
+
+def test_agenda_handoff_tool_appends_a_note(agenda_tools):
+    agenda_tools.agenda_add("A task", "NOW", scope="global")
+    out = agenda_tools.agenda_handoff("a-task", "resume at the parser", scope="global")
+    assert "handoff noted" in out
+    shown = agenda_tools.agenda_show("a-task", scope="global")
+    assert "resume at the parser" in shown and "## Handoff" in shown
