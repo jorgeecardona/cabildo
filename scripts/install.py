@@ -8,11 +8,16 @@
   * for the **Codex** client: delegates to `cabildo codex`, which registers the
     MCP server with Codex (`codex mcp add`, or prints the config block if codex
     is not on PATH) and merges cabildo's hooks into ~/.codex/hooks.json.
+  * for the **opencode** client: delegates to `cabildo opencode`, which registers
+    the MCP server in opencode's JSON config (tagged opencode) and installs the
+    /agenda + /sanity commands. opencode has no cabildo hook adapter yet, so it
+    gets messaging, presence and advisory claims, not hook-enforced leases.
 
-Choose clients with `--client {claude,codex,both}` (default: claude, which
-preserves the historical behavior). Idempotent: re-running won't duplicate hooks
-or the MCP entry. Pass `--print` to show what it would do and change nothing —
-no venv, no package install, no data migration, no registration, no hook writes.
+Choose clients with `--client {claude,codex,opencode,both,all}` (default: claude,
+which preserves the historical behavior; `both` = claude+codex, `all` = every
+client). Idempotent: re-running won't duplicate hooks or the MCP entry. Pass
+`--print` to show what it would do and change nothing — no venv, no package
+install, no data migration, no registration, no hook writes.
 """
 
 from __future__ import annotations
@@ -33,7 +38,7 @@ HOOK_BIN = VENV / "bin" / "cabildo-hook"
 CABILDO_BIN = VENV / "bin" / "cabildo"
 SETTINGS = Path.home() / ".claude" / "settings.json"
 
-CLIENTS = ("claude", "codex", "both")
+CLIENTS = ("claude", "codex", "opencode", "both", "all")
 
 # event -> (cabildo-hook arg, timeout_s, tool matcher or None). The
 # per-tool-call hooks get a tight timeout: they run on every single tool call,
@@ -181,6 +186,16 @@ def install_codex() -> None:
     sh([str(CABILDO_BIN), "codex"])
 
 
+def install_opencode() -> None:
+    """Wire the opencode client by delegating to the installed `cabildo opencode`,
+    which registers the cabildo MCP server in opencode's JSON config (tagged
+    opencode) and installs the /agenda + /sanity commands. Does not touch
+    ~/.claude/settings.json.
+    """
+    print("• wiring opencode (via `cabildo opencode`)")
+    sh([str(CABILDO_BIN), "opencode"])
+
+
 def _codex_config():
     """Import cabildo.codex_config straight from the repo source, for building
     the (non-mutating) Codex preview without needing the venv to exist yet.
@@ -225,9 +240,21 @@ def preview(clients: tuple[str, ...]) -> None:
         if "claude" not in clients:
             print("  (~/.claude/settings.json is NOT touched for --client codex)")
 
+    if "opencode" in clients:
+        from cabildo import opencode_config as oc
+
+        print(f"\n• opencode: register the MCP server in {oc.config_path()} (tagged opencode):")
+        print(_indent(oc.preview()))
+        print(f"• opencode: install /agenda + /sanity into {oc.command_dir()}")
+        print("  (no hooks: opencode gets messaging, presence and advisory claims only)")
+
 
 def _resolve_clients(client_arg: str) -> tuple[str, ...]:
-    return ("claude", "codex") if client_arg == "both" else (client_arg,)
+    if client_arg == "both":
+        return ("claude", "codex")
+    if client_arg == "all":
+        return ("claude", "codex", "opencode")
+    return (client_arg,)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -260,11 +287,14 @@ def main(argv: list[str] | None = None) -> int:
             patch_settings()
         if "codex" in clients:
             install_codex()
+        if "opencode" in clients:
+            install_opencode()
     except InstallError as e:
         print(f"\n! {e}", file=sys.stderr)
         return 1
 
-    restart = " and Codex" if "codex" in clients else ""
+    extra = [c.capitalize() for c in ("codex", "opencode") if c in clients]
+    restart = (" and " + " and ".join(extra)) if extra else ""
     print(
         f"\nDone. Restart any running Claude Code{restart} sessions so they pick up the "
         "new MCP server and hooks. New sessions will auto-join the bus."

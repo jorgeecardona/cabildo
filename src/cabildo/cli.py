@@ -1095,6 +1095,58 @@ def cmd_codex(args) -> int:
     return 0
 
 
+def cmd_opencode(args) -> int:
+    """Wire opencode onto the same bus as Claude Code and Codex. Edits opencode's
+    JSON config directly (only cabildo's own entry, tagged opencode) and installs the
+    /agenda + /sanity commands. No hooks yet: opencode gets messaging, presence and
+    advisory claims, but not hook-enforced file leases.
+    """
+    from . import opencode_config, store
+    from .context import _git_project
+
+    target = os.path.realpath(os.path.expanduser(args.path))
+    if not os.path.isdir(target):
+        print(f"{C.RED}not a directory:{C.OFF} {target}", file=sys.stderr)
+        return 2
+    _, git_name = _git_project(Path(target))
+    project = (args.project or git_name or "").strip().lower()
+    home = str(store.home())
+    cfg = opencode_config.config_path()
+
+    if args.remove:
+        p, what = opencode_config.remove()
+        print(f"{C.YELLOW}opencode{C.OFF} {C.DIM}—{C.OFF} {p} ({what}); commands removed")
+        return 0
+
+    if args.print_only:
+        print(f"{C.DIM}would write {cfg}:{C.OFF}")
+        print(opencode_config.preview(project, home))
+        cmds = ", ".join(opencode_config.COMMANDS)
+        print(f"{C.DIM}and install into {opencode_config.command_dir()}: {cmds}{C.OFF}")
+        return 0
+
+    try:
+        p, what = opencode_config.apply(project, home)
+    except (ValueError, OSError) as e:
+        print(f"{C.RED}could not write {cfg}: {e}{C.OFF}", file=sys.stderr)
+        return 1
+    color = C.DIM if what == "unchanged" else C.GREEN
+    print(f"  {color}{what}{C.OFF} {p} {C.DIM}— cabildo MCP, tagged opencode{C.OFF}")
+    print(
+        f"  {C.GREEN}installed{C.OFF} {opencode_config.command_dir()} "
+        f"{C.DIM}— /agenda, /sanity{C.OFF}"
+    )
+    print(
+        f"  {C.DIM}CABILDO_CLIENT=opencode tags this session on the bus; CABILDO_HOME pins "
+        f"the shared DB. Restart opencode to pick it up.{C.OFF}"
+    )
+    print(
+        f"  {C.DIM}no hook-enforced file leases in opencode yet — messaging, presence and "
+        f"advisory claims only.{C.OFF}"
+    )
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # The project register
 # --------------------------------------------------------------------------- #
@@ -1656,6 +1708,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     cx.add_argument("--remove", action="store_true", help="undo: drop cabildo from Codex's config")
     cx.set_defaults(fn=cmd_codex)
+
+    oc = sub.add_parser(
+        "opencode",
+        help="wire opencode onto the same bus (edits opencode.json, installs /agenda + /sanity)",
+    )
+    oc.add_argument("path", nargs="?", default=".", help="folder to derive the project name from")
+    oc.add_argument(
+        "-p", "--project", metavar="NAME", help="project name to pin (default: repo dir name)"
+    )
+    oc.add_argument(
+        "--print",
+        dest="print_only",
+        action="store_true",
+        help="show what would be done, change nothing",
+    )
+    oc.add_argument(
+        "--remove", action="store_true", help="undo: drop cabildo from opencode's config + commands"
+    )
+    oc.set_defaults(fn=cmd_opencode)
 
     iss = sub.add_parser(
         "issues", help="this project's docs/issues register: what's ready, what's blocked"
