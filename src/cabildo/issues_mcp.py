@@ -1,13 +1,14 @@
-"""The `issues` MCP server (stdio) — this project's follow-up register, as tools.
+"""The issues/agenda tools — this project's follow-up register and the work agenda, as tools.
 
-A second server alongside `cabildo-mcp`, and deliberately narrower: the bus server is about other
-agents, this one is about this repo's work. It is wired per-folder in the same `.mcp.json` that
-`cabildo add` already writes, so a session opened in a registered project gets both without anyone
-configuring anything. Like the bus server it is a plain stdio subprocess — one per session, no
-daemon, no port, nothing to keep alive.
+An internal module, not a separate server: `cabildo.mcp_server` adopts these tools into the single
+`cabildo` server (see `_merge_issue_tools`), so a session sees one server with the bus tools and
+these together. Kept a separate module on purpose — it is about this repo's (and the agenda's) work,
+not other agents — and it must run with no bus DB present, so the bus is imported lazily and every
+borrow from it degrades to a no-op.
 
-It is a thin wrapper over `cabildo.issues`, which is also what `cabildo issues check` runs. Same
-module both ways, so the tool an agent calls and the gate that grades it cannot disagree.
+It is a thin wrapper over `cabildo.issues` and `cabildo.agenda`, which is also what `cabildo issues
+check` runs. Same module both ways, so the tool an agent calls and the gate that grades it cannot
+disagree.
 
 **The files stay the store.** Every tool here reads and writes markdown in the repo. If this server
 is down, `git` and an editor still work and nothing is lost.
@@ -461,7 +462,9 @@ def agenda_show(name: str, scope: str = "project") -> str:
 
 
 @mcp.tool(structured_output=False)
-def agenda_claim(name: str, release: bool = False, force: bool = False, scope: str = "project") -> str:
+def agenda_claim(
+    name: str, release: bool = False, force: bool = False, scope: str = "project"
+) -> str:
     """Take a task: writes you as owner, moves it to in-progress, and takes an `issue:<slug>` bus
     lease so another of your agents cannot start the same one. `release=True` hands it back.
     """

@@ -810,21 +810,33 @@ def test_issues_dir_env_var_wins(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 # Wiring
 # --------------------------------------------------------------------------- #
-def test_mcp_json_wires_issues_only_where_there_is_a_register(tmp_path):
-    bare = tmp_path / "bare"
-    bare.mkdir()
-    mcp_config.apply(bare, "bare")
-    servers = mcp_config.load(bare)["mcpServers"]
-    assert set(servers) == {"cabildo"}
+def test_mcp_json_writes_one_cabildo_server(tmp_path):
+    # One server carries the bus and the issues/agenda tools together, whether or
+    # not this folder has a register — the tools load either way.
+    for name in ("bare", "withreg"):
+        root = tmp_path / name
+        root.mkdir()
+        if name == "withreg":
+            (root / "docs" / "issues").mkdir(parents=True)
+        mcp_config.apply(root, name)
+        servers = mcp_config.load(root)["mcpServers"]
+        assert set(servers) == {"cabildo"}
+        assert servers["cabildo"]["env"]["CABILDO_PROJECT"] == name
 
-    withreg = tmp_path / "withreg"
-    (withreg / "docs" / "issues").mkdir(parents=True)
-    mcp_config.apply(withreg, "withreg")
-    servers = mcp_config.load(withreg)["mcpServers"]
-    assert set(servers) == {"cabildo", "issues"}
-    # The bus server carries the project pin; the register reads the folder it runs in.
-    assert servers["cabildo"]["env"]["CABILDO_PROJECT"] == "withreg"
-    assert "env" not in servers["issues"]
+
+def test_apply_migrates_away_a_stale_issues_entry(tmp_path):
+    # An old .mcp.json wrote a separate `issues` server; re-running removes it and
+    # leaves unrelated servers alone.
+    root = tmp_path / "r"
+    root.mkdir()
+    mcp_config.config_path(root).write_text(
+        '{"mcpServers": {"cabildo": {"command": "old"}, '
+        '"issues": {"command": "old-issues"}, "theirs": {"command": "x"}}}'
+    )
+    _, what = mcp_config.apply(root, "r")
+    assert what == "updated"
+    servers = mcp_config.load(root)["mcpServers"]
+    assert set(servers) == {"cabildo", "theirs"}  # issues retired, theirs untouched
 
 
 def test_the_written_command_is_one_the_consumer_can_actually_run(tmp_path, monkeypatch):
@@ -835,13 +847,13 @@ def test_the_written_command_is_one_the_consumer_can_actually_run(tmp_path, monk
     dies with "Executable not found in $PATH" — a failure that surfaces nowhere near its cause.
     """
     monkeypatch.setattr(mcp_config, "_on_login_path", lambda script: False)
-    entry = mcp_config.issues_entry()
+    entry = mcp_config.server_entry()
     assert pathlib.Path(entry["command"]).is_absolute(), (
         "a name the consumer cannot resolve must never be written"
     )
 
     monkeypatch.setattr(mcp_config, "_on_login_path", lambda script: True)
-    assert mcp_config.issues_entry()["command"] == "cabildo-issues-mcp"
+    assert mcp_config.server_entry()["command"] == "cabildo-mcp"
 
 
 def test_apply_is_idempotent_and_remove_leaves_other_servers_alone(tmp_path):

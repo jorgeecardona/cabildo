@@ -988,14 +988,12 @@ def cmd_add(args) -> int:
         except (ValueError, OSError) as e:
             print(f"  {C.RED}could not write .mcp.json: {e}{C.OFF}", file=sys.stderr)
             return 1
-        wired = ["cabildo " + C.DIM + "(the bus)" + C.OFF]
-        if mcp_config.has_issues(root):
-            wired.append("issues " + C.DIM + "(this repo's docs/issues)" + C.OFF)
+        wired = "cabildo " + C.DIM + "(bus + issues/agenda tools)" + C.OFF
         color = C.DIM if what == "unchanged" else C.GREEN
-        print(f"  {color}{what}{C.OFF} {p} {C.DIM}—{C.OFF} {', '.join(wired)}")
+        print(f"  {color}{what}{C.OFF} {p} {C.DIM}—{C.OFF} {wired}")
         if not mcp_config.has_issues(root):
             print(
-                f"  {C.DIM}no docs/issues/ here, so no issue register was wired. "
+                f"  {C.DIM}no docs/issues/ here yet; the register tools still load. "
                 f"`cabildo issues init {root}` starts one.{C.OFF}"
             )
         print(

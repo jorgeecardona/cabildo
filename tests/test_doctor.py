@@ -141,7 +141,8 @@ def test_mcp_issues_na_without_docs_issues(env):
 def test_mcp_issues_ok_when_wired(env):
     _, cwd = env
     (cwd / "docs" / "issues").mkdir(parents=True)
-    (cwd / ".mcp.json").write_text(json.dumps({"mcpServers": {"issues": {"command": "x"}}}))
+    # The register's tools ride the one cabildo server now — that entry is what counts.
+    (cwd / ".mcp.json").write_text(json.dumps({"mcpServers": {"cabildo": {"command": "x"}}}))
     assert doctor.check_mcp_issues(cwd).status == doctor.OK
 
 

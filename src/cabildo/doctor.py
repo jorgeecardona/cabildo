@@ -184,19 +184,25 @@ def check_mcp_bus(cwd: str | os.PathLike) -> Check:
 
 
 def check_mcp_issues(cwd: str | os.PathLike) -> Check:
-    """The per-repo issue register. It only makes sense where a docs/issues/
-    exists — a tool that answers "no register here" in every session is one the
-    model learns to ignore — so its absence elsewhere is expected, not a fault.
+    """The repo's issue register. Its tools are served by the one `cabildo` server
+    now, not a separate entry, so this only reports whether a register exists here
+    — a tool that answers "no register here" in every session is one the model
+    learns to ignore, so absence elsewhere is expected, not a fault.
     """
     if not mcp_config.has_issues(cwd):
-        return Check("mcp.issues", NA, "no docs/issues/ here — issues server not wired (expected)")
-    if mcp_config.ISSUES_KEY in _servers(mcp_config.config_path(cwd)):
-        return Check("mcp.issues", OK, f"'{mcp_config.ISSUES_KEY}' registered in project .mcp.json")
+        return Check(
+            "mcp.issues", NA, "no docs/issues/ here (expected; the agenda tools still work)"
+        )
+    registered = mcp_config.SERVER_KEY in _servers(mcp_config.config_path(cwd)) or (
+        mcp_config.SERVER_KEY in _servers(user_mcp_path())
+    )
+    if registered:
+        return Check("mcp.issues", OK, "docs/issues/ present — served by the cabildo server")
     return Check(
         "mcp.issues",
         FAIL,
-        f"docs/issues/ exists but '{mcp_config.ISSUES_KEY}' is not in .mcp.json",
-        "run: `cabildo add .` to wire the register's server",
+        "docs/issues/ exists but the cabildo server is not registered here",
+        "run: `cabildo add .` to wire it",
     )
 
 

@@ -5,17 +5,17 @@ dropping cabildo in there means every session opened in that folder — yours,
 a teammate's, a spawned agent's — joins the bus without anyone remembering to
 register anything. That is the whole point: the folder carries its own wiring.
 
-There are two servers, and they are deliberately different in scope:
+One `cabildo` server is written. It carries both the bus tools (other agents:
+who is here, messaging, leases) and this repo's issues/agenda tools, merged into
+one server inside the package — so a session sees a single `mcp__cabildo__*`
+surface. Earlier versions wrote a second `issues` entry; `apply` removes that
+stale entry when it finds it, so re-running `cabildo add` migrates an old
+`.mcp.json` in place.
 
-  * **`cabildo`** — the bus. Other agents: who is here, messaging, leases.
-  * **`issues`** — this repo's `docs/issues/` register. Only useful inside the
-    project it is wired into, which is exactly why it belongs in `.mcp.json`
-    rather than at user scope: a register is a property of a folder.
+It is not a daemon. Claude Code spawns it as a stdio subprocess, one per session,
+so wiring costs a couple of lines of JSON and no running process.
 
-Neither is a daemon. Claude Code spawns each as a stdio subprocess, one per
-session, so wiring them costs two lines of JSON and no running process.
-
-Three decisions worth stating:
+Two decisions worth stating:
 
   * The command is written as the bare `cabildo-mcp` when a **login shell** can
     resolve that name. `.mcp.json` is a checked-in file; baking
@@ -29,9 +29,6 @@ Three decisions worth stating:
     (~/.cabildo/cloud.json) already pins folder → name for this machine, but the
     env var travels with the repo, so a fresh clone gets the right project name
     without running `cabildo add` first.
-  * The issues server is wired only when the folder actually has one. A tool
-    that appears in every session and answers "no docs/issues/ here" is a tool
-    the model learns to ignore.
 
 Merging is conservative: other servers in the file are left untouched, and only
 our own keys are written or removed.
@@ -97,25 +94,13 @@ def mcp_command() -> list[str]:
     return _command("cabildo-mcp", "cabildo.mcp_server")
 
 
-def issues_command() -> list[str]:
-    return _command("cabildo-issues-mcp", "cabildo.issues_mcp")
-
-
 def server_entry(project: str | None = None) -> dict:
-    """The `.mcp.json` value for the cabildo bus server."""
+    """The `.mcp.json` value for the cabildo server — bus + issues/agenda in one."""
     cmd = mcp_command()
     entry: dict = {"command": cmd[0], "args": cmd[1:]}
     if project:
         entry["env"] = {"CABILDO_PROJECT": project}
     return entry
-
-
-def issues_entry() -> dict:
-    """The `.mcp.json` value for the per-project issue register. No project env: this server reads
-    the folder it is launched in, and has nothing to say about any other.
-    """
-    cmd = issues_command()
-    return {"command": cmd[0], "args": cmd[1:]}
 
 
 def has_issues(root: str | os.PathLike) -> bool:
@@ -148,33 +133,36 @@ def _dump(p: Path, data: dict) -> Path:
     return p
 
 
-def _wanted(root: str | os.PathLike, project: str | None, issues: bool | None) -> dict:
-    """The entries we want in this folder, keyed as they appear in .mcp.json."""
-    want = {SERVER_KEY: server_entry(project)}
-    if has_issues(root) if issues is None else issues:
-        want[ISSUES_KEY] = issues_entry()
-    return want
+def _wanted(project: str | None) -> dict:
+    """The entry we want in this folder: one `cabildo` server carrying bus and
+    issues/agenda tools together.
+    """
+    return {SERVER_KEY: server_entry(project)}
 
 
 def apply(
     root: str | os.PathLike, project: str | None = None, issues: bool | None = None
 ) -> tuple[Path, str]:
-    """Ensure this folder's .mcp.json registers our servers. Returns (path, what),
-    where `what` is "added", "updated", or "unchanged".
+    """Ensure this folder's .mcp.json registers the cabildo server. Returns (path,
+    what), where `what` is "added", "updated", or "unchanged".
 
-    `issues` defaults to whether the folder has a `docs/issues/` — pass True to
-    wire it anyway (you are about to create one), or False to leave it out.
+    `issues` is accepted for backward compatibility and ignored: the one server now
+    carries the register's tools, so there is nothing separate to wire. A stale
+    `issues` entry from an earlier version is removed here, so re-running migrates
+    an old file in place.
     """
     p = config_path(root)
     data = load(root)
     servers = data.setdefault("mcpServers", {})
     if not isinstance(servers, dict):
         raise ValueError(f"{p}: 'mcpServers' is not an object")
-    want = _wanted(root, project, issues)
-    had = {k: servers.get(k) for k in OUR_KEYS if k in servers}
-    if all(servers.get(k) == v for k, v in want.items()):
+    want = _wanted(project)
+    stale_issues = ISSUES_KEY in servers  # a separate entry an earlier version wrote
+    if not stale_issues and all(servers.get(k) == v for k, v in want.items()):
         return p, "unchanged"
+    had = {k: servers.get(k) for k in OUR_KEYS if k in servers}
     servers.update(want)
+    servers.pop(ISSUES_KEY, None)
     _dump(p, data)
     return p, ("updated" if had else "added")
 
@@ -200,9 +188,12 @@ def remove(root: str | os.PathLike) -> tuple[Path, str]:
 
 
 def preview(root: str | os.PathLike, project: str | None = None, issues: bool | None = None) -> str:
-    """What `apply` would write, as text — for `--print`."""
+    """What `apply` would write, as text — for `--print`. `issues` is ignored (kept
+    for signature compatibility).
+    """
     data = load(root)
     servers = data.setdefault("mcpServers", {})
     if isinstance(servers, dict):
-        servers.update(_wanted(root, project, issues))
+        servers.update(_wanted(project))
+        servers.pop(ISSUES_KEY, None)
     return json.dumps(data, indent=2) + "\n"

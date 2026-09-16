@@ -1,9 +1,15 @@
 """The cabildo MCP server (stdio).
 
-One instance runs per Claude Code session. It never receives the session_id from
-Claude Code, so it resolves its identity via the shared-PID rendezvous: find the
-owning `claude` process, then look up the session_id the SessionStart hook bound
-to that PID. Everything else is a thin wrapper over cabildo.store.
+One instance runs per Claude Code session and is the single server a registered
+project sees: the bus tools defined here plus the issues/agenda tools from
+`cabildo.issues_mcp`, merged into one `cabildo` server by `_merge_issue_tools`.
+The modules stay separate — bus coordination here, the register there — but a
+session wires one server, and every tool shows up as `mcp__cabildo__*`.
+
+It never receives the session_id from Claude Code, so it resolves its identity
+via the shared-PID rendezvous: find the owning `claude` process, then look up the
+session_id the SessionStart hook bound to that PID. Everything else is a thin
+wrapper over cabildo.store.
 """
 
 from __future__ import annotations
@@ -748,6 +754,27 @@ def intents(status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
                 }
             )
         return out
+
+
+def _merge_issue_tools() -> None:
+    """Register the issues/agenda tools onto this one `cabildo` server.
+
+    The issues module keeps its own module-level tool definitions (so it stays a
+    separate concern and works with no bus DB); here we adopt them into the single
+    server every session sees. Idempotent — re-adopting the same tool is a no-op.
+    A name shared by two DIFFERENT tools is a real conflict and raises, so the
+    build fails rather than silently dropping one.
+    """
+    from . import issues_mcp
+
+    ours = mcp._tool_manager._tools
+    for name, tool in issues_mcp.mcp._tool_manager._tools.items():
+        if name in ours and ours[name] is not tool:
+            raise RuntimeError(f"MCP tool name collision between bus and issues: {name!r}")
+        ours[name] = tool
+
+
+_merge_issue_tools()
 
 
 def main() -> None:
