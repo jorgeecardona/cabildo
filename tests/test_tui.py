@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from cabildo.tui import InputHistory, agenda_rows, parse, resolve_topic
+from cabildo.tui import InputHistory, agenda_rows, completions, parse, resolve_topic
 
 
 @pytest.mark.parametrize("line", ["/q", "/quit", "/exit"])
@@ -163,3 +163,29 @@ def test_agenda_rows_render_tiers_titles_and_markers(tmp_path):
     assert "NOW" in text and "Do the thing" in text
     assert "★" in text  # the exclusive highlight marker
     assert "•" in text  # the @today marker
+
+
+# --------------------------------------------------------------------------- #
+# @agent / #channel completion
+# --------------------------------------------------------------------------- #
+AGENTS = ["jorge", "alice", "rusty-robocop-0a750"]
+CHANNELS = ["general", "proj:cabildo", "proj:maths"]
+
+
+def test_at_completes_agents_by_prefix():
+    assert completions("@al", AGENTS, CHANNELS) == ["@alice"]
+    assert completions("@", AGENTS, CHANNELS) == ["@jorge", "@alice", "@rusty-robocop-0a750"]
+
+
+def test_hash_completes_channels_by_prefix():
+    assert completions("#proj", AGENTS, CHANNELS) == ["#proj:cabildo", "#proj:maths"]
+    assert completions("#general", AGENTS, CHANNELS) == ["#general"]
+
+
+def test_completion_is_case_insensitive():
+    assert completions("@AL", AGENTS, CHANNELS) == ["@alice"]
+
+
+def test_a_plain_word_completes_nothing():
+    assert completions("hello", AGENTS, CHANNELS) == []
+    assert completions("", AGENTS, CHANNELS) == []

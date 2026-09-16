@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import curses
 import locale
+import re
 import textwrap
 import time
 
@@ -97,6 +98,20 @@ def parse(line: str) -> tuple[str, dict]:
             return "noop", {}
         return "send", {"body": rest, "urgent": urgent, "to": who.lstrip("@")}
     return "send", {"body": line, "urgent": urgent, "to": None}
+
+
+def completions(token: str, agents: list[str], channels: list[str]) -> list[str]:
+    """Candidates for the word being typed: `@<prefix>` matches agent names,
+    `#<prefix>` matches channels, prefix-insensitive. `@` or `#` alone lists all.
+    Anything else completes nothing. Pure, so it is unit-tested without a terminal.
+    """
+    if token.startswith("@"):
+        pre = token[1:].lower()
+        return [f"@{a}" for a in agents if a.lower().startswith(pre)]
+    if token.startswith("#"):
+        pre = token[1:].lstrip("#").lower()
+        return [f"#{c}" for c in channels if c.lower().startswith(pre)]
+    return []
 
 
 class InputHistory:
@@ -194,6 +209,8 @@ class Chat:
         self.hist = InputHistory()  # ↑/↓ recall of lines you've sent
         self.view = "chat"  # "chat" (messages) or "agenda" (the board), toggled by /agenda
         self.agenda_lines: list[list] = []  # rendered agenda rows, refreshed while viewing it
+        self.topics: list[str] = []  # channel names, for # completion; refreshed with the roster
+        self.tab: dict | None = None  # active Tab-completion cycle, or None
         self.offset = 0  # scrollback: rows up from the bottom
         self.last_id = 0
         self.roster: list = []
@@ -279,6 +296,7 @@ class Chat:
     def _refresh_roster(self) -> None:
         self.roster = store.active_sessions(self.conn)
         self.claims = store.list_claims(self.conn)
+        self.topics = [t["name"] for t in store.list_topics(self.conn)]
         self.roster_at = time.time()
         if self.view == "agenda":
             self._refresh_agenda()
@@ -297,6 +315,35 @@ class Chat:
             self.agenda_lines = agenda_rows(agenda.board(folder))
         except Exception:
             self.agenda_lines = [[("agenda unavailable", curses.A_DIM)]]
+
+    # ---- completion ------------------------------------------------------- #
+    def _trailing(self) -> str:
+        """The word currently being typed — the run of non-spaces at the end of
+        the buffer, which is what `@`/`#` completion acts on.
+        """
+        m = re.search(r"\S*$", self.buf)
+        return m.group(0) if m else ""
+
+    def _agent_names(self) -> list[str]:
+        return [store.display_name(r).lstrip("@") for r in self.roster]
+
+    def _completions(self) -> list[str]:
+        return completions(self._trailing(), self._agent_names(), self.topics)
+
+    def _tab_complete(self) -> None:
+        """Tab: fill the trailing @/# word with the first match, then cycle on each
+        further Tab. Any other key ends the cycle (handled in `handle`).
+        """
+        if self.tab is None:
+            cands = self._completions()
+            if not cands:
+                return
+            trailing = self._trailing()
+            head = self.buf[: len(self.buf) - len(trailing)]
+            self.tab = {"cands": cands, "idx": 0, "head": head}
+        else:
+            self.tab["idx"] = (self.tab["idx"] + 1) % len(self.tab["cands"])
+        self.buf = self.tab["head"] + self.tab["cands"][self.tab["idx"]]
 
     # ---- drawing ---------------------------------------------------------- #
     def _put(self, y: int, x: int, text: str, attr: int = 0) -> None:
@@ -371,13 +418,26 @@ class Chat:
                     self._put(row, x0, c["resource"][: SIDEBAR_W - 1], curses.A_DIM)
                     row += 1
 
-        # hint / notice, then input
-        self._put(
-            h - 2,
-            0,
-            (self.notice or HINT)[: w - 1],
-            (self.RED if self.notice else 0) | curses.A_DIM,
-        )
+        # a completion strip (typing @agent / #channel) takes the hint row; else hint/notice
+        comp = self.tab["cands"] if self.tab else self._completions()
+        sel = self.tab["idx"] if self.tab else -1
+        if comp:
+            self._put(h - 2, 0, "⇥ ", curses.A_DIM)
+            x = 2
+            for i, cand in enumerate(comp[:8]):
+                if x + len(cand) >= w - 1:
+                    break
+                self._put(h - 2, x, cand, curses.A_REVERSE if i == sel else curses.A_DIM)
+                x += len(cand)
+                self._put(h - 2, x, " · ", curses.A_DIM)
+                x += 3
+        else:
+            self._put(
+                h - 2,
+                0,
+                (self.notice or HINT)[: w - 1],
+                (self.RED if self.notice else 0) | curses.A_DIM,
+            )
         prompt = f"#{self.dest} ❯ "
         avail = w - len(prompt) - 2
         shown = self.buf[-avail:] if avail > 0 else ""
@@ -391,7 +451,7 @@ class Chat:
         """Returns False when the app should exit."""
         raw = self.buf
         kind, p = parse(self.buf)
-        self.buf, self.notice = "", None
+        self.buf, self.notice, self.tab = "", None, None
         self.hist.record(raw)
         if kind == "quit":
             return False
@@ -443,6 +503,10 @@ class Chat:
         if isinstance(ch, str):
             if ch in ("\n", "\r"):
                 return self.submit()
+            if ch == "\t":  # Tab: complete / cycle the @/# word
+                self._tab_complete()
+                return True
+            self.tab = None  # any other key ends a completion cycle
             if ch in ("\x7f", "\b"):
                 self.buf = self.buf[:-1]
             elif ch == "\x15":  # ctrl-u
