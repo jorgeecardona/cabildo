@@ -1147,6 +1147,17 @@ def cmd_opencode(args) -> int:
     return 0
 
 
+def cmd_standup(args) -> int:
+    """Who touched what over a window, from cabildo's own record — messages, tasks in
+    flight, spawns, active agents, and token cost.
+    """
+    from . import standup, store
+
+    with store.connect() as conn:
+        print(standup.render(standup.collect(conn, hours=args.hours)))
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # The project register
 # --------------------------------------------------------------------------- #
@@ -1727,6 +1738,12 @@ def main(argv: list[str] | None = None) -> int:
         "--remove", action="store_true", help="undo: drop cabildo from opencode's config + commands"
     )
     oc.set_defaults(fn=cmd_opencode)
+
+    su = sub.add_parser(
+        "standup", help="who touched what over a window: messages, tasks, spawns, cost"
+    )
+    su.add_argument("--hours", type=float, default=24.0, help="lookback window (default: 24)")
+    su.set_defaults(fn=cmd_standup)
 
     iss = sub.add_parser(
         "issues", help="this project's docs/issues register: what's ready, what's blocked"

@@ -756,6 +756,17 @@ def intents(status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
         return out
 
 
+@mcp.tool(structured_output=False)
+def standup(hours: float = 24.0) -> str:
+    """Who touched what over the last `hours`: messages, tasks in flight (claim = flow),
+    spawns, active agents, and token cost — from cabildo's own record, not scraped chat.
+    """
+    from . import standup as _standup
+
+    with store.connect() as conn:
+        return _standup.render(_standup.collect(conn, hours=hours))
+
+
 def _merge_issue_tools() -> None:
     """Register the issues/agenda tools onto this one `cabildo` server.
 
