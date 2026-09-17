@@ -1383,6 +1383,56 @@ def list_claims(conn: sqlite3.Connection, *, project: str | None = None) -> list
     return out
 
 
+def file_pattern_matches(pattern: str, candidates: list[str]) -> bool:
+    """Does a file:<pattern> claim cover any of these paths? A pattern ending in
+    "/" is a directory-prefix claim covering the whole subtree; anything else is
+    an fnmatch glob or an exact path. Shared by the edit guard and the lander so
+    both agree on what a claim locks.
+    """
+    from fnmatch import fnmatch
+
+    if pattern.endswith("/"):
+        base = pattern.rstrip("/")
+        return any(c == base or c.startswith(pattern) for c in candidates)
+    return any(fnmatch(c, pattern) for c in candidates)
+
+
+def file_claim_holders(
+    conn: sqlite3.Connection,
+    project: str | None,
+    files: list[str],
+    *,
+    exclude_session: str | None = None,
+) -> list[dict[str, Any]]:
+    """Active file claims (held by anyone but exclude_session) that overlap any of
+    `files` (repo-relative paths). Used to tell a lander whose in-flight work its
+    rebase conflict collides with, so it knows whom to coordinate with.
+    """
+    now = _now()
+    hits: list[dict[str, Any]] = []
+    q = "SELECT * FROM claims WHERE resource LIKE 'file:%' AND expires_at>?"
+    args: list[Any] = [now]
+    if project:
+        q += " AND project=?"
+        args.append(project)
+    for r in conn.execute(q, args):
+        if exclude_session and r["holder_session"] == exclude_session:
+            continue
+        pattern = r["resource"][len("file:") :]
+        hit = next((f for f in files if file_pattern_matches(pattern, [f])), None)
+        if hit:
+            hits.append(
+                {
+                    "resource": r["resource"],
+                    "file": hit,
+                    "holder": display_name(
+                        get_session(conn, r["holder_session"]), r["holder_session"]
+                    ),
+                }
+            )
+    return hits
+
+
 # --------------------------------------------------------------------------- #
 # Conditions — machine-wide state every session on the host should know about
 # --------------------------------------------------------------------------- #

@@ -149,6 +149,31 @@ def _claude_settings_hint(dirty_lines: list[str]) -> str:
 # --------------------------------------------------------------------------- #
 # land
 # --------------------------------------------------------------------------- #
+_CONFLICT_RE = re.compile(r"^CONFLICT \([^)]*\): Merge conflict in (.+)$", re.MULTILINE)
+
+
+def _conflict_owners_hint(root: str, rebase_output: str, exclude_session: str | None) -> str:
+    """A one-line pointer to the peers whose active file claims overlap the
+    conflicting files, so the requester knows whom to coordinate with rather than
+    guessing. Empty when nothing overlaps. Best-effort: never raises, because a
+    land already failed and this only enriches the message.
+    """
+    try:
+        files = _CONFLICT_RE.findall(rebase_output)
+        if not files:
+            return ""
+        from . import store
+
+        with store.connect() as conn:
+            holders = store.file_claim_holders(conn, root, files, exclude_session=exclude_session)
+        if not holders:
+            return ""
+        who = ", ".join(f"{h['holder']} on {h['resource']}" for h in holders[:5])
+        return f"\n\nThis overlaps work peers hold: {who}. Coordinate via `send` before retrying."
+    except Exception:
+        return ""
+
+
 def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     """Serialised fetch → rebase → gate → push for one worktree.
 
@@ -245,7 +270,8 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         git(["rebase", "--abort"], root)
         return _fail(
             f"rebase onto {remote}/{target} conflicted — aborted, your branch is "
-            f"untouched. Resolve it yourself:\n{out[:2000]}",
+            f"untouched. Resolve it yourself:\n{out[:2000]}"
+            + _conflict_owners_hint(root, out, params.get("_from_session")),
             steps,
         )
     # Verify the rebase did what it claims: rc=0 covers "rebased" and "did

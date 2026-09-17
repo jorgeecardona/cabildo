@@ -108,6 +108,42 @@ def test_expired_glob_claim_stops_denying(conn, clock):
     assert _edit(conn, "b", f"{ALPHA}/src/x.py") is None  # auto-released
 
 
+def test_file_pattern_matches_glob_prefix_exact():
+    assert store.file_pattern_matches("src/", ["src/a/b.py"])  # directory prefix
+    assert not store.file_pattern_matches("src/", ["lib/x.py"])
+    assert store.file_pattern_matches("src/x.py", ["src/x.py"])  # exact
+    assert store.file_pattern_matches("src/*.py", ["src/x.py"])  # glob
+
+
+def test_file_claim_holders_reports_overlap(conn, clock):
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    store.acquire_claim(
+        conn,
+        resource="file:src/",
+        holder_session="a",
+        holder_handle="alice",
+        project=ALPHA,
+        ttl_seconds=300,
+        note=None,
+    )
+    holders = store.file_claim_holders(conn, ALPHA, ["src/x.py", "README.md"], exclude_session="b")
+    assert len(holders) == 1
+    assert holders[0]["holder"] == "@alice" and holders[0]["file"] == "src/x.py"
+    # the lander is excluded from its own conflict hint
+    assert store.file_claim_holders(conn, ALPHA, ["src/x.py"], exclude_session="a") == []
+
+
+def test_conflict_regex_extracts_the_files():
+    from cabildo.actions import _CONFLICT_RE
+
+    out = (
+        "Auto-merging src/x.py\n"
+        "CONFLICT (content): Merge conflict in src/x.py\n"
+        "CONFLICT (add/add): Merge conflict in a/b.txt\n"
+    )
+    assert _CONFLICT_RE.findall(out) == ["src/x.py", "a/b.txt"]
+
+
 def test_holder_can_keep_editing_its_own_file(conn, clock):
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
     guard.autoclaim_on_edit(conn, "a", "Edit", {"file_path": f"{ALPHA}/src/x.py"})
