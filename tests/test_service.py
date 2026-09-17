@@ -499,7 +499,7 @@ def test_control_uses_launchctl_load_unload_on_darwin(darwin, monkeypatch):
     monkeypatch.setattr(
         service,
         "launchctl",
-        lambda *a, capture=True: (calls.append(a) or subprocess.CompletedProcess(list(a), 0, "", "")),
+        lambda *a, capture=True: calls.append(a) or subprocess.CompletedProcess(list(a), 0, "", ""),
     )
     unit = service.daemon_unit()
     path = str(unit.path)

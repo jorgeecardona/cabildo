@@ -49,7 +49,9 @@ def render(data: dict[str, Any]) -> str:
     who = ", ".join(f"{k} {v}" for k, v in list(m["by_sender"].items())[:6])
     lines.append(f"  messages: {m['total']}" + (f" ({who})" if who else ""))
     agents = data["agents_active"]
-    lines.append(f"  agents active: {len(agents)}" + (f" — {', '.join(agents[:8])}" if agents else ""))
+    lines.append(
+        f"  agents active: {len(agents)}" + (f" — {', '.join(agents[:8])}" if agents else "")
+    )
     lines.append(f"  spawned: {data['spawns']}")
     tasks = data["tasks_in_flight"]
     if tasks:

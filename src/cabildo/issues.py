@@ -592,9 +592,7 @@ def newly_ready(
     return [
         i
         for i in found
-        if i.open
-        and closed_slug in i.blocked_by
-        and not any(s in open_slugs for s in i.blocked_by)
+        if i.open and closed_slug in i.blocked_by and not any(s in open_slugs for s in i.blocked_by)
     ]
 
 
