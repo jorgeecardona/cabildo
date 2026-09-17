@@ -80,6 +80,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- server inherit the same env from the same `claude`, so they agree by
     -- construction instead of by inference.
     tag           TEXT,
+    -- The model this session is running (e.g. claude-opus-4-8), when known. It is
+    -- an agent-card field: peers read it via list_agents to route by capability
+    -- (ask the stronger model to review). Filled from the transcript during
+    -- `record` ingest; NULL until a model is observed or for clients not recorded.
+    model         TEXT,
     status        TEXT NOT NULL DEFAULT 'active',   -- active | ended
     created_at    REAL NOT NULL,
     last_seen_at  REAL NOT NULL
@@ -342,6 +347,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # NOT NULL DEFAULT backfills every existing row to 'claude' in place:
         # before this migration the bus only ever held Claude sessions.
         conn.execute("ALTER TABLE sessions ADD COLUMN client TEXT NOT NULL DEFAULT 'claude'")
+    if "model" not in have:
+        conn.execute("ALTER TABLE sessions ADD COLUMN model TEXT")
     if "owner_pid" not in have:
         conn.execute("ALTER TABLE sessions ADD COLUMN owner_pid INTEGER")
         # One-time backfill, right after the column appears: every pre-existing
@@ -589,6 +596,17 @@ def sessions_since(conn: sqlite3.Connection, since: float) -> list[sqlite3.Row]:
         "SELECT * FROM sessions WHERE last_seen_at>=? ORDER BY last_seen_at DESC",
         [since],
     ).fetchall()
+
+
+def set_session_model(conn: sqlite3.Connection, session_id: str, model: str) -> None:
+    """Record the model a session is running (an agent-card field). No-op when
+    unchanged, so the common ingest path does not churn the row.
+    """
+    conn.execute(
+        "UPDATE sessions SET model=? WHERE session_id=? AND (model IS NULL OR model!=?)",
+        [model, session_id, model],
+    )
+    conn.commit()
 
 
 def get_ingest_cursor(conn: sqlite3.Connection, session_id: str) -> int:

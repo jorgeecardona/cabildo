@@ -202,6 +202,7 @@ def whoami() -> dict[str, Any]:
             "session_id": sid,
             "handle": row["handle"] if row else None,
             "client": (row["client"] if row else None) or "claude",
+            "model": row["model"] if row else None,
             "project": row["project_name"] if row else None,
             "subscriptions": store.subscriptions_of(conn, sid),
             "unread": store.unread_summary(conn, sid)["count"],
@@ -240,6 +241,10 @@ def list_agents(all_projects: bool = False) -> list[dict[str, Any]]:
                 "name": store.display_name(r),
                 # SELECT * over a migrated sessions table: the column is always present.
                 "client": r["client"] or "claude",
+                # Agent-card field: the peer's model, when known (filled by `record`
+                # ingest for opted-in projects; NULL otherwise). Route by it, e.g.
+                # ask a stronger model to review.
+                "model": r["model"],
                 "project": r["project_name"],
                 "cwd": r["cwd"],
             }

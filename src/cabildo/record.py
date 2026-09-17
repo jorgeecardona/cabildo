@@ -64,6 +64,11 @@ def ingest(conn, *, window: float = INGEST_WINDOW, log=lambda _m: None) -> int:
                 total += n
                 if n:
                     log(f"  recorded {n} turn(s) from {store.display_name(sess)}")
+                # The newest assistant model in this batch is this session's
+                # current model, an agent-card field peers read via list_agents.
+                model = next((r["model"] for r in reversed(rows) if r.get("model")), None)
+                if model:
+                    store.set_session_model(conn, sess["session_id"], model)
             if new_offset != offset:
                 store.set_ingest_cursor(conn, sess["session_id"], new_offset)
         except Exception as e:  # one broken transcript must not poison the pass

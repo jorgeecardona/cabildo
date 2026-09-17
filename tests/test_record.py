@@ -157,6 +157,35 @@ def test_ingest_skips_when_project_not_opted_in(conn, home, transcript_root):
     assert conn.execute("SELECT count(*) c FROM transcript_messages").fetchone()["c"] == 0
 
 
+def test_ingest_sets_the_session_model(conn, home, transcript_root):
+    """The newest assistant model in a recorded session becomes its agent-card
+    model, readable by peers via list_agents/whoami.
+    """
+    (home / "config.toml").write_text("[record]\nmessages = true\n")
+    store.register_session(
+        conn, "sess1", cwd="/repo/alpha", project="/repo/alpha", project_name="alpha", claude_pid=1
+    )
+    _write_transcript(
+        transcript_root,
+        "/repo/alpha",
+        "sess1",
+        _user("u1", "hi") + _assistant("a1", "yo", model="claude-opus-4-8"),
+    )
+    record.ingest(conn)
+    row = store.get_session(conn, "sess1")
+    assert row is not None and row["model"] == "claude-opus-4-8"
+
+
+def test_set_session_model_updates_in_place(conn):
+    store.register_session(conn, "s1", cwd="/r", project="/r", project_name="r", claude_pid=1)
+    store.set_session_model(conn, "s1", "sonnet")
+    r1 = store.get_session(conn, "s1")
+    assert r1 is not None and r1["model"] == "sonnet"
+    store.set_session_model(conn, "s1", "opus")
+    r2 = store.get_session(conn, "s1")
+    assert r2 is not None and r2["model"] == "opus"
+
+
 def test_ingest_skips_non_claude_clients(conn, home, transcript_root):
     (home / "config.toml").write_text("[record]\nmessages = true\n")
     store.register_session(
