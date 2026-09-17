@@ -73,6 +73,11 @@ def test_daemon_unit_forwards_the_dangerous_dials(linux):
     assert "--budget 250000 --budget-days 3" in text
 
 
+def test_daemon_unit_save_messages_is_opt_in(linux):
+    assert "--save-messages" not in service.render(service.daemon_unit())
+    assert "--save-messages" in service.render(service.daemon_unit(save_messages=True))
+
+
 def test_notifications_need_the_session_bus_address(linux):
     """notify-send without DBUS_SESSION_BUS_ADDRESS autolaunches a private bus
     and pops notifications nobody sees — the classic 'works in my terminal'.

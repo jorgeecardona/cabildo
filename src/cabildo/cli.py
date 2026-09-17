@@ -1317,6 +1317,7 @@ def _service_units(args):
                 budget_days=args.budget_days,
                 max_intent_age=args.max_intent_age,
                 notify=not args.no_notify,
+                save_messages=args.save_messages,
             )
         )
     if args.sync or args.unit == "sync":
@@ -1862,6 +1863,12 @@ def main(argv: list[str] | None = None) -> int:
         "--no-notify",
         action="store_true",
         help="don't pop desktop notifications for messages addressed to you",
+    )
+    sv.add_argument(
+        "--save-messages",
+        action="store_true",
+        help="record conversation turns into the bus DB for projects that set "
+        "[record] messages = true (text stays local, never uplinked)",
     )
     sv.add_argument(
         "--linger",

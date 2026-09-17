@@ -169,6 +169,7 @@ def daemon_unit(
     budget_days: float = 7.0,
     max_intent_age: float = 2.0,
     notify: bool = True,
+    save_messages: bool = False,
 ) -> Unit:
     """The intents worker. Dry-run by default, exactly like the CLI daemon: a
     service you forgot you installed must not be able to push or spawn.
@@ -187,6 +188,8 @@ def daemon_unit(
     cmd += ["--max-intent-age", f"{max_intent_age:g}"]
     if not notify:
         cmd.append("--no-notify")
+    if save_messages:
+        cmd.append("--save-messages")
     env = _passthrough_env()
     if notify and sys.platform != "darwin":
         # %t is the unit's runtime dir (/run/user/UID) — where logind puts the
