@@ -189,3 +189,18 @@ def test_completion_is_case_insensitive():
 def test_a_plain_word_completes_nothing():
     assert completions("hello", AGENTS, CHANNELS) == []
     assert completions("", AGENTS, CHANNELS) == []
+
+
+def test_wheel_direction_maps_wheel_buttons():
+    import curses
+
+    from cabildo.tui import wheel_direction
+
+    up = getattr(curses, "BUTTON4_PRESSED", 0)
+    down = getattr(curses, "BUTTON5_PRESSED", 0)
+    if not up or not down:
+        pytest.skip("this curses build lacks wheel button constants")
+    assert wheel_direction(up) == 1  # wheel up
+    assert wheel_direction(down) == -1  # wheel down
+    assert wheel_direction(getattr(curses, "BUTTON1_PRESSED", 0)) == 0  # a click is not a scroll
+    assert wheel_direction(0) == 0

@@ -114,6 +114,19 @@ def completions(token: str, agents: list[str], channels: list[str]) -> list[str]
     return []
 
 
+def wheel_direction(bstate: int) -> int:
+    """+1 for a scroll-wheel-up event, -1 for wheel-down, 0 for anything else.
+    Pure, so the wheel-to-offset mapping is unit-tested without a terminal.
+    """
+    up = getattr(curses, "BUTTON4_PRESSED", 0)
+    down = getattr(curses, "BUTTON5_PRESSED", 0)
+    if up and bstate & up:
+        return 1
+    if down and bstate & down:
+        return -1
+    return 0
+
+
 class InputHistory:
     """Readline-style recall of the lines the human has submitted.
 
@@ -233,6 +246,18 @@ class Chat:
         ):
             curses.init_pair(i, c, -1)
         self.RED = curses.color_pair(6)
+        # Capture only the scroll wheel. A bare wheel event otherwise falls
+        # through to the terminal, which scrolls its own scrollback (the whole
+        # TUI frame) instead of the message pane. Masking just the wheel buttons
+        # leaves click and drag to the terminal, so text selection/copy still
+        # works; the wheel now moves self.offset (see handle()).
+        self._wheel = getattr(curses, "BUTTON4_PRESSED", 0) | getattr(curses, "BUTTON5_PRESSED", 0)
+        if self._wheel:
+            try:
+                curses.mousemask(self._wheel)
+                curses.mouseinterval(0)
+            except curses.error:
+                self._wheel = 0
         stdscr.timeout(POLL_MS)
 
         backlog = self._fetch(0, tail)
@@ -536,11 +561,28 @@ class Chat:
             self.offset = max(0, self.offset + (step if up else -step))
         elif ch == curses.KEY_END:
             self.offset = 0
+        elif ch == curses.KEY_MOUSE:
+            self._wheel_scroll()
         elif ch == curses.KEY_RESIZE:
             self._rewrap()
             if self.view == "agenda":
                 self._refresh_agenda()
         return True
+
+    def _wheel_scroll(self) -> None:
+        try:
+            _id, _x, _y, _z, bstate = curses.getmouse()
+        except curses.error:
+            return
+        d = wheel_direction(bstate)
+        if not d:
+            return
+        step = 3
+        # chat is bottom-anchored (wheel up = more offset = older messages); the
+        # agenda is top-anchored, so invert, matching the PgUp/PgDn logic above.
+        if self.view == "agenda":
+            d = -d
+        self.offset = max(0, self.offset + d * step)
 
     def run(self) -> int:
         self._refresh_roster()
