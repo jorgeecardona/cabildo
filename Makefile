@@ -22,13 +22,16 @@ format: ## auto-format + autofix lint (ruff)
 lint: ## lint (ruff) -- same as CI
 	uv run ruff check src tests
 
+format-check: ## verify formatting (ruff) -- same as CI; run `make format` to fix
+	uv run ruff format --check src tests
+
 typecheck: ## type-check (pyright) -- same as CI
 	uv run pyright
 
 test: ## run the test suite
 	uv run pytest -q
 
-check: lint typecheck test ## the full CI test stage: lint + typecheck + test
+check: lint format-check typecheck test ## the full CI test stage: lint + format-check + typecheck + test
 
 bump: ## bump version in pyproject.toml -- TYPE=patch|minor|major (default patch)
 	./scripts/bump-version $(or $(TYPE),patch)
