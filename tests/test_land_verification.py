@@ -229,3 +229,19 @@ def test_claude_own_settings_gets_a_pointed_hint(repo):
     (work / "f.txt").write_text("also mine\n")
     res = land(work)
     assert "Claude Code's own settings file" not in res["reason"]
+
+
+def test_manual_push_mode_rejects_the_land(repo):
+    """A repo on push.mode = 'manual' has opted out of cabildo's push path. The
+    daemon must refuse a land that reaches it anyway (stale queue entry, or a
+    hand-filed request), and refuse it before touching the tree or the remote.
+    """
+    origin, work, sha = repo
+    cabildo_dir = work / ".cabildo"
+    cabildo_dir.mkdir()
+    (cabildo_dir / "config.toml").write_text('[push]\nmode = "manual"\n')
+
+    with pytest.raises(actions.Reject) as excinfo:
+        land(work)
+    assert "manual" in str(excinfo.value)
+    assert not on_remote(origin, sha), "nothing must have been pushed"

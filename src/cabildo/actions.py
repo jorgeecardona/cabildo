@@ -157,6 +157,21 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         raise Reject("params.cwd is required")
     if not os.path.isdir(cwd):
         raise Reject(f"cwd does not exist: {cwd}")
+    # A project on push.mode = "manual" has opted out of cabildo's push path
+    # entirely. The guard already stops routing its agents here (guard._deny_push
+    # returns None), but a land can still reach the daemon another way: a stale
+    # queue entry from before the opt-in, or a hand-filed request. Refuse it here
+    # too, so "manual" means the daemon never pushes for this repo, not just that
+    # the guard stops suggesting it.
+    from . import config  # local: actions.py stays importable headless
+
+    if config.push_mode(cwd) == "manual":
+        raise Reject(
+            f"push.mode is 'manual' for {cwd} — this project opted out of "
+            "cabildo's land path, so the daemon will not push for it. Push by "
+            "hand (take the push lock with `claim` first if peers are live). "
+            "Set [push].mode = 'land' in .cabildo/config.toml to re-enable it."
+        )
     target = params.get("target", "main")
     remote = params.get("remote", "origin")
     for name, val in (("target", target), ("remote", remote)):
