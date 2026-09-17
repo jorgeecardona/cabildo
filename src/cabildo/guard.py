@@ -334,19 +334,34 @@ def _deny_branch_switch(conn: sqlite3.Connection, me: sqlite3.Row, command: str)
     )
 
 
+def _file_pattern_hits(pattern: str, candidates: list[str]) -> bool:
+    """Does a file:<pattern> claim cover any of these paths (abs and/or repo-rel)?
+
+    A pattern ending in "/" is a directory-prefix claim: it covers the directory
+    and everything under it, so `file:src/` locks the whole subtree. Bare fnmatch
+    would miss that, because its `*` needs to be written out. Anything else is an
+    fnmatch glob (`file:src/*.py`) or an exact path (`file:src/x.py`).
+    """
+    if pattern.endswith("/"):
+        base = pattern.rstrip("/")
+        return any(c == base or c.startswith(pattern) for c in candidates)
+    return any(fnmatch(c, pattern) for c in candidates)
+
+
 def _deny_file(conn: sqlite3.Connection, me: sqlite3.Row, path: str) -> str | None:
     abspath = PurePosixPath(path)
     rel: str | None = None
     project = me["project"]
     if project and str(abspath).startswith(project.rstrip("/") + "/"):
         rel = str(abspath)[len(project.rstrip("/")) + 1 :]
+    candidates = [str(abspath)] + ([rel] if rel is not None else [])
     for row in conn.execute(
         "SELECT * FROM claims WHERE resource LIKE 'file:%' AND expires_at>? "
         "AND holder_session!=? AND project=?",
         (store._now(), me["session_id"], project),
     ):
         pattern = row["resource"][len("file:") :]
-        if fnmatch(str(abspath), pattern) or (rel is not None and fnmatch(rel, pattern)):
+        if _file_pattern_hits(pattern, candidates):
             note = f" ({row['note']})" if row["note"] else ""
             return (
                 f"cabildo: {_holder_name(conn, row)} holds `{row['resource']}`{note}, "

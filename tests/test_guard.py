@@ -53,6 +53,61 @@ def test_after_autoclaim_another_agent_is_denied(conn, clock):
     assert "@alice" in reason
 
 
+def test_glob_claim_locks_matching_files(conn, clock):
+    """A held glob claim (file:src/*.py) denies a peer editing any match, and
+    leaves non-matching files free.
+    """
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    store.acquire_claim(
+        conn,
+        resource="file:src/*.py",
+        holder_session="a",
+        holder_handle="alice",
+        project=ALPHA,
+        ttl_seconds=300,
+        note=None,
+    )
+    denied = _edit(conn, "b", f"{ALPHA}/src/x.py")
+    assert denied is not None and "@alice" in denied
+    assert _edit(conn, "b", f"{ALPHA}/README.md") is None  # outside the glob
+
+
+def test_directory_prefix_claim_locks_the_subtree(conn, clock):
+    """A claim ending in / covers the whole subtree, which a bare fnmatch misses."""
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    store.acquire_claim(
+        conn,
+        resource="file:src/",
+        holder_session="a",
+        holder_handle="alice",
+        project=ALPHA,
+        ttl_seconds=300,
+        note=None,
+    )
+    assert _edit(conn, "b", f"{ALPHA}/src/deep/y.py") is not None  # under the prefix
+    assert _edit(conn, "b", f"{ALPHA}/src/x.py") is not None
+    assert _edit(conn, "b", f"{ALPHA}/lib/z.py") is None  # sibling dir is free
+
+
+def test_expired_glob_claim_stops_denying(conn, clock):
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    store.acquire_claim(
+        conn,
+        resource="file:src/",
+        holder_session="a",
+        holder_handle="alice",
+        project=ALPHA,
+        ttl_seconds=300,
+        note=None,
+    )
+    assert _edit(conn, "b", f"{ALPHA}/src/x.py") is not None
+    clock["t"] += 301  # lease lapses
+    assert _edit(conn, "b", f"{ALPHA}/src/x.py") is None  # auto-released
+
+
 def test_holder_can_keep_editing_its_own_file(conn, clock):
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
     guard.autoclaim_on_edit(conn, "a", "Edit", {"file_path": f"{ALPHA}/src/x.py"})
