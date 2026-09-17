@@ -162,3 +162,17 @@ def test_robot_name_resolves_as_address(conn):
     assert store.session_for_robot_name(conn, name.lower()) == sid  # case-insensitive
     assert store.session_for_robot_name(conn, "@" + name) == sid  # @-prefixed
     assert store.session_for_robot_name(conn, "NOPE-00") is None
+
+
+def test_presence_state_derives_from_last_seen(conn):
+    make_session(conn, "a", project_name="alpha")
+    row = store.get_session(conn, "a")
+    assert row is not None
+    base = row["last_seen_at"]
+    assert store.presence_state(row, base + 5) == "working"
+    assert store.presence_state(row, base + store.WORKING_WINDOW + 1) == "idle"
+    assert store.presence_state(row, base + store.ACTIVE_WINDOW + 1) == "stale"
+    assert store.presence_state(None) == "unknown"
+
+    conn.execute("UPDATE sessions SET status='ended' WHERE session_id='a'")
+    assert store.presence_state(store.get_session(conn, "a"), base + 5) == "ended"

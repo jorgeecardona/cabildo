@@ -203,6 +203,7 @@ def whoami() -> dict[str, Any]:
             "handle": row["handle"] if row else None,
             "client": (row["client"] if row else None) or "claude",
             "model": row["model"] if row else None,
+            "state": store.presence_state(row),
             "project": row["project_name"] if row else None,
             "subscriptions": store.subscriptions_of(conn, sid),
             "unread": store.unread_summary(conn, sid)["count"],
@@ -294,6 +295,9 @@ def list_agents(all_projects: bool = False) -> list[dict[str, Any]]:
                 # ingest for opted-in projects; NULL otherwise). Route by it, e.g.
                 # ask a stronger model to review.
                 "model": r["model"],
+                # Derived presence: working (just acted) / idle (quiet) — richer
+                # than online/offline, for deciding whom to hand work to.
+                "state": store.presence_state(r),
                 "project": r["project_name"],
                 "cwd": r["cwd"],
             }

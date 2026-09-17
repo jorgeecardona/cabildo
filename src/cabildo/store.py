@@ -46,6 +46,10 @@ def db_path() -> Path:
 DEFAULT_TOPIC = "general"
 # A session is considered "active" if seen within this many seconds.
 ACTIVE_WINDOW = 30 * 60
+# Seen more recently than this = actively working (a tool call refreshes
+# last_seen every few seconds via the hooks). Between this and ACTIVE_WINDOW is
+# idle; past ACTIVE_WINDOW is stale and a reaper will retire it.
+WORKING_WINDOW = 90
 
 # The human's identity on the bus: a stable pseudo-session, so agents can address
 # him exactly like they address each other.
@@ -606,6 +610,25 @@ def active_sessions(
         args.append(exclude)
     q += " ORDER BY last_seen_at DESC"
     return conn.execute(q, args).fetchall()
+
+
+def presence_state(row: sqlite3.Row | None, now: float | None = None) -> str:
+    """Derived presence for a session from status + last_seen_at: working (a tool
+    call landed very recently), idle (active but quiet), stale (past the active
+    window, a reaper will retire it), or ended. Richer than online/offline, and
+    free: last_seen_at is refreshed by every hook, so no new state machine.
+    """
+    if row is None:
+        return "unknown"
+    if row["status"] == "ended":
+        return "ended"
+    now = _now() if now is None else now
+    age = now - (row["last_seen_at"] or 0)
+    if age <= WORKING_WINDOW:
+        return "working"
+    if age <= ACTIVE_WINDOW:
+        return "idle"
+    return "stale"
 
 
 def sessions_since(conn: sqlite3.Connection, since: float) -> list[sqlite3.Row]:

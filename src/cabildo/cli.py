@@ -247,9 +247,12 @@ def cmd_agents(args) -> int:
         name = store.display_name(r)
         ago = int(now - r["last_seen_at"])
         col = _sender_color(name)
+        state = store.presence_state(r, now)
+        scol = {"working": C.GREEN, "idle": C.YELLOW}.get(state, C.DIM)
+        model = f" {C.DIM}{r['model']}{C.OFF}" if r["model"] else ""
         print(
-            f"  {col}{C.BOLD}{name:<12}{C.OFF} {(r['project_name'] or '-'):<16} "
-            f"{C.DIM}{r['cwd'] or ''} · last prompt {ago}s ago{C.OFF}"
+            f"  {scol}●{C.OFF} {col}{C.BOLD}{name:<12}{C.OFF} {(r['project_name'] or '-'):<16} "
+            f"{scol}{state:<8}{C.OFF}{model} {C.DIM}{r['cwd'] or ''} · last prompt {ago}s ago{C.OFF}"
         )
     claims = store.list_claims(conn)
     if claims:
