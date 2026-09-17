@@ -48,6 +48,7 @@ HOOKS = {
     "UserPromptSubmit": ("prompt_submit", 10, None),
     "SessionEnd": ("session_end", 10, None),
     "Stop": ("stop", 10, None),
+    "SubagentStop": ("subagent_stop", 10, None),
     "PostToolUse": ("post_tool_use", 5, "*"),
     "PreToolUse": ("pre_tool_use", 5, "Bash|Edit|Write|NotebookEdit"),
 }

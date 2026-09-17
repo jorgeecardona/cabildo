@@ -62,12 +62,12 @@ def test_hook_events_match_the_dispatcher():
 # --------------------------------------------------------------------------- #
 # Hooks
 # --------------------------------------------------------------------------- #
-def test_hooks_all_six_wired(env):
+def test_hooks_all_wired(env):
     home, _ = env
     _write_settings(home, HOOK_ARGS)
     c = doctor.check_hooks()
     assert c.status == doctor.OK
-    assert "6/6" in c.detail
+    assert f"{len(HOOK_ARGS)}/{len(HOOK_ARGS)}" in c.detail
 
 
 def test_hooks_scans_across_events_and_ignores_foreign_commands(env):
@@ -97,7 +97,7 @@ def test_hooks_missing_some(env):
     _write_settings(home, ["session_start", "stop"])
     c = doctor.check_hooks()
     assert c.status == doctor.FAIL
-    assert "2/6" in c.detail
+    assert f"2/{len(HOOK_ARGS)}" in c.detail
     # Missing ones are named by their Claude-Code event, not the internal arg.
     assert "PreToolUse" in c.detail and "SessionEnd" in c.detail
     assert c.fix

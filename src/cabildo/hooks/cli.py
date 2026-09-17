@@ -28,6 +28,7 @@ EVENTS = (
     "pre_tool_use",
     "post_tool_use",
     "stop",
+    "subagent_stop",
     "session_end",
 )
 

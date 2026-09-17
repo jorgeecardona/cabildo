@@ -3,7 +3,7 @@ and will it work on *this* machine?".
 
 The install spans four places that fail independently and silently:
 
-  * the six hooks in ~/.claude/settings.json — without them a session has the
+  * the cabildo hooks in ~/.claude/settings.json — without them a session has the
     MCP tools but never joins the bus, is never listed, and its claims are never
     enforced. Half a wiring is worse than none, because it looks like it worked.
   * the two MCP servers — the `cabildo` bus (registered at user scope, so it is
@@ -71,6 +71,7 @@ HOOK_EVENTS = {
     "PreToolUse": "pre_tool_use",
     "PostToolUse": "post_tool_use",
     "Stop": "stop",
+    "SubagentStop": "subagent_stop",
     "SessionEnd": "session_end",
 }
 
