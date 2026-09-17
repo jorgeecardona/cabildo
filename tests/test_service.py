@@ -455,6 +455,26 @@ def test_launchd_status_parses_launchctl_list(agents_home, monkeypatch):
     assert info["loaded"] is True
     assert info["PID"] == "4242"
     assert info["Label"] == "com.cabildo.daemon"
+    # Mapped onto the systemd-style keys the status renderer reads, so `service
+    # status` shows active/running on macOS instead of "?/? ?".
+    assert info["ActiveState"] == "active"
+    assert info["SubState"] == "running"
+    assert info["MainPID"] == "4242"
+    assert info["UnitFileState"] == "enabled"
+
+
+def test_launchd_status_maps_a_crash_to_failed(agents_home, monkeypatch):
+    """No PID and a non-zero last exit is a crashed agent, not a running one."""
+    unit = service.daemon_unit()
+    service.write_units([unit])
+    listing = '{\n\t"LastExitStatus" = 256;\n\t"Label" = "com.cabildo.daemon";\n};'
+    monkeypatch.setattr(
+        service,
+        "launchctl",
+        lambda *a, capture=True: subprocess.CompletedProcess(list(a), 0, listing, ""),
+    )
+    info = service.status(unit)
+    assert info["ActiveState"] == "failed" and info["SubState"] == "dead"
 
 
 def test_launchctl_never_raises(monkeypatch):

@@ -556,6 +556,19 @@ def _status_launchd(unit: Unit) -> dict:
         m = _LAUNCHCTL_LIST_LINE.match(line)
         if m:
             info[m.group(1)] = m.group(2).strip('"')
+    # Map launchd's fields onto the systemd-style keys the status renderer reads,
+    # so `service status` is as legible on macOS as on Linux instead of "?/? ?".
+    # A loaded agent with a live PID is active/running; a non-zero last exit with
+    # no PID is a failure; RunAtLoad makes "loaded" mean "enabled".
+    pid = info.get("PID")
+    exit_status = info.get("LastExitStatus")
+    if pid and pid not in ("0", "-"):
+        info["ActiveState"], info["SubState"], info["MainPID"] = "active", "running", pid
+    elif exit_status not in (None, "0"):
+        info["ActiveState"], info["SubState"] = "failed", "dead"
+    else:
+        info["ActiveState"], info["SubState"] = "inactive", "dead"
+    info["UnitFileState"] = "enabled"
     return info
 
 
