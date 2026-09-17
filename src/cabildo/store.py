@@ -313,6 +313,27 @@ CREATE TABLE IF NOT EXISTS ingest_cursors (
     byte_offset   INTEGER NOT NULL DEFAULT 0,
     updated_at    REAL NOT NULL
 );
+
+-- Durable decisions, separate from chat. Chat scrolls away and dies with a
+-- session's context; a decision (why we chose X, what we rejected, a constraint,
+-- a warning) is the coordination memory that must outlive any one agent's
+-- window, so a peer coming in cold can `catch_up` instead of re-deriving it. Kept
+-- deliberately apart from `messages` so the log of what-was-decided is not buried
+-- in the log of what-was-said.
+CREATE TABLE IF NOT EXISTS facts (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at    REAL NOT NULL,
+    session_id    TEXT,
+    handle        TEXT,
+    project       TEXT,
+    project_name  TEXT,
+    kind          TEXT NOT NULL DEFAULT 'decision',  -- decision | fact | constraint | warning
+    title         TEXT NOT NULL,
+    body          TEXT,
+    refs          TEXT,                              -- files/commit the decision touches
+    tags          TEXT                               -- freeform, for filtering
+);
+CREATE INDEX IF NOT EXISTS idx_facts_project ON facts(project_name, created_at);
 """
 
 
@@ -607,6 +628,56 @@ def set_session_model(conn: sqlite3.Connection, session_id: str, model: str) -> 
         [model, session_id, model],
     )
     conn.commit()
+
+
+def add_fact(
+    conn: sqlite3.Connection,
+    *,
+    title: str,
+    body: str | None = None,
+    kind: str = "decision",
+    refs: str | None = None,
+    tags: str | None = None,
+    session_id: str | None = None,
+    handle: str | None = None,
+    project: str | None = None,
+    project_name: str | None = None,
+) -> int:
+    """Record a durable decision/fact and return its id."""
+    cur = conn.execute(
+        "INSERT INTO facts (created_at, session_id, handle, project, project_name, "
+        "kind, title, body, refs, tags) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [_now(), session_id, handle, project, project_name, kind, title, body, refs, tags],
+    )
+    conn.commit()
+    return int(cur.lastrowid or 0)
+
+
+def list_facts(
+    conn: sqlite3.Connection,
+    *,
+    project_name: str | None = None,
+    kind: str | None = None,
+    query: str | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Durable decisions, newest first. `query` matches a substring in the title,
+    body, refs or tags, so `catch_up("auth")` returns what was decided about auth.
+    """
+    q = "SELECT * FROM facts WHERE 1=1"
+    args: list[Any] = []
+    if project_name:
+        q += " AND project_name=?"
+        args.append(project_name)
+    if kind:
+        q += " AND kind=?"
+        args.append(kind)
+    if query:
+        q += " AND (title LIKE ? OR body LIKE ? OR refs LIKE ? OR tags LIKE ?)"
+        args += [f"%{query}%"] * 4
+    q += " ORDER BY id DESC LIMIT ?"
+    args.append(int(limit))
+    return [dict(r) for r in conn.execute(q, args)]
 
 
 def get_ingest_cursor(conn: sqlite3.Connection, session_id: str) -> int:

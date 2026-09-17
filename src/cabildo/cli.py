@@ -1220,6 +1220,37 @@ def cmd_messages(args) -> int:
     return 0
 
 
+def cmd_facts(args) -> int:
+    """Durable decisions for a project: what agents recorded via set_fact, the
+    coordination memory that survives context resets. Newest last so a run reads
+    top-to-bottom.
+    """
+    import datetime as _dt
+
+    from . import store
+    from .context import git_project
+
+    _root, name = git_project(os.getcwd())
+    project = None if args.all else (args.project or name)
+    with store.connect() as conn:
+        rows = store.list_facts(
+            conn, project_name=project, kind=args.kind, query=args.grep, limit=args.limit
+        )
+    if not rows:
+        where = "" if args.all else f" for {project}"
+        print(f"{C.DIM}no decisions recorded{where} — agents record them with set_fact.{C.OFF}")
+        return 0
+    for r in reversed(rows):
+        when = _dt.datetime.fromtimestamp(r["created_at"]).strftime("%m-%d %H:%M")
+        who = f" {C.DIM}{r['handle']}{C.OFF}" if r["handle"] else ""
+        proj = f" {C.DIM}[{r['project_name']}]{C.OFF}" if args.all else ""
+        refs = f" {C.DIM}({r['refs']}){C.OFF}" if r["refs"] else ""
+        print(f"{C.DIM}{when}{C.OFF} {C.BOLD}{r['kind']}{C.OFF}{who}{proj}: {r['title']}{refs}")
+        if r["body"]:
+            print(f"    {C.DIM}{' '.join(r['body'].split())[:300]}{C.OFF}")
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # The project register
 # --------------------------------------------------------------------------- #
@@ -1834,6 +1865,16 @@ def main(argv: list[str] | None = None) -> int:
     mg.add_argument("--since", type=float, default=0.0, help="only the last N hours")
     mg.add_argument("--limit", type=int, default=50, help="max rows (default 50)")
     mg.set_defaults(fn=cmd_messages)
+
+    ft = sub.add_parser("facts", help="durable decisions for a project (recorded via set_fact)")
+    ft.add_argument("-p", "--project", help="project name (default: this repo)")
+    ft.add_argument("--all", action="store_true", help="all projects, not just this repo")
+    ft.add_argument(
+        "--kind", choices=["decision", "fact", "constraint", "warning"], help="only this kind"
+    )
+    ft.add_argument("--grep", help="substring to match in title/body/refs/tags")
+    ft.add_argument("--limit", type=int, default=20, help="max rows (default 20)")
+    ft.set_defaults(fn=cmd_facts)
 
     iss = sub.add_parser(
         "issues", help="this project's docs/issues register: what's ready, what's blocked"

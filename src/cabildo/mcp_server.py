@@ -221,6 +221,55 @@ def set_handle(handle: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+def set_fact(
+    title: str,
+    body: str | None = None,
+    kind: str = "decision",
+    refs: str | None = None,
+    tags: str | None = None,
+) -> dict[str, Any]:
+    """Record a durable decision for this project, kept apart from chat so it
+    survives context resets and dead sessions. Use it for what a peer coming in
+    cold must know: a decision and why, a rejected alternative, a constraint, a
+    warning. `refs` names the files/commit it touches; `tags` are freeform for
+    filtering. `kind` is decision | fact | constraint | warning. Read them back
+    with `catch_up`.
+    """
+    kind = kind if kind in ("decision", "fact", "constraint", "warning") else "decision"
+    with store.connect() as conn:
+        sid = _me(conn)
+        fid = store.add_fact(
+            conn,
+            title=title,
+            body=body,
+            kind=kind,
+            refs=refs,
+            tags=tags,
+            session_id=sid,
+            handle=_handle(conn, sid),
+            project=_project(conn, sid),
+            project_name=_project_name(conn, sid),
+        )
+        return {"ok": True, "id": fid, "kind": kind, "title": title}
+
+
+@mcp.tool()
+def catch_up(
+    query: str | None = None, kind: str | None = None, limit: int = 20
+) -> list[dict[str, Any]]:
+    """The durable decisions for this project, newest first: the coordination
+    memory to read before touching unfamiliar work, instead of re-deriving it.
+    `query` matches a substring in the title/body/refs/tags (e.g. catch_up("auth")),
+    `kind` narrows to decision|fact|constraint|warning. Recorded via `set_fact`.
+    """
+    with store.connect() as conn:
+        sid = _me(conn)
+        return store.list_facts(
+            conn, project_name=_project_name(conn, sid), query=query, kind=kind, limit=limit
+        )
+
+
+@mcp.tool()
 def list_agents(all_projects: bool = False) -> list[dict[str, Any]]:
     """List other active agents. By default only agents on the SAME project
     (git repo) as you; set all_projects=True to also see agents on projects
