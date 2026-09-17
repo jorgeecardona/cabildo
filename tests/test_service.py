@@ -11,6 +11,7 @@ through the `linux` and `darwin` fixtures.
 from __future__ import annotations
 
 import plistlib
+import subprocess
 
 import pytest
 
@@ -471,3 +472,46 @@ def test_unavailable_on_darwin_without_launchctl(darwin, monkeypatch):
 def test_available_on_darwin_with_launchctl(darwin, monkeypatch):
     monkeypatch.setattr(service.shutil, "which", lambda name: "/bin/launchctl")
     assert service.unavailable_reason() is None
+
+
+# --- start / stop / restart --------------------------------------------------- #
+def test_control_uses_systemctl_verbs_on_linux(linux, monkeypatch):
+    calls = []
+
+    def fake(*args, capture=True):
+        calls.append(args)
+        return subprocess.CompletedProcess(list(args), 0, "ok", "")
+
+    monkeypatch.setattr(service, "systemctl", fake)
+    unit = service.daemon_unit()
+    for action in ("start", "stop", "restart"):
+        rc, _ = service.control(action, unit)
+        assert rc == 0
+        assert (action, unit.name) in calls
+
+
+def test_control_uses_launchctl_load_unload_on_darwin(darwin, monkeypatch):
+    """The macOS bug this replaces called systemctl, which doesn't exist there.
+    start = load, stop = unload, restart = unload-then-load — never systemctl.
+    """
+    calls = []
+    monkeypatch.setattr(service, "systemctl", lambda *a, **k: pytest.fail("systemctl on macOS"))
+    monkeypatch.setattr(
+        service,
+        "launchctl",
+        lambda *a, capture=True: (calls.append(a) or subprocess.CompletedProcess(list(a), 0, "", "")),
+    )
+    unit = service.daemon_unit()
+    path = str(unit.path)
+
+    calls.clear()
+    service.control("start", unit)
+    assert calls == [("load", path)]
+
+    calls.clear()
+    service.control("stop", unit)
+    assert calls == [("unload", path)]
+
+    calls.clear()
+    service.control("restart", unit)
+    assert calls == [("unload", path), ("load", path)]

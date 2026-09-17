@@ -1423,25 +1423,30 @@ def cmd_service(args) -> int:
         units = _service_selected(args)
         steps = []
         for u in units:
-            p = service.systemctl(args.action, u.name)
-            steps.append(
-                (
-                    f"{args.action} {u.name}",
-                    p.returncode,
-                    ((p.stderr or "") + (p.stdout or "")).strip(),
-                )
-            )
+            rc, out = service.control(args.action, u)
+            steps.append((f"{args.action} {u.name}", rc, out))
         return _print_steps(steps)
 
     if args.action == "logs":
         units = _service_selected(args)
+        import subprocess
+
+        if sys.platform == "darwin":
+            # launchd has no journal: the agents write to files under log_dir().
+            cmd = ["tail", "-n", str(args.lines)]
+            if args.follow:
+                cmd.append("-f")
+            cmd += [str(service.log_path(u)) for u in units]
+            try:
+                return subprocess.call(cmd)
+            except FileNotFoundError:
+                print(f"{C.RED}no tail on PATH{C.OFF}", file=sys.stderr)
+                return 2
         cmd = ["journalctl", "--user", "-n", str(args.lines)]
         for u in units:
             cmd += ["-u", u.name]
         if args.follow:
             cmd.append("-f")
-        import subprocess
-
         try:
             return subprocess.call(cmd)
         except FileNotFoundError:

@@ -319,6 +319,27 @@ def launchctl(*args: str, capture: bool = True) -> subprocess.CompletedProcess:
         return subprocess.CompletedProcess(cmd, 1, "", str(e))
 
 
+def control(action: str, unit: Unit) -> tuple[int, str]:
+    """Start / stop / restart one already-installed unit, on either platform.
+
+    systemd has all three as verbs. launchd has none of them the same way: a
+    LaunchAgent starts when its plist is loaded and stops when it is unloaded,
+    and 'restart' is unload-then-load. `launchctl start/stop <label>` exist but
+    only poke an agent that is already loaded, so they cannot start one that was
+    unloaded. load/unload is the pair that actually mirrors systemd here.
+    """
+    if sys.platform == "darwin":
+        if action == "stop":
+            p = launchctl("unload", str(unit.path))
+        else:  # start or restart
+            if action == "restart":
+                launchctl("unload", str(unit.path))  # best-effort; may not be loaded
+            p = launchctl("load", str(unit.path))
+    else:
+        p = systemctl(action, unit.name)
+    return p.returncode, ((p.stderr or "") + (p.stdout or "")).strip()
+
+
 def exec_start_of(path: Path) -> str:
     """The command a unit/agent file already on disk would run — what you need
     to see before deciding whether replacing it is safe.
