@@ -1179,6 +1179,47 @@ def cmd_minutes(args) -> int:
     return 0
 
 
+def cmd_messages(args) -> int:
+    """Recorded conversation turns from the bus DB. Needs recording on for the
+    project ([record] messages) and a daemon started with --save-messages.
+    Filter by project, session, role, or a substring; newest first, printed
+    oldest-first so a run reads in order.
+    """
+    import datetime as _dt
+
+    from . import store
+    from .context import git_project
+
+    _root, name = git_project(os.getcwd())
+    project = None if args.all else (args.project or name)
+    since = _dt.datetime.now().timestamp() - args.since * 3600.0 if args.since else None
+    with store.connect() as conn:
+        rows = store.query_transcript_messages(
+            conn,
+            project_name=project,
+            session_id=args.session,
+            role=args.role,
+            grep=args.grep,
+            since=since,
+            limit=args.limit,
+        )
+    if not rows:
+        where = "" if args.all else f" for {project}"
+        print(
+            f"{C.DIM}no recorded messages{where} — turn it on with [record] messages = true "
+            f"and run the daemon with --save-messages.{C.OFF}"
+        )
+        return 0
+    for r in reversed(rows):
+        when = _dt.datetime.fromtimestamp(r["ts"]).strftime("%m-%d %H:%M") if r["ts"] else "  ?  "
+        who = "🧑" if r["role"] == "user" else "🤖"
+        model = f" {C.DIM}{r['model']}{C.OFF}" if r["model"] else ""
+        proj = f" {C.DIM}[{r['project_name']}]{C.OFF}" if args.all else ""
+        body = " ".join((r["body"] or "").split())[:200]
+        print(f"{C.DIM}{when}{C.OFF} {who}{model}{proj} {body}")
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # The project register
 # --------------------------------------------------------------------------- #
@@ -1783,6 +1824,16 @@ def main(argv: list[str] | None = None) -> int:
         help="write to <cabildo home>/minutes/<project>/<date>.md instead of printing",
     )
     mn.set_defaults(fn=cmd_minutes)
+
+    mg = sub.add_parser("messages", help="recorded conversation turns from the bus DB")
+    mg.add_argument("-p", "--project", help="project name (default: this repo)")
+    mg.add_argument("--all", action="store_true", help="all projects, not just this repo")
+    mg.add_argument("--session", help="only this session id")
+    mg.add_argument("--role", choices=["user", "assistant"], help="only this role")
+    mg.add_argument("--grep", help="substring to match in the message body")
+    mg.add_argument("--since", type=float, default=0.0, help="only the last N hours")
+    mg.add_argument("--limit", type=int, default=50, help="max rows (default 50)")
+    mg.set_defaults(fn=cmd_messages)
 
     iss = sub.add_parser(
         "issues", help="this project's docs/issues register: what's ready, what's blocked"

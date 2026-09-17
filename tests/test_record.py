@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from cabildo import config, record, store, transcript
+from cabildo import config, minutes, record, store, transcript
 
 pytestmark = pytest.mark.skipif(
     not hasattr(transcript, "session_messages"),
@@ -171,3 +171,80 @@ def test_ingest_skips_non_claude_clients(conn, home, transcript_root):
     _write_transcript(transcript_root, "/repo/alpha", "sess1", _user("u1", "hi"))
     # Codex transcripts are a different format; this Claude reader must not touch them.
     assert record.ingest(conn) == 0
+
+
+# --- query + minutes-from-db -------------------------------------------------- #
+def test_query_transcript_messages_filters(conn):
+    store.record_transcript_messages(
+        conn,
+        "s1",
+        [
+            {"uuid": "a", "role": "user", "text": "deploy the thing", "ts": 1.0, "model": None},
+            {"uuid": "b", "role": "assistant", "text": "on it", "ts": 2.0, "model": "opus"},
+        ],
+        project_name="alpha",
+    )
+    store.record_transcript_messages(
+        conn,
+        "s2",
+        [{"uuid": "c", "role": "user", "text": "unrelated", "ts": 3.0, "model": None}],
+        project_name="beta",
+    )
+    assert len(store.query_transcript_messages(conn, project_name="alpha")) == 2
+    assert len(store.query_transcript_messages(conn, project_name="beta")) == 1
+    assert len(store.query_transcript_messages(conn, role="assistant")) == 1
+    grep = store.query_transcript_messages(conn, grep="deploy")
+    assert [r["body"] for r in grep] == ["deploy the thing"]
+    assert len(store.query_transcript_messages(conn, session_id="s2")) == 1
+    assert len(store.query_transcript_messages(conn, limit=1)) == 1
+
+
+def _day_ts(day: str, hour_offset: float = 1.0) -> float:
+    start, _ = minutes._day_bounds(day)
+    return start + hour_offset * 3600.0
+
+
+def test_render_project_day_from_db_groups_by_session(conn):
+    import datetime as _dt
+
+    day = _dt.date.today().isoformat()
+    ts = _day_ts(day)
+    store.record_transcript_messages(
+        conn,
+        "s1",
+        [{"uuid": "a", "role": "user", "text": "first task", "ts": ts, "model": "opus"}],
+        project_name="alpha",
+    )
+    store.record_transcript_messages(
+        conn,
+        "s2",
+        [{"uuid": "b", "role": "user", "text": "second task", "ts": ts + 60, "model": None}],
+        project_name="alpha",
+    )
+    out = minutes.render_project_day_from_db(conn, "alpha", day)
+    assert out is not None
+    assert "first task" in out and "second task" in out
+    assert "opus" in out  # the model shows in the header, which transcripts can't give
+    assert f"— alpha — {day}" in out
+
+
+def test_render_project_day_from_db_empty_is_none(conn):
+    import datetime as _dt
+
+    assert minutes.render_project_day_from_db(conn, "alpha", _dt.date.today().isoformat()) is None
+
+
+def test_render_project_day_prefers_the_db(conn):
+    import datetime as _dt
+
+    day = _dt.date.today().isoformat()
+    store.record_transcript_messages(
+        conn,
+        "s1",
+        [{"uuid": "a", "role": "user", "text": "recorded turn", "ts": _day_ts(day), "model": None}],
+        project_name="alpha",
+    )
+    # project_root points nowhere real; if it fell through to transcripts it would
+    # be empty. The recorded turn proves the DB path won.
+    out = minutes.render_project_day("alpha", "/no/such/repo", day, conn=conn)
+    assert "recorded turn" in out

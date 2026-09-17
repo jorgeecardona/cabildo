@@ -1,12 +1,16 @@
-"""Minutas: a daily conversation record per project, distilled from the transcripts
-Claude Code already writes. cabildo does not log conversations itself; it reads those
-transcripts (via `transcript.py`) and writes a readable digest — each session's title,
-its turns, and where it left off — to `<cabildo home>/minutes/<project>/<date>.md`, so
-a day's conversations across every session land in one file.
+"""Minutas: a daily conversation record per project — each session's title, its
+turns, and where it left off — written to `<cabildo home>/minutes/<project>/<date>.md`
+so a day's conversations across every session land in one file.
 
-Claude-only and best-effort: a session with no transcript (Codex, opencode, a pure
-sub-agent) is simply skipped, never an error. The SessionEnd hook writes a session's
-block as it ends; `cabildo minutes` regenerates a project's day on demand.
+Two sources, DB first. When recording is on (`[record] messages` + the daemon's
+--save-messages), a day is rendered from the turns cabildo ingested into its own
+DB, which is client-agnostic (whatever was recorded, not only Claude). Otherwise
+it falls back to reading Claude Code's transcripts on disk via `transcript.py`.
+The transcript fallback is Claude-only and best-effort: a session with no
+transcript (Codex, opencode, a pure sub-agent) is skipped, never an error.
+
+The SessionEnd hook writes a session's block as it ends; `cabildo minutes`
+regenerates a project's day on demand.
 """
 
 from __future__ import annotations
@@ -96,13 +100,77 @@ def write_session(
     return out
 
 
+def _day_bounds(day: str) -> tuple[float, float]:
+    """[start, end) epoch seconds for a local calendar day."""
+    d = _dt.date.fromisoformat(day)
+    start = _dt.datetime.combine(d, _dt.time.min).timestamp()
+    end = _dt.datetime.combine(d + _dt.timedelta(days=1), _dt.time.min).timestamp()
+    return start, end
+
+
+def render_session_db(session_id: str, rows: list[Any]) -> str:
+    """One session's block from recorded DB turns. Same shape as render_session,
+    plus the model in the header, which the DB knows and a raw transcript title
+    does not.
+    """
+    first_user = next((r for r in rows if r["role"] == "user"), None)
+    last_user = next((r for r in reversed(rows) if r["role"] == "user"), None)
+    title = (first_user["body"] if first_user else rows[0]["body"]).strip()[:120]
+    model = next((r["model"] for r in rows if r["model"]), None)
+    last_ts = rows[-1]["ts"]
+    when = _dt.datetime.fromtimestamp(last_ts).strftime("%H:%M") if last_ts else "?"
+    tag = f" · {model}" if model else ""
+    lines = [
+        f"## {title}",
+        f"*session {session_id[:8]} · {len(rows)} turns{tag} · last active {when}*",
+        "",
+    ]
+    for r in rows:
+        who = "🧑" if r["role"] == "user" else "🤖"
+        text = " ".join(r["body"].split())[:CAP_CHARS]
+        lines.append(f"- {who} {text}")
+    if last_user:
+        lines += ["", f"**Left off:** {' '.join(last_user['body'].split())[:CAP_CHARS]}"]
+    return "\n".join(lines) + "\n"
+
+
+def render_project_day_from_db(conn, project_name: str | None, day: str) -> str | None:
+    """A project's day rendered from the recorded turns in the bus DB, or None
+    when nothing was recorded for that project on that day (so the caller can
+    fall back to the transcripts). Sessions are newest-active first.
+    """
+    start, end = _day_bounds(day)
+    rows = store.transcript_messages_between(conn, project_name, start, end)
+    if not rows:
+        return None
+    groups: dict[str, list[Any]] = {}
+    for r in rows:
+        groups.setdefault(r["session_id"], []).append(r)
+    ordered = sorted(groups.items(), key=lambda kv: kv[1][-1]["ts"] or 0, reverse=True)
+    header = f"# Minutas — {project_name or 'unknown'} — {day}\n\n"
+    return header + "\n".join(render_session_db(sid, rws) for sid, rws in ordered)
+
+
 def render_project_day(
-    project_name: str | None, project_root: str | None, day: str | None = None
+    project_name: str | None,
+    project_root: str | None,
+    day: str | None = None,
+    conn: Any = None,
 ) -> str:
-    """Regenerate a project's minutes for a day from the transcripts on disk, newest
-    session first. Independent of what the hook has written.
+    """A project's minutes for a day. Prefers cabildo's own recorded turns when
+    the day was recorded (client-agnostic: whatever was ingested, not only
+    Claude), and falls back to the transcripts on disk otherwise.
     """
     day = day or _dt.date.today().isoformat()
+    close = conn is None
+    c = conn or store.connect()
+    try:
+        from_db = render_project_day_from_db(c, project_name, day)
+    finally:
+        if close:
+            c.close()
+    if from_db is not None:
+        return from_db
     slug = transcript.project_slug(project_root) if project_root else None
     sessions = transcript.list_sessions(slug=slug)
     blocks: list[str] = []

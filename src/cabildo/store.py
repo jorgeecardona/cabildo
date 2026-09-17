@@ -648,6 +648,54 @@ def record_transcript_messages(
     return conn.total_changes - before
 
 
+def query_transcript_messages(
+    conn: sqlite3.Connection,
+    *,
+    project_name: str | None = None,
+    session_id: str | None = None,
+    role: str | None = None,
+    grep: str | None = None,
+    since: float | None = None,
+    limit: int = 50,
+) -> list[sqlite3.Row]:
+    """Recorded turns, newest first, filtered by any combination of project,
+    session, role, a substring in the body, and a time floor. `limit` caps it.
+    """
+    q = "SELECT session_id, ts, role, model, client, project_name, body FROM transcript_messages WHERE 1=1"
+    args: list[Any] = []
+    if project_name:
+        q += " AND project_name=?"
+        args.append(project_name)
+    if session_id:
+        q += " AND session_id=?"
+        args.append(session_id)
+    if role:
+        q += " AND role=?"
+        args.append(role)
+    if grep:
+        q += " AND body LIKE ?"
+        args.append(f"%{grep}%")
+    if since is not None:
+        q += " AND ts>=?"
+        args.append(since)
+    q += " ORDER BY ts DESC LIMIT ?"
+    args.append(int(limit))
+    return conn.execute(q, args).fetchall()
+
+
+def transcript_messages_between(
+    conn: sqlite3.Connection, project_name: str | None, start: float, end: float
+) -> list[sqlite3.Row]:
+    """Every recorded turn for a project whose ts is in [start, end), grouped by
+    session and then in time order — the shape a day's minutes render from.
+    """
+    return conn.execute(
+        "SELECT session_id, ts, role, model, body FROM transcript_messages "
+        "WHERE project_name=? AND ts>=? AND ts<? ORDER BY session_id, ts",
+        [project_name, start, end],
+    ).fetchall()
+
+
 def display_name(row: sqlite3.Row | None, session_id: str | None = None) -> str:
     """Human label for a session: @handle if set, else its robot codename.
 
