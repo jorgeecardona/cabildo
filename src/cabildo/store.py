@@ -276,6 +276,38 @@ CREATE TABLE IF NOT EXISTS condition_deliveries (
     delivered_at  REAL NOT NULL,
     PRIMARY KEY (host, key, session_id)
 );
+
+-- Conversation turns, distilled from each client's transcript into cabildo's own
+-- store so minutes/search/analytics work off one DB instead of the per-client
+-- transcript files. Opt-in only: the daemon writes here solely when started with
+-- --save-messages AND the turn's project has [record] messages = true. `uuid` is
+-- the transcript entry's own id, so re-ingesting a file (rotation, overlap) is an
+-- INSERT OR IGNORE no-op. Only user/assistant text is stored; tool traffic and
+-- hook/meta lines are dropped. Not part of the cloud uplink -- these rows stay on
+-- the machine that recorded them.
+CREATE TABLE IF NOT EXISTS transcript_messages (
+    session_id    TEXT NOT NULL,
+    uuid          TEXT NOT NULL,
+    ts            REAL,
+    role          TEXT NOT NULL,                     -- user | assistant
+    model         TEXT,                              -- assistant model id; NULL for user
+    client        TEXT NOT NULL DEFAULT 'claude',
+    project       TEXT,
+    project_name  TEXT,
+    body          TEXT NOT NULL,
+    PRIMARY KEY (session_id, uuid)
+);
+CREATE INDEX IF NOT EXISTS idx_tmsg_project ON transcript_messages(project_name, ts);
+CREATE INDEX IF NOT EXISTS idx_tmsg_session ON transcript_messages(session_id, ts);
+
+-- Per-session byte offset into the transcript file, so each ingest pass reads
+-- only the new tail. Restart-safe: transcripts are append-only, so the offset is
+-- a stable cursor (transcript.session_messages handles truncation/rotation).
+CREATE TABLE IF NOT EXISTS ingest_cursors (
+    session_id    TEXT PRIMARY KEY,
+    byte_offset   INTEGER NOT NULL DEFAULT 0,
+    updated_at    REAL NOT NULL
+);
 """
 
 
@@ -546,6 +578,74 @@ def active_sessions(
         args.append(exclude)
     q += " ORDER BY last_seen_at DESC"
     return conn.execute(q, args).fetchall()
+
+
+def sessions_since(conn: sqlite3.Connection, since: float) -> list[sqlite3.Row]:
+    """Every session seen at or after `since`, active or ended. The transcript
+    ingest walks these: an ended session still has a tail to capture (its last
+    turns land after Stop), so this is not limited to active ones.
+    """
+    return conn.execute(
+        "SELECT * FROM sessions WHERE last_seen_at>=? ORDER BY last_seen_at DESC",
+        [since],
+    ).fetchall()
+
+
+def get_ingest_cursor(conn: sqlite3.Connection, session_id: str) -> int:
+    row = conn.execute(
+        "SELECT byte_offset FROM ingest_cursors WHERE session_id=?", [session_id]
+    ).fetchone()
+    return int(row["byte_offset"]) if row else 0
+
+
+def set_ingest_cursor(conn: sqlite3.Connection, session_id: str, byte_offset: int) -> None:
+    conn.execute(
+        "INSERT INTO ingest_cursors (session_id, byte_offset, updated_at) VALUES (?,?,?) "
+        "ON CONFLICT(session_id) DO UPDATE SET byte_offset=excluded.byte_offset, "
+        "updated_at=excluded.updated_at",
+        [session_id, byte_offset, _now()],
+    )
+    conn.commit()
+
+
+def record_transcript_messages(
+    conn: sqlite3.Connection,
+    session_id: str,
+    rows: list[dict[str, Any]],
+    *,
+    client: str = "claude",
+    project: str | None = None,
+    project_name: str | None = None,
+) -> int:
+    """Persist conversation turns. Each row is {uuid, role, text, ts, model}.
+    INSERT OR IGNORE keyed on (session_id, uuid), so re-ingesting a transcript
+    never double-writes. Returns how many new rows landed.
+    """
+    if not rows:
+        return 0
+    before = conn.total_changes
+    conn.executemany(
+        "INSERT OR IGNORE INTO transcript_messages "
+        "(session_id, uuid, ts, role, model, client, project, project_name, body) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        [
+            (
+                session_id,
+                r["uuid"],
+                r.get("ts"),
+                r["role"],
+                r.get("model"),
+                client,
+                project,
+                project_name,
+                r["text"],
+            )
+            for r in rows
+            if r.get("uuid") and r.get("role") and r.get("text")
+        ],
+    )
+    conn.commit()
+    return conn.total_changes - before
 
 
 def display_name(row: sqlite3.Row | None, session_id: str | None = None) -> str:

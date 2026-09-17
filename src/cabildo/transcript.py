@@ -306,6 +306,81 @@ def session_turns(
     return turns, offset
 
 
+def _epoch(ts: Any) -> float | None:
+    """An ISO-8601 transcript timestamp as epoch seconds, or None."""
+    if not isinstance(ts, str):
+        return None
+    try:
+        from datetime import datetime
+
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def session_messages(
+    path: Path,
+    after_bytes: int = 0,
+    cap_chars: int = 20000,
+    max_turns: int = 500,
+) -> tuple[list[dict[str, Any]], int]:
+    """Like `session_turns`, but for persisting into the DB: each turn also
+    carries the transcript entry's `uuid` (dedup key) and the assistant `model`,
+    and `ts` is epoch seconds. Same append-only byte-offset cursor and same
+    partial-final-line / truncation handling, so it never loses or double-counts.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return [], after_bytes
+    if after_bytes > size:
+        after_bytes = 0
+    out: list[dict[str, Any]] = []
+    offset = after_bytes
+    try:
+        fh = path.open("rb")
+    except OSError:
+        return [], after_bytes
+    with fh:
+        fh.seek(after_bytes)
+        for raw in fh:
+            if not raw.endswith(b"\n"):
+                break  # partial final line — leave the cursor before it
+            if len(out) >= max_turns:
+                break
+            offset += len(raw)
+            line = raw.decode("utf-8", "replace")
+            if '"type":"user"' not in line and '"type":"assistant"' not in line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            got = _turn(obj)
+            if got is None:
+                continue
+            uid = obj.get("uuid") if isinstance(obj, dict) else None
+            if not uid:
+                continue  # no stable id to dedup on — skip rather than duplicate
+            role, text = got
+            if len(text) > cap_chars:
+                text = text[:cap_chars] + "…"
+            model = None
+            msg = obj.get("message") if isinstance(obj, dict) else None
+            if role == "assistant" and isinstance(msg, dict):
+                model = msg.get("model")
+            out.append(
+                {
+                    "uuid": uid,
+                    "role": role,
+                    "text": text,
+                    "ts": _epoch(obj.get("timestamp")),
+                    "model": model,
+                }
+            )
+    return out, offset
+
+
 def session_digest(path: Path) -> dict[str, Any] | None:
     """First and last real user turns of a transcript, its turn count, and the
     file's mtime. The first turn is a natural title; the last is where you left

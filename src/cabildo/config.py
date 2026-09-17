@@ -33,6 +33,7 @@ today; the rest are read generically and wired one call site at a time):
     [notify]  enabled, quiet_hours          # desktop / notify
     [land]    target = "main"               # actions.land
     [spawn]   model, max_agents, max_depth   # request spawn
+    [record]  messages = true                # config.record_messages (daemon ingest)
 """
 
 from __future__ import annotations
@@ -148,6 +149,18 @@ def destructive_mode(cwd: str | None = None, project_name: str | None = None) ->
     """
     mode = str(get(cwd, "destructive", "mode", project_name=project_name, default="guard")).lower()
     return mode if mode in ("guard", "off") else "guard"
+
+
+def record_messages(cwd: str | None = None, project_name: str | None = None) -> bool:
+    """``[record].messages`` for this project: default False.
+
+    True opts this repo's conversation turns into cabildo's own DB (the daemon,
+    started with --save-messages, ingests its transcripts). Off by default and
+    per-project on purpose: a repo whose transcripts must never enter the shared
+    bus simply never sets it, and nothing is recorded for it.
+    """
+    val = get(cwd, "record", "messages", project_name=project_name, default=False)
+    return val is True or str(val).strip().lower() in ("1", "true", "yes", "on")
 
 
 def watch_topic(cwd: str | None = None, project_name: str | None = None) -> str | None:

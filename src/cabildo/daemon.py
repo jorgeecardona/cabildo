@@ -22,7 +22,7 @@ import socket
 import sys
 import time
 
-from . import actions, desktop, monitor, names, store
+from . import actions, desktop, monitor, names, record, store
 
 # A 'running' intent older than this means the daemon died holding it.
 STALE_AFTER = actions.GATE_TIMEOUT + 300
@@ -30,6 +30,10 @@ STALE_AFTER = actions.GATE_TIMEOUT + 300
 # firing the SessionEnd hook. Cheap (one os.kill per active session) but not
 # worth doing on every 2s tick.
 REAP_SESSIONS_EVERY = 60.0
+# How often to sweep opted-in transcripts into the DB. Cheap (each pass reads
+# only the new bytes since the last cursor), so a short cadence keeps the record
+# close to live without polling the queue any harder.
+RECORD_MESSAGES_EVERY = 15.0
 # How often to sample the machine. A /proc walk is ~10ms, but the conditions it
 # raises are told to agents once per episode regardless of sample rate, so
 # sampling faster buys reaction time and costs nobody context.
@@ -202,6 +206,12 @@ def main(argv: list[str] | None = None) -> int:
         help="hours a queued intent may wait before the daemon refuses "
         "it instead of running it (0 disables)",
     )
+    p.add_argument(
+        "--save-messages",
+        action="store_true",
+        help="record conversation turns into the bus DB for projects that set "
+        "[record] messages = true. Off by default; text stays local (never uplinked).",
+    )
     p.add_argument("--once", action="store_true", help="drain the queue and exit")
     p.add_argument("--interval", type=float, default=2.0, help="poll seconds")
     p.add_argument(
@@ -265,6 +275,7 @@ def main(argv: list[str] | None = None) -> int:
         budget=args.budget,
         budget_days=args.budget_days,
         max_intent_age=args.max_intent_age * 3600.0,
+        save_messages=args.save_messages,
         log=_log,
     )
 
@@ -288,6 +299,7 @@ def main(argv: list[str] | None = None) -> int:
         f"spawn={'ENABLED' if args.allow_spawn else 'dry-run'} "
         f"(≤{args.max_agents} agents, depth ≤{args.max_depth}) · "
         f"notify={'on' if notifying else 'off'} · "
+        f"record={'ON' if args.save_messages else 'off'} · "
         f"monitor={'off' if args.no_monitor else 'mem<%g%%/%g%% every %gs' % (args.mem_warn, args.mem_critical, args.monitor_every)} · "
         f"budget={'%.0f/%gd' % (args.budget, args.budget_days) if args.budget else 'none'} · "
         f"intent age ≤{'%gh' % args.max_intent_age if args.max_intent_age else 'unbounded'}"
@@ -303,6 +315,7 @@ def main(argv: list[str] | None = None) -> int:
 
     last_reap = 0.0
     last_monitor = 0.0
+    last_record = 0.0
     try:
         while True:
             intent = store.take_next_intent(conn, worker)
@@ -330,6 +343,9 @@ def main(argv: list[str] | None = None) -> int:
                         _log(line)
                 except Exception as e:  # a bad /proc read must not kill the daemon
                     _log(f"monitor: {type(e).__name__}: {e}")
+            if ctx.save_messages and now - last_record >= RECORD_MESSAGES_EVERY:
+                last_record = now
+                record.ingest(conn, log=_log)
             if args.once:
                 _log("queue empty — exiting")
                 return 0

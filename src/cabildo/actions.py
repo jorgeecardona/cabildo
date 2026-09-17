@@ -63,6 +63,10 @@ class Ctx:
     worker: str
     allow_push: bool = False
     allow_spawn: bool = False
+    # Ingest opted-in sessions' transcripts into transcript_messages each pass.
+    # Off by default: recording conversation text is a decision the operator makes
+    # at start (--save-messages), then each project opts in via [record] messages.
+    save_messages: bool = False
     max_agents: int = 3
     # How deep spawn chains may go: human→agent is depth 1, that agent's helper
     # is depth 2. The limit exists because delegation compounds — every level
