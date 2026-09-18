@@ -1205,6 +1205,21 @@ def mark_spawn_dead(conn: sqlite3.Connection, tag: str) -> None:
     conn.commit()
 
 
+def spawn_index(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+    """``session_id -> its spawn record`` (role, parent_session, depth, status), so
+    a caller can mark which live sessions are spawned sub-agents and how deep. Only
+    rows whose session has registered (session_id backfilled); latest row wins when
+    a session_id recurs (a reused worktree).
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for r in conn.execute(
+        "SELECT session_id, parent_session, role, depth, status FROM spawns "
+        "WHERE session_id IS NOT NULL ORDER BY created_at"
+    ):
+        out[r["session_id"]] = dict(r)
+    return out
+
+
 def spawn_depth_of(conn: sqlite3.Connection, session_id: str | None) -> int:
     """How deep in the spawn tree this session sits. 0 for anything that was
     not spawned (a human terminal session, the daemon, @jorge). Read from the

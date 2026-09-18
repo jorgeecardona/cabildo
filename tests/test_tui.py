@@ -191,6 +191,20 @@ def test_a_plain_word_completes_nothing():
     assert completions("", AGENTS, CHANNELS) == []
 
 
+def test_agent_badge_marks_presence_and_sub_agents():
+    from cabildo.tui import agent_badge
+
+    # Top-level sessions: just a presence dot, no branch suffix.
+    assert agent_badge("working", None) == ("●", "")
+    assert agent_badge("idle", None) == ("○", "")
+    assert agent_badge("stale", None) == ("·", "")
+    assert agent_badge("mystery", None) == ("·", "")  # unknown presence -> dim dot
+    # Spawned sub-agents get a branch + role suffix.
+    assert agent_badge("working", {"role": "qa", "depth": 1}) == ("●", " ⤷qa")
+    assert agent_badge("idle", {"role": "pm"}) == ("○", " ⤷pm")
+    assert agent_badge("working", {"depth": 2}) == ("●", " ⤷agent")  # role missing -> generic
+
+
 def test_wheel_direction_maps_wheel_buttons():
     import curses
 

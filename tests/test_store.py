@@ -8,6 +8,25 @@ from cabildo import store
 from tests.conftest import make_session
 
 
+def test_spawn_index_maps_registered_sub_agents(conn):
+    store.record_spawn(
+        conn,
+        tag="spawn-qa-0101-99",
+        parent_session="parent-sid",
+        role="qa",
+        task="verify the gate is trustworthy",
+        depth=1,
+    )
+    # Recorded but the child has not registered yet -> not indexed (no session_id).
+    assert store.spawn_index(conn) == {}
+    # The child registers under its tag; register_session backfills the session_id.
+    store.register_session(conn, "child-sid", tag="spawn-qa-0101-99")
+    idx = store.spawn_index(conn)
+    assert idx["child-sid"]["role"] == "qa"
+    assert idx["child-sid"]["parent_session"] == "parent-sid"
+    assert idx["child-sid"]["status"] == "registered"
+
+
 def test_register_creates_default_subscriptions(conn):
     make_session(conn, "s1", project_name="alpha")
     subs = set(store.subscriptions_of(conn, "s1"))

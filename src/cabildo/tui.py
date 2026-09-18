@@ -34,7 +34,7 @@ import time
 from . import agenda, store
 from .store import HUMAN_HANDLE, HUMAN_SESSION
 
-SIDEBAR_W = 24  # hidden when the terminal is too narrow to afford it
+SIDEBAR_W = 30  # hidden when the terminal is too narrow to afford it
 MIN_COLS_FOR_SIDEBAR = 72
 POLL_MS = 200  # input timeout doubles as the DB poll interval
 ROSTER_EVERY = 2.0  # seconds between roster/claims refreshes
@@ -157,6 +157,23 @@ def hold_offset(offset: int, pin: bool, rows: int) -> int:
     return offset + rows if (pin and offset) else offset
 
 
+# Presence glyphs for the roster, keyed by store.presence_state.
+PRESENCE_DOT = {"working": "●", "idle": "○", "stale": "·", "ended": "×", "unknown": "·"}
+
+
+def agent_badge(presence: str, spawn: dict | None) -> tuple[str, str]:
+    """Roster badge for a session: ``(dot, suffix)``. ``dot`` shows presence;
+    ``suffix`` is a sub-agent branch + role (e.g. ``" ⤷qa"``) when the session was
+    spawned, empty for a top-level one. Pure, so the sub-agent cue is unit-tested
+    without a terminal.
+    """
+    dot = PRESENCE_DOT.get(presence, "·")
+    if not spawn:
+        return dot, ""
+    role = str(spawn.get("role") or "agent")
+    return dot, f" ⤷{role}"
+
+
 class InputHistory:
     """Readline-style recall of the lines the human has submitted.
 
@@ -258,6 +275,7 @@ class Chat:
         self.pin = False  # hold the scrollback position against arrivals; see chat_scroll
         self.last_id = 0
         self.roster: list = []
+        self.spawns: dict = {}  # session_id -> spawn record, for the sub-agent cues
         self.claims: list = []
         self.roster_at = 0.0
         self.notice: str | None = None  # transient local status (errors, sends)
@@ -330,11 +348,11 @@ class Chat:
             s = store.get_session(self.conn, m["to_session"])
             dest = store.display_name(s, m["to_session"])
         clock = time.strftime("%H:%M:%S", time.localtime(m["created_at"]))
-        head = [
-            (clock + " ", curses.A_DIM),
-            (who, self._sender_attr(who)),
-            (" → " + (dest or "?"), curses.A_DIM),
-        ]
+        head = [(clock + " ", curses.A_DIM)]
+        if self.spawns.get(m["from_session"]):  # a spawned sub-agent
+            head.append(("⤷ ", curses.color_pair(3) | curses.A_BOLD))
+        head.append((who, self._sender_attr(who)))
+        head.append((" → " + (dest or "?"), curses.A_DIM))
         if m["urgent"]:
             head.append((" ⚠ URGENT", self.RED | curses.A_BOLD))
         out = [head]
@@ -352,11 +370,19 @@ class Chat:
 
     def _refresh_roster(self) -> None:
         self.roster = store.active_sessions(self.conn)
+        self.spawns = store.spawn_index(self.conn)
         self.claims = store.list_claims(self.conn)
         self.topics = [t["name"] for t in store.list_topics(self.conn)]
         self.roster_at = time.time()
-        if self.view == "agenda":
-            self._refresh_agenda()
+        # Always refresh: the agenda now also feeds the sidebar panel, not just the
+        # full-screen /agenda view.
+        self._refresh_agenda()
+
+    def _presence_attr(self, presence: str) -> int:
+        return {
+            "working": curses.color_pair(2) | curses.A_BOLD,  # green
+            "idle": curses.color_pair(5),  # yellow
+        }.get(presence, curses.A_DIM)
 
     def _refresh_agenda(self) -> None:
         """Rebuild the agenda rows from the global agenda, best-effort — a missing
@@ -451,29 +477,54 @@ class Chat:
             tag = f" {self.offset}/{max_off} down — PgUp/PgDn, End=top "
             self._put(1, max(0, pane_w - len(tag)), tag, curses.A_REVERSE)
 
-        # sidebar
+        # sidebar: a live roster with presence + sub-agent cues on top, and an
+        # agenda panel pinned to the bottom third so it is always in view.
         if sidebar:
             x0 = w - SIDEBAR_W
+            inner = SIDEBAR_W - 1
             for row in range(1, h - 2):
                 self._put(row, x0 - 1, "│", curses.A_DIM)
-            self._put(1, x0, "agents", curses.A_BOLD)
+
+            agenda_h = max(4, (h - 3) // 3)  # bottom region reserved for the agenda
+            top_limit = h - 3 - agenda_h - 1  # last row the roster may use
+
+            self._put(1, x0, "agents", curses.A_BOLD | curses.A_UNDERLINE)
             row = 2
             for r in self.roster:
-                if row >= h - 3:
+                if row >= top_limit:
                     break
+                presence = store.presence_state(r)
+                spawn = self.spawns.get(r["session_id"])
+                dot, suffix = agent_badge(presence, spawn)
+                self._put(row, x0, dot, self._presence_attr(presence))
                 name = store.display_name(r)
-                self._put(row, x0, name[: SIDEBAR_W - 1], self._sender_attr(name))
+                self._put(row, x0 + 2, name[: inner - 2], self._sender_attr(name))
+                nx = x0 + 2 + min(len(name), inner - 2)
+                if suffix and nx < x0 + inner:
+                    self._put(row, nx, suffix[: x0 + inner - nx], curses.color_pair(3))
                 row += 1
-                self._put(row, x0, f" {r['project_name'] or '-'}"[: SIDEBAR_W - 1], curses.A_DIM)
+                self._put(row, x0 + 2, (r["project_name"] or "-")[: inner - 2], curses.A_DIM)
                 row += 1
-            if self.claims and row < h - 4:
-                self._put(row + 1, x0, "claims", curses.A_BOLD)
+            if self.claims and row < top_limit - 1:
+                self._put(row + 1, x0, "claims", curses.A_BOLD | curses.A_UNDERLINE)
                 row += 2
                 for c in self.claims:
-                    if row >= h - 3:
+                    if row >= top_limit:
                         break
-                    self._put(row, x0, c["resource"][: SIDEBAR_W - 1], curses.A_DIM)
+                    self._put(row, x0, c["resource"][:inner], curses.A_DIM)
                     row += 1
+
+            # agenda panel, pinned to the bottom of the sidebar
+            ay = h - 3 - agenda_h
+            self._put(ay, x0 - 1, "├", curses.A_DIM)
+            self._put(ay, x0, "agenda", curses.A_BOLD | curses.A_UNDERLINE)
+            for i, segs in enumerate(self.agenda_lines[: agenda_h - 1], start=ay + 1):
+                x = x0
+                for text, attr in segs:
+                    if x >= w:
+                        break
+                    self._put(i, x, text[: w - x], attr)
+                    x += len(text)
 
         # a completion strip (typing @agent / #channel) takes the hint row; else hint/notice
         comp = self.tab["cands"] if self.tab else self._completions()
