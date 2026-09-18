@@ -223,6 +223,15 @@ surface. Current order: 4 next, then 3b and 5 once reviewed.
 - [ ] **Phase 3b — migrate the hot path (gated).** Route the MCP tools + hooks
   through `default_bus()`. Touches live tooling and must reproduce each tool's
   full logic server-side, so it waits for a go-ahead.
+- [ ] **Phase 4.5 — remote bootstrap (gated).** A `cabildo remote up <ip>`
+  command the coding agent invokes with a box IP it already has: SSH in, install
+  cabildo from PyPI, write the box's `[remote]` config (token + `bind` = its VPN
+  IP), start `cabildo wan` + the daemon there, and add the box to the local
+  `[remote].peers`. SSH is the *bootstrap* channel here, distinct from the *data*
+  transport (a direct VPN/mesh connection, or an SSH forward only when routing is
+  unavailable). It is its own command, never a daemon intent: the daemon's action
+  surface stays tiny, and SSH-and-install belongs with the agent that has the IP.
+  Gated: it installs software and starts processes on a remote box.
 - [ ] **Phase 5 — remote spawn (gated).** `peer` param routing and per-peer
   gating. This is the remote-code-execution surface, so it waits for a go-ahead.
 - [ ] **Phase 6 — polish.** Config wiring (`[remote]`, token), `cabildo doctor`
