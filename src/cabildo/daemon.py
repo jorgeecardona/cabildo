@@ -20,9 +20,10 @@ import argparse
 import os
 import socket
 import sys
+import threading
 import time
 
-from . import actions, desktop, monitor, names, record, store
+from . import actions, broker, desktop, monitor, names, record, store
 
 # A 'running' intent older than this means the daemon died holding it.
 STALE_AFTER = actions.GATE_TIMEOUT + 300
@@ -171,7 +172,15 @@ def handle(conn, intent: dict, ctx: actions.Ctx) -> None:
     _report(conn, intent, status, result)
 
 
-def main(argv: list[str] | None = None) -> int:
+def _run_broker(address: str, stop: threading.Event, ready: threading.Event) -> None:
+    """Serve the broker socket, logging a bind failure instead of dying silently."""
+    try:
+        broker.serve(address, ready=ready, stop=stop)
+    except Exception as e:  # a broker that cannot bind must not take the daemon down
+        _log(f"broker: cannot serve on {address}: {type(e).__name__}: {e}")
+
+
+def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) -> int:
     p = argparse.ArgumentParser(prog="cabildo-daemon", description=(__doc__ or "").split("\n")[0])
     p.add_argument(
         "--allow-push",
@@ -255,6 +264,18 @@ def main(argv: list[str] | None = None) -> int:
         default=monitor.Thresholds.orphan_rss_mb,
         help="ignore leftover processes smaller than this",
     )
+    p.add_argument(
+        "--broker",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="serve the bus over a local unix socket so MCP/hook clients can use it "
+        "instead of opening the DB directly (default on; --no-broker to disable)",
+    )
+    p.add_argument(
+        "--broker-socket",
+        default=broker.socket_path(),
+        help="unix socket path for the broker (default: <home>/bus.sock)",
+    )
     args = p.parse_args(argv)
 
     worker = _worker_name()
@@ -313,11 +334,30 @@ def main(argv: list[str] | None = None) -> int:
         fresh = waiting - stale if ctx.max_intent_age else waiting
         _log(f"queue: {waiting} pending — {stale} will be refused as expired, {fresh} will be RUN")
 
+    # The daemon owns the DB, so it is also the broker: serve the local socket on
+    # its own thread (with its own connection) so MCP/hook clients can route
+    # through it. --once is a drain-and-exit run, so it never bothers.
+    broker_stop = threading.Event()
+    broker_thread: threading.Thread | None = None
+    if args.broker and not args.once:
+        ready = threading.Event()
+        broker_thread = threading.Thread(
+            target=_run_broker, args=(args.broker_socket, broker_stop, ready), daemon=True
+        )
+        broker_thread.start()
+        _log(
+            f"broker listening on {args.broker_socket}"
+            if ready.wait(timeout=5)
+            else f"broker: not yet listening on {args.broker_socket}"
+        )
+
     last_reap = 0.0
     last_monitor = 0.0
     last_record = 0.0
     try:
         while True:
+            if stop is not None and stop.is_set():
+                return 0
             intent = store.take_next_intent(conn, worker)
             if intent is not None:
                 handle(conn, intent, ctx)
@@ -354,6 +394,10 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         _log("bye")
         return 0
+    finally:
+        broker_stop.set()
+        if broker_thread is not None:
+            broker_thread.join(timeout=2)
 
 
 if __name__ == "__main__":
