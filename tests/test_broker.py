@@ -7,6 +7,7 @@ a thread against the test's throwaway DB; SocketBus is the client.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 import uuid
@@ -68,6 +69,25 @@ def test_socketbus_unknown_op_raises_buserror(running_broker):
     with pytest.raises(BusError) as ei:
         SocketBus(running_broker).call("nope", {}, identity=Identity(session="x"))
     assert ei.value.kind == "unknown_op"
+
+
+def test_dispatch_rolls_back_after_a_failed_write(home):
+    # A write that raises mid-statement (a non-bindable project value) must leave
+    # the shared connection clean, not stuck in an open transaction, or the broker
+    # wedges for every later op (review finding #1).
+    conn = store.connect()
+    lock = threading.Lock()
+    ident = bus.Identity(session="a", handle="a")
+
+    bad = bus.encode_request("send", {"to_session": "b", "body": "x", "project": ["nope"]}, ident)
+    resp = broker.dispatch(conn, lock, bad)
+    assert json.loads(resp)["ok"] is False
+    assert not conn.in_transaction  # rolled back, not wedged
+
+    # A following write on the same connection still succeeds.
+    good = bus.encode_request("send", {"to_session": "b", "body": "ok"}, ident)
+    assert json.loads(broker.dispatch(conn, lock, good))["ok"] is True
+    conn.close()
 
 
 def test_socketbus_handler_error_is_reported_and_server_survives(running_broker):

@@ -51,7 +51,17 @@ def dispatch(conn: sqlite3.Connection, lock: threading.Lock, line: bytes) -> byt
         return _error("unknown_op", f"unknown bus op: {op}")
     try:
         with lock:
-            result = handler(conn, identity, params)
+            try:
+                result = handler(conn, identity, params)
+            except Exception:
+                # A handler that raised mid-write (e.g. a bad bind after the
+                # implicit BEGIN) leaves the shared connection in an open
+                # transaction. Roll it back here, under the lock, or the next op
+                # pins a stale snapshot and every later write fails with "database
+                # is locked" -- the broker wedged until restart (review finding #1).
+                if conn.in_transaction:
+                    conn.rollback()
+                raise
     except Exception as e:  # a handler failure is data, not a broker crash
         return _error(type(e).__name__, str(e))
     return json.dumps({"ok": True, "result": result}).encode()
