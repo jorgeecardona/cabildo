@@ -53,3 +53,14 @@ target = "main"    # default branch for `request land`
 model = "sonnet"   # default model for helper agents
 max_agents = 4
 max_depth = 2
+
+[remote]
+# Cross-machine bus sync over a tunnel (WireGuard/Tailscale mesh, or an SSH
+# port-forward). cabildo does not build the tunnel; it connects to the addresses
+# you give and pulls. The config is read today; the `cabildo wan` transport that
+# runs it is being wired up.
+peers = ["100.64.0.2:48653"]   # explicit host:port of each remote peer to pull
+token = ""                     # shared bus token, checked on the pull handshake
+bind = "127.0.0.1:48653"       # address to SERVE pulls on (loopback for an SSH
+                               # forward, the mesh IP for WireGuard); omit = pull-only
+interval = 30                  # seconds between sync rounds
