@@ -21,6 +21,8 @@ operation runs on the owning side against one connection.
 
 from __future__ import annotations
 
+import json
+import socket
 import sqlite3
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -82,6 +84,107 @@ class LocalBus:
             raise KeyError(f"unknown bus op: {op}")
         with store.connect() as conn:
             return handler(conn, identity, params)
+
+
+# --------------------------------------------------------------------------- #
+# Wire protocol -- newline-delimited JSON, one request/response per line
+# --------------------------------------------------------------------------- #
+# A single line is capped so a malformed or hostile peer cannot make the reader
+# buffer without bound.
+MAX_LINE = 8 * 1024 * 1024
+
+
+class BusError(RuntimeError):
+    """The broker refused or failed a call (unknown op, or the handler raised).
+
+    Carries the server-reported error type so the caller can tell a bad request
+    from a handler failure without parsing the message.
+    """
+
+    def __init__(self, message: str, *, kind: str = "error") -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
+def identity_to_wire(ident: Identity) -> dict[str, Any]:
+    return {
+        "session": ident.session,
+        "handle": ident.handle,
+        "project": ident.project,
+        "project_name": ident.project_name,
+    }
+
+
+def identity_from_wire(d: Mapping[str, Any]) -> Identity:
+    return Identity(
+        session=str(d["session"]),
+        handle=d.get("handle"),
+        project=d.get("project"),
+        project_name=d.get("project_name"),
+    )
+
+
+def encode_request(op: str, params: Mapping[str, Any], identity: Identity) -> bytes:
+    """One request line (no trailing newline; the sender appends it)."""
+    return json.dumps(
+        {"op": op, "params": dict(params), "identity": identity_to_wire(identity)}
+    ).encode()
+
+
+class LineReader:
+    """Read newline-delimited frames off a stream socket, buffering across recv()
+    boundaries and never letting one frame exceed ``MAX_LINE``.
+    """
+
+    def __init__(self, sock: socket.socket, cap: int = MAX_LINE) -> None:
+        self._sock = sock
+        self._cap = cap
+        self._buf = bytearray()
+
+    def readline(self) -> bytes | None:
+        """The next frame without its newline, or None at end of stream."""
+        while True:
+            nl = self._buf.find(b"\n")
+            if nl != -1:
+                line = bytes(self._buf[:nl])
+                del self._buf[: nl + 1]
+                return line
+            chunk = self._sock.recv(65536)
+            if not chunk:
+                return bytes(self._buf) if self._buf else None
+            self._buf.extend(chunk)
+            if len(self._buf) > self._cap:
+                raise BusError("frame exceeds size cap", kind="too_large")
+
+
+class SocketBus:
+    """Bus backed by a socket to the broker service. One request per connection:
+    connect, send the framed request, read one response frame, close.
+    """
+
+    def __init__(self, address: str, *, timeout: float = 5.0) -> None:
+        self.address = address
+        self.timeout = timeout
+
+    def _connect(self) -> socket.socket:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(self.timeout)
+        s.connect(self.address)
+        return s
+
+    def call(self, op: str, params: Mapping[str, Any], *, identity: Identity) -> Any:
+        with self._connect() as s:
+            s.sendall(encode_request(op, params, identity) + b"\n")
+            line = LineReader(s).readline()
+        if line is None:
+            raise BusError("no response from broker", kind="no_response")
+        resp = json.loads(line)
+        if not resp.get("ok"):
+            err = resp.get("error") or {}
+            raise BusError(
+                str(err.get("message") or "broker error"), kind=str(err.get("type") or "error")
+            )
+        return resp.get("result")
 
 
 # --------------------------------------------------------------------------- #

@@ -344,10 +344,14 @@ CREATE INDEX IF NOT EXISTS idx_facts_project ON facts(project_name, created_at);
 # --------------------------------------------------------------------------- #
 # Connection
 # --------------------------------------------------------------------------- #
-def connect() -> sqlite3.Connection:
+def connect(*, check_same_thread: bool = True) -> sqlite3.Connection:
+    """Open the shared bus DB in WAL mode. ``check_same_thread=False`` is for the
+    broker, which owns one connection and serialises access to it across its accept
+    threads with its own lock; every other caller keeps the safe default.
+    """
     p = db_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(p), timeout=10.0)
+    conn = sqlite3.connect(str(p), timeout=10.0, check_same_thread=check_same_thread)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")

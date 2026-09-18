@@ -1,6 +1,6 @@
 [project]
 name = "cabildo"
-version = "0.1.56"
+version = "0.1.57"
 description = "IPC bus + chat room for coordinating parallel Claude Code agents: messaging, presence, and advisory locks with hook-level enforcement"
 readme = "README.md"
 requires-python = ">=3.11"
