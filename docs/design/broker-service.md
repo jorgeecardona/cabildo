@@ -216,9 +216,10 @@ surface. Current order: 4 next, then 3b and 5 once reviewed.
   unless `--no-broker`/`--once`. Tested, including a daemon integration test.
 - [x] **Phase 3a — client selection.** `bus.default_bus()` picks `SocketBus` when
   a broker is live (probed), else `LocalBus`; `CABILDO_BROKER=0` forces local.
-- [ ] **Phase 4 — WAN sync (next).** Service-to-service pull over explicit peer
-  addresses with the shared token; `origin='wan'`; reuse `lan.py`'s guid dedup.
-  Additive, no live-tooling change.
+- [x] **Phase 4 — WAN sync mechanism.** `wan.py`: explicit-peer pull over the
+  shared token, `origin='wan'`, per-peer cursor, loopback/mesh bind, reusing
+  lan.py. Cloud uplink skips `wan`. Tested. (Running it from the daemon and
+  reading peers from `[remote]` config folds into Phase 6.)
 - [ ] **Phase 3b — migrate the hot path (gated).** Route the MCP tools + hooks
   through `default_bus()`. Touches live tooling and must reproduce each tool's
   full logic server-side, so it waits for a go-ahead.
