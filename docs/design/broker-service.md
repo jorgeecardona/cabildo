@@ -121,8 +121,10 @@ the code map force this:
   SQL" op ever, for the same reason `actions.py` has no generic "run this
   command": a named op the caller cannot forge is the boundary.
 - Auth (local): filesystem permissions. The socket is created mode 0600, owned by
-  the user; only that user's processes can connect. No token needed on the local
-  socket.
+  the user; only that user's processes can connect. No token and no TLS on the
+  local socket: it is kernel-local, so transport encryption adds cost and no
+  security. The loopback-TCP fallback is the exception, since a loopback port has
+  no file-permission gate: there the client must present the bus token.
 - Concurrency: the broker serialises writes through the existing single-threaded
   daemon, which removes SQLite multi-writer contention (the `busy_timeout` waits)
   entirely.
@@ -132,17 +134,25 @@ the code map force this:
 Services, not agents, sync across machines. Each host runs one service; a remote
 service is a peer.
 
-- Reach: the meshing (tunnel, encryption, device identity) is handled by
-  WireGuard / Tailscale. Each box gets a stable, encrypted address on the mesh;
-  Tailscale supplies OIDC-based device auth and ACLs. cabildo does not implement
-  its own tunnel or NAT traversal.
+- Reach: cabildo is **transport-agnostic**. It connects to a peer at `host:port`
+  and pulls; it does not care how the bytes are carried, so the tunnel is a
+  deployment choice, not cabildo code. Two supported shapes:
+    - **WireGuard / Tailscale mesh**: the peer address is the mesh IP (for example
+      `100.x.y.z:48653`). WireGuard encrypts and mutually authenticates the
+      channel; Tailscale adds OIDC device identity and ACLs.
+    - **Plain SSH tunnel**: `ssh -L 48653:localhost:48653 <box>` forwards a local
+      port and cabildo points at `localhost:48653`; SSH provides the encryption
+      and host/user authentication. A remote forward (`-R`) works the same way.
+  cabildo does not implement its own tunnel or NAT traversal, and it **binds only
+  to the tunnel or loopback interface, never `0.0.0.0` on the public internet.**
 - Sync: reuse `lan.py`'s pull model and `guid` dedup, but with **explicit peer
   addresses** (from config) instead of UDP broadcast discovery, since broadcast
   does not cross subnets. Pulled rows are stamped `origin='wan'` (kept out of the
   cloud uplink, like `origin='lan'`).
 - Auth (v1): a shared bus token proves membership on the pull handshake (the
-  `secret` hook `lan.py` already has). It rides on top of the Tailscale mesh, so
-  the token is defence in depth, not the only wall.
+  `secret` hook `lan.py` already has). It rides on top of the already-encrypted
+  tunnel, so the token is authorization (which peers may join this bus), not the
+  encryption layer.
 - Auth (later): per-agent signed rows. Each peer holds an ed25519 keypair, signs
   every row it syncs, and the receiver verifies and records a verified identity.
   This gives per-agent accountability even over an untrusted relay and can be
@@ -169,10 +179,25 @@ single-machine model never needed. Rules:
   daemon's existing `--allow-push` / `--allow-spawn` gates (for example
   `--allow-remote-spawn <peer>`).
 - The local unix socket is user-only (mode 0600); the WAN transport requires the
-  shared token and rides the Tailscale mesh.
+  shared token and rides the encrypted tunnel.
 - `SECURITY.md`'s trust model is updated: with a WAN peer connected, "anyone who
-  can open the database is trusted" no longer holds, and the token plus the mesh
+  can open the database is trusted" no longer holds, and the token plus the tunnel
   identity are what gate a peer.
+
+### Encryption, by layer
+
+Encryption and channel authentication belong to the transport; cabildo does not
+reimplement them.
+
+- **Local unix socket**: no encryption. Filesystem permissions (0600) are the
+  boundary; a kernel-local socket has no network to protect.
+- **WAN**: the tunnel encrypts and authenticates the channel (WireGuard's static
+  keys, Tailscale's device identity, or SSH's host/user keys). cabildo adds the
+  shared token for authorization on top of that encrypted channel.
+- **Optional app-level TLS**: cabildo can wrap its socket with the stdlib `ssl`
+  module for a deployment that exposes the port without a tunnel. This is opt-in,
+  requires operator-supplied certificates, and is redundant when a tunnel is
+  already in place, so it is not the v1 default.
 
 ## Phased plan
 
