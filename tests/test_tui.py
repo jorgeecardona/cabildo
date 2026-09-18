@@ -191,6 +191,30 @@ def test_a_plain_word_completes_nothing():
     assert completions("", AGENTS, CHANNELS) == []
 
 
+def test_snapshot_renders_the_layout_headless(home):
+    from cabildo import store, tui
+    from tests.conftest import make_session
+
+    c = store.connect()
+    make_session(c, "alice", handle="alice", project_name="alpha")
+    store.post_message(
+        c, from_session="alice", from_handle="alice", body="hello bus", topic="general"
+    )
+    # A spawned sub-agent should render with the ⤷ cue.
+    store.record_spawn(
+        c, tag="spawn-qa-1", parent_session="alice", role="qa", task="verify the gate", depth=1
+    )
+    store.register_session(c, "qa-sid", tag="spawn-qa-1", project_name="alpha")
+    c.close()
+
+    out = tui.snapshot(size=(22, 96))
+    assert "agents" in out
+    assert "agenda" in out
+    assert "@alice" in out
+    assert "hello bus" in out
+    assert "⤷qa" in out  # the sub-agent cue in the roster
+
+
 def test_agent_badge_marks_presence_and_sub_agents():
     from cabildo.tui import agent_badge
 

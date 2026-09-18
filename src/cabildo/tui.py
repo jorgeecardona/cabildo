@@ -174,6 +174,17 @@ def agent_badge(presence: str, spawn: dict | None) -> tuple[str, str]:
     return dot, f" ⤷{role}"
 
 
+def _color_pair(n: int) -> int:
+    """``curses.color_pair(n)``, or 0 when curses is not initialised. The offline
+    renderer (see snapshot) computes attributes without a terminal, where
+    ``color_pair`` would raise; colour just falls away there.
+    """
+    try:
+        return curses.color_pair(n)
+    except curses.error:
+        return 0
+
+
 class InputHistory:
     """Readline-style recall of the lines the human has submitted.
 
@@ -280,6 +291,24 @@ class Chat:
         self.roster_at = 0.0
         self.notice: str | None = None  # transient local status (errors, sends)
 
+        self.RED = _color_pair(6)  # real pair set in _enter_curses; 0 headless
+        # Capture only the scroll wheel. A bare wheel event otherwise falls
+        # through to the terminal, which scrolls its own scrollback (the whole
+        # TUI frame) instead of the message pane. Masking just the wheel buttons
+        # leaves click and drag to the terminal, so text selection/copy still
+        # works; the wheel now moves self.offset (see handle()).
+        self._wheel = getattr(curses, "BUTTON4_PRESSED", 0) | getattr(curses, "BUTTON5_PRESSED", 0)
+
+        backlog = self._fetch(0, tail)
+        row = self.conn.execute("SELECT COALESCE(MAX(id),0) AS m FROM messages").fetchone()
+        self.last_id = backlog[-1]["id"] if backlog else row["m"]
+        for m in backlog:
+            self._append(m)
+
+    def _enter_curses(self) -> None:
+        """Terminal-only setup, kept out of __init__ so the layout can be rendered
+        headless (see snapshot). Called once at the start of run().
+        """
         curses.curs_set(1)
         curses.use_default_colors()
         for i, c in enumerate(
@@ -295,25 +324,13 @@ class Chat:
         ):
             curses.init_pair(i, c, -1)
         self.RED = curses.color_pair(6)
-        # Capture only the scroll wheel. A bare wheel event otherwise falls
-        # through to the terminal, which scrolls its own scrollback (the whole
-        # TUI frame) instead of the message pane. Masking just the wheel buttons
-        # leaves click and drag to the terminal, so text selection/copy still
-        # works; the wheel now moves self.offset (see handle()).
-        self._wheel = getattr(curses, "BUTTON4_PRESSED", 0) | getattr(curses, "BUTTON5_PRESSED", 0)
         if self._wheel:
             try:
                 curses.mousemask(self._wheel)
                 curses.mouseinterval(0)
             except curses.error:
                 self._wheel = 0
-        stdscr.timeout(POLL_MS)
-
-        backlog = self._fetch(0, tail)
-        row = self.conn.execute("SELECT COALESCE(MAX(id),0) AS m FROM messages").fetchone()
-        self.last_id = backlog[-1]["id"] if backlog else row["m"]
-        for m in backlog:
-            self._append(m)
+        self.scr.timeout(POLL_MS)
 
     # ---- data ------------------------------------------------------------- #
     def _fetch(self, after: int, limit: int) -> list[dict]:
@@ -326,7 +343,7 @@ class Chat:
         return [store._msg_dict(r) for r in reversed(rows)]
 
     def _sender_attr(self, name: str) -> int:
-        return curses.color_pair(1 + sum(name.encode()) % 5) | curses.A_BOLD
+        return _color_pair(1 + sum(name.encode()) % 5) | curses.A_BOLD
 
     def _pane_width(self) -> int:
         h, w = self.scr.getmaxyx()
@@ -350,7 +367,7 @@ class Chat:
         clock = time.strftime("%H:%M:%S", time.localtime(m["created_at"]))
         head = [(clock + " ", curses.A_DIM)]
         if self.spawns.get(m["from_session"]):  # a spawned sub-agent
-            head.append(("⤷ ", curses.color_pair(3) | curses.A_BOLD))
+            head.append(("⤷ ", _color_pair(3) | curses.A_BOLD))
         head.append((who, self._sender_attr(who)))
         head.append((" → " + (dest or "?"), curses.A_DIM))
         if m["urgent"]:
@@ -380,8 +397,8 @@ class Chat:
 
     def _presence_attr(self, presence: str) -> int:
         return {
-            "working": curses.color_pair(2) | curses.A_BOLD,  # green
-            "idle": curses.color_pair(5),  # yellow
+            "working": _color_pair(2) | curses.A_BOLD,  # green
+            "idle": _color_pair(5),  # yellow
         }.get(presence, curses.A_DIM)
 
     def _refresh_agenda(self) -> None:
@@ -501,7 +518,7 @@ class Chat:
                 self._put(row, x0 + 2, name[: inner - 2], self._sender_attr(name))
                 nx = x0 + 2 + min(len(name), inner - 2)
                 if suffix and nx < x0 + inner:
-                    self._put(row, nx, suffix[: x0 + inner - nx], curses.color_pair(3))
+                    self._put(row, nx, suffix[: x0 + inner - nx], _color_pair(3))
                 row += 1
                 self._put(row, x0 + 2, (r["project_name"] or "-")[: inner - 2], curses.A_DIM)
                 row += 1
@@ -672,6 +689,7 @@ class Chat:
             self.offset, self.pin = chat_scroll(self.offset, self.pin, d, step)
 
     def run(self) -> int:
+        self._enter_curses()
         self._refresh_roster()
         while True:
             for m in self._fetch(self.last_id, 200):
@@ -694,3 +712,59 @@ def main(*, topic: str | None = None, tail: int = 50) -> int:
         return curses.wrapper(lambda scr: Chat(scr, topic=topic, tail=tail).run())
     except KeyboardInterrupt:
         return 0
+
+
+# --------------------------------------------------------------------------- #
+# Offline rendering: draw one frame to plain text, no terminal.
+# --------------------------------------------------------------------------- #
+class TextScreen:
+    """A minimal offline stand-in for a curses window: records ``addstr`` into a
+    character grid so ``Chat.draw`` can render to plain text without a terminal.
+    Attributes (colour/bold) are dropped; only geometry and characters matter.
+    """
+
+    def __init__(self, h: int, w: int) -> None:
+        self._h = h
+        self._w = w
+        self._grid = [[" "] * w for _ in range(h)]
+
+    def getmaxyx(self) -> tuple[int, int]:
+        return self._h, self._w
+
+    def erase(self) -> None:
+        self._grid = [[" "] * self._w for _ in range(self._h)]
+
+    def move(self, y: int, x: int) -> None:
+        # Cursor positioning has no meaning for a static text render.
+        _ = (y, x)
+
+    def refresh(self) -> None:
+        # No device to flush to; the grid is read directly by render().
+        return
+
+    def addstr(self, y: int, x: int, text: str, attr: int = 0) -> None:
+        if not (0 <= y < self._h):
+            raise curses.error
+        row = self._grid[y]
+        for i, ch in enumerate(text):
+            col = x + i
+            if not (0 <= col < self._w):
+                raise curses.error  # off the edge; _put swallows it, keeping what fit
+            row[col] = ch
+
+    def render(self) -> str:
+        return "\n".join("".join(r).rstrip() for r in self._grid)
+
+
+def snapshot(*, topic: str | None = None, tail: int = 50, size: tuple[int, int] = (24, 100)) -> str:
+    """Render one frame of the bus to plain text at ``size`` = (rows, cols), with
+    no terminal. Builds a headless Chat against the live DB (honouring
+    CABILDO_HOME) and draws it once -- for previewing and snapshot-testing the
+    layout.
+    """
+    h, w = size
+    scr = TextScreen(h, w)
+    chat = Chat(scr, topic=topic, tail=tail)
+    chat._refresh_roster()
+    chat.draw()
+    return scr.render()

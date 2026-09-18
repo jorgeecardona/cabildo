@@ -189,6 +189,11 @@ def cmd_watch(args) -> int:
     # An unset -t falls back to [watch].topic from config (e.g. "project", this
     # repo's own channel), else all channels.
     topic = args.topic or config.watch_topic()
+    if getattr(args, "snapshot", False):
+        from . import tui
+
+        print(tui.snapshot(topic=topic, tail=args.tail, size=(args.rows, args.cols)))
+        return 0
     if sys.stdin.isatty() and sys.stdout.isatty() and not args.no_input:
         from . import tui
 
@@ -1673,6 +1678,13 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("-n", "--tail", type=int, default=50, help="backlog lines first")
     w.add_argument("--interval", type=float, default=1.0, help="poll seconds (tail mode)")
     w.add_argument("--no-input", action="store_true", help="plain tail even on a tty")
+    w.add_argument(
+        "--snapshot",
+        action="store_true",
+        help="render one frame of the TUI to plain text and exit (no terminal needed)",
+    )
+    w.add_argument("--rows", type=int, default=24, help="snapshot height (default: 24)")
+    w.add_argument("--cols", type=int, default=100, help="snapshot width (default: 100)")
     w.set_defaults(fn=cmd_watch)
 
     s = sub.add_parser("say", help="post to the bus as @jorge")
