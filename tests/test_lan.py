@@ -183,10 +183,11 @@ def test_tcp_pull_round_trip(home, tmp_path):
     )
     t.start()
     try:
-        rows, max_id = lan.pull_from_peer("127.0.0.1", port, "alpha", 0, None, "node-b")
+        rows, max_id, peer_node = lan.pull_from_peer("127.0.0.1", port, "alpha", 0, None, "node-b")
         assert len(rows) == 1
         assert rows[0]["body"] == "from A"
         assert max_id == rows[0]["id"]
+        assert peer_node == lan.node_id()  # the serving peer echoes its node id
 
         conn_b = _connect(tmp_path / "peer_b.db")
         try:
@@ -219,11 +220,12 @@ def test_tcp_pull_rejects_wrong_secret(home, tmp_path):
     )
     t.start()
     try:
-        rows, since = lan.pull_from_peer("127.0.0.1", port, "alpha", 0, "wrong", "node-b")
+        rows, since, node = lan.pull_from_peer("127.0.0.1", port, "alpha", 0, "wrong", "node-b")
         assert rows == []
         assert since == 0  # cursor holds on a refused pull
+        assert node is None  # a refused pull reports no peer node
 
-        ok_rows, _ = lan.pull_from_peer("127.0.0.1", port, "alpha", 0, "hunter2", "node-b")
+        ok_rows, _, _ = lan.pull_from_peer("127.0.0.1", port, "alpha", 0, "hunter2", "node-b")
         assert len(ok_rows) == 1
     finally:
         stop.set()

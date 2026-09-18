@@ -13,6 +13,20 @@ import threading
 from cabildo import lan, store, wan
 
 
+def _msg(guid: str, body: str) -> dict:
+    return {
+        "guid": guid,
+        "created_at": 1.0,
+        "from_session": "remote",
+        "from_handle": "r",
+        "topic": "general",
+        "to_session": None,
+        "project": None,
+        "body": body,
+        "urgent": 0,
+    }
+
+
 def test_merge_incoming_stamps_wan_origin(home):
     conn = store.connect()
     rows = [
@@ -53,7 +67,7 @@ def test_sync_round_merges_and_advances_cursor(home, monkeypatch):
     ]
 
     def fake_pull(host, port, project, since, secret, node):
-        return (canned, 42) if since == 0 else ([], since)
+        return (canned, 42, "peer-A") if since == 0 else ([], since, "peer-A")
 
     monkeypatch.setattr(lan, "pull_from_peer", fake_pull)
     peers = [wan.Peer("100.64.0.2", 48653)]
@@ -67,6 +81,34 @@ def test_sync_round_merges_and_advances_cursor(home, monkeypatch):
 
     # Cursor advanced to 42, so a second round pulls nothing new.
     assert wan.sync_round(peers, "proj", "tok")["merged"] == 0
+
+
+def test_sync_round_repulls_when_the_peer_node_changes(home, monkeypatch):
+    # A peer whose DB reset comes back with a new node id and ids restarted at 1.
+    # The stale cursor sits above them; the fix must notice the new node and
+    # re-pull from 0 instead of stalling forever (finding #2).
+    gen_a = [_msg("a1", "from gen A")]
+    gen_b = [_msg("b1", "from gen B (after reset)")]
+    state = {"node": "A"}
+
+    def fake_pull(host, port, project, since, secret, node):
+        if state["node"] == "A":
+            return (gen_a, 9, "A") if since == 0 else ([], since, "A")
+        # After the reset (node B), the message only comes back on a from-zero pull.
+        return (gen_b, 3, "B") if since == 0 else ([], since, "B")
+
+    monkeypatch.setattr(lan, "pull_from_peer", fake_pull)
+    peers = [wan.Peer("box", 48653)]
+
+    assert wan.sync_round(peers, "proj", None)["merged"] == 1  # gen A synced, cursor -> 9
+    state["node"] = "B"  # the box was reinstalled at the same address
+    assert wan.sync_round(peers, "proj", None)["merged"] == 1  # noticed reset, re-pulled
+
+    conn = store.connect()
+    origins = {r["guid"]: r["origin"] for r in conn.execute("SELECT guid, origin FROM messages")}
+    conn.close()
+    assert origins.get("a1") == "wan"
+    assert origins.get("b1") == "wan"
 
 
 def test_serve_and_pull_over_socket_with_token(home):
@@ -83,10 +125,10 @@ def test_serve_and_pull_over_socket_with_token(home):
     t = threading.Thread(target=wan.serve, args=(sock, "demo", "s3cret", stop), daemon=True)
     t.start()
     try:
-        rows, _ = lan.pull_from_peer("127.0.0.1", port, "demo", 0, "s3cret", "nodeB")
+        rows, _, _ = lan.pull_from_peer("127.0.0.1", port, "demo", 0, "s3cret", "nodeB")
         assert "wire msg" in [r["body"] for r in rows]
         # A wrong token is refused, so the puller gets nothing.
-        bad, _ = lan.pull_from_peer("127.0.0.1", port, "demo", 0, "wrong", "nodeB")
+        bad, _, _ = lan.pull_from_peer("127.0.0.1", port, "demo", 0, "wrong", "nodeB")
         assert bad == []
     finally:
         stop.set()
@@ -108,7 +150,7 @@ def test_run_single_round_pull_only_merges(home, monkeypatch):
             "urgent": 0,
         }
     ]
-    monkeypatch.setattr(lan, "pull_from_peer", lambda *_: (canned, 7))
+    monkeypatch.setattr(lan, "pull_from_peer", lambda *_: (canned, 7, "boxnode"))
     rc = wan.run(
         "proj",
         peers=["1.2.3.4:48653"],

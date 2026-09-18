@@ -13,7 +13,9 @@ differences are:
     authorization on top of the already-encrypted tunnel,
   * rows stamped ``origin='wan'`` so they are dedup-merged and, like ``'lan'``,
     kept off the cloud uplink,
-  * a per-peer cursor keyed by address, in ``wan_sync.json``.
+  * a per-peer cursor keyed by address but verified against the peer's node id, so
+    a peer that restarts its DB resets the cursor instead of stalling above the
+    peer's new ids, in ``wan_sync.json``.
 
 The transport stays stdlib (raw TCP + newline JSON, via lan). cabildo binds only
 to the address it is told to -- loopback for an SSH forward, the mesh IP for
@@ -58,7 +60,8 @@ def parse_peer(spec: str, *, default_port: int = lan.BEACON_PORT) -> Peer:
 
 
 # --------------------------------------------------------------------------- #
-# Per-peer cursor (own file, keyed by address; lan's is keyed by node id)
+# Per-peer cursor: keyed by address, but each entry also stores the peer's node id
+# so a peer restart is detected and the cursor reset (lan keys by node id directly).
 # --------------------------------------------------------------------------- #
 def _cursor_file() -> Path:
     return store.home() / "wan_sync.json"
@@ -127,11 +130,22 @@ def sync_round(
     pulled = merged = 0
     try:
         for p in peers:
-            since = int(pc.get(p.key, 0))
-            rows, max_id = lan.pull_from_peer(p.host, p.port, project, since, token, node)
+            raw = pc.get(p.key)
+            entry = raw if isinstance(raw, dict) else {"cursor": int(raw or 0), "node": None}
+            since = int(entry.get("cursor", 0))
+            rows, max_id, peer_node = lan.pull_from_peer(
+                p.host, p.port, project, since, token, node
+            )
+            # If the peer restarted its DB it comes back with a new node id, so our
+            # cursor now sits above the peer's restarted ids and would stall forever
+            # (finding #2). Detect the generation change and re-pull from the start.
+            if peer_node is not None and entry.get("node") not in (None, peer_node):
+                rows, max_id, peer_node = lan.pull_from_peer(
+                    p.host, p.port, project, 0, token, node
+                )
             if rows:
                 merged += lan.merge_incoming(conn, rows, origin=ORIGIN)
-            pc[p.key] = max_id
+            pc[p.key] = {"cursor": max_id, "node": peer_node or entry.get("node")}
             pulled += len(rows)
     finally:
         if own:

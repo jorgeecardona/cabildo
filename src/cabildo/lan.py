@@ -281,9 +281,12 @@ def run_server(
 
 def pull_from_peer(
     host: str, port: int, project: str, since: int, secret: str | None, node: str
-) -> tuple[list[dict[str, Any]], int]:
-    """Pull a peer's project rows newer than `since`. Returns (rows, max_id);
-    on any failure returns ([], since) so the cursor holds and we retry later.
+) -> tuple[list[dict[str, Any]], int, str | None]:
+    """Pull a peer's project rows newer than `since`. Returns
+    (rows, max_id, peer_node); on any failure returns ([], since, None) so the
+    cursor holds and we retry later. `peer_node` is the serving peer's node id
+    (handle_pull echoes it), which lets a caller detect a peer that restarted its
+    DB and reset the per-peer cursor rather than stall above the new ids.
     """
     try:
         with socket.create_connection((host, port), timeout=_CONN_TIMEOUT) as s:
@@ -301,10 +304,10 @@ def pull_from_peer(
             )
             resp = _recv_line(s)
     except OSError:
-        return [], since
+        return [], since, None
     if not resp or not resp.get("ok"):
-        return [], since
-    return resp.get("messages") or [], int(resp.get("max_id") or since)
+        return [], since, None
+    return resp.get("messages") or [], int(resp.get("max_id") or since), resp.get("node")
 
 
 def broadcast_once(node: str, port: int, project: str) -> None:
@@ -387,7 +390,9 @@ def sync_round(
             if not peer.port:
                 continue
             since = int(pc.get(peer.node, 0))
-            rows, max_id = pull_from_peer(peer.host, peer.port, project, since, secret, node)
+            # LAN already keys the cursor by the peer's node id (from discovery),
+            # so the returned node is not needed here.
+            rows, max_id, _ = pull_from_peer(peer.host, peer.port, project, since, secret, node)
             if rows:
                 merged += merge_incoming(conn, rows)
             pc[peer.node] = max_id
