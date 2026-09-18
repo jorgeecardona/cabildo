@@ -762,6 +762,37 @@ def cmd_lan(args) -> int:
     )
 
 
+def cmd_wan(args) -> int:
+    """Sync this project's bus with explicit remote peers over a tunnel — no cloud.
+
+    Peers, token, and bind address come from [remote] config unless overridden by
+    flags. Pulls each peer's messages into the local bus (deduped by guid, stamped
+    origin='wan' so they never leak up to the hosted mirror). One round by default;
+    --loop keeps serving + syncing. cabildo does not build the tunnel: point it at
+    addresses you can already reach (a VPN/mesh IP, or an SSH-forwarded localhost).
+    """
+    from . import config, wan
+    from .context import git_project
+
+    cwd = os.getcwd()
+    project = args.project or git_project(cwd)[1]
+    if not project:
+        print(f"{C.DIM}no project here; pass --project <name>{C.OFF}", file=sys.stderr)
+        return 2
+    peers = args.peer or config.remote_peers(cwd)
+    token = args.token or config.remote_token(cwd)
+    bind = args.bind or config.remote_bind(cwd)
+    interval = args.interval if args.interval is not None else config.remote_interval(cwd)
+    if not peers and not bind:
+        print(
+            f"{C.DIM}no peers or bind: pass --peer/--bind or set [remote] in "
+            f".cabildo/config.toml{C.OFF}",
+            file=sys.stderr,
+        )
+        return 2
+    return wan.run(project, peers=peers, token=token, bind=bind, interval=interval, loop=args.loop)
+
+
 def cmd_share(args) -> int:
     """Manage which projects may push their conversation content (your prompts +
     Claude's replies) to the hosted dashboard. Opt-in per project: everything
@@ -1737,6 +1768,30 @@ def main(argv: list[str] | None = None) -> int:
         "--secret", help="shared secret both peers must present (default: open on the LAN)"
     )
     ln.set_defaults(fn=cmd_lan)
+
+    wn = sub.add_parser(
+        "wan", help="sync this bus with explicit remote peers over a tunnel (no cloud)"
+    )
+    wn.add_argument(
+        "-l", "--loop", action="store_true", help="keep serving + syncing (default: one round)"
+    )
+    wn.add_argument(
+        "--interval",
+        type=float,
+        default=None,
+        help="loop seconds (default: [remote].interval or 30)",
+    )
+    wn.add_argument(
+        "--peer",
+        action="append",
+        help="remote host:port to pull (repeatable; default: [remote].peers)",
+    )
+    wn.add_argument(
+        "--bind", help="address to serve pulls on: host or host:port (default: [remote].bind)"
+    )
+    wn.add_argument("--token", help="shared bus token (default: [remote].token)")
+    wn.add_argument("--project", help="project to sync (default: the current git project)")
+    wn.set_defaults(fn=cmd_wan)
 
     sh = sub.add_parser(
         "share", help="opt a project's conversation content into the dashboard (default: list)"

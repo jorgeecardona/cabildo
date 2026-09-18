@@ -27,11 +27,12 @@ from __future__ import annotations
 import json
 import socket
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import lan, store
+from . import cloud, lan, store
 
 ORIGIN = "wan"
 
@@ -137,3 +138,50 @@ def sync_round(
             conn.close()
     _save_cursor(cur)
     return {"peers": len(peers), "pulled": pulled, "merged": merged}
+
+
+# --------------------------------------------------------------------------- #
+# Orchestration: serve + pull, one round or a loop (the `cabildo wan` command)
+# --------------------------------------------------------------------------- #
+def run(
+    project: str,
+    *,
+    peers: list[str],
+    token: str | None = None,
+    bind: str | None = None,
+    interval: float = 30.0,
+    loop: bool = False,
+) -> int:
+    """Serve this bus to explicit peers and pull from them over the tunnel.
+
+    ``peers`` are ``"host:port"`` strings; ``bind`` (``"host"`` or ``"host:port"``)
+    is the address to serve pulls on, or ``None`` for pull-only. One round by
+    default; ``loop`` keeps serving and syncing until interrupted.
+    """
+    peer_list = [parse_peer(p) for p in peers]
+    key = cloud.project_key(project)
+    stop = threading.Event()
+    srv: socket.socket | None = None
+    if bind:
+        pb = parse_peer(bind)
+        srv = open_server(pb.host, pb.port)
+        host, port = srv.getsockname()[:2]
+        threading.Thread(target=serve, args=(srv, project, token, stop), daemon=True).start()
+        print(f"cabildo wan: serving '{key}' on {host}:{port}" + (" (token set)" if token else ""))
+    else:
+        print(f"cabildo wan: pull-only for '{key}' from {len(peer_list)} peer(s)")
+    try:
+        while True:
+            r = sync_round(peer_list, project, token)
+            stamp = time.strftime("%H:%M:%S")
+            print(f"{stamp} {r['peers']} peer(s) · pulled {r['pulled']} · merged {r['merged']} new")
+            if not loop:
+                break
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        print("\nstopped")
+    finally:
+        stop.set()
+        if srv is not None:
+            srv.close()
+    return 0

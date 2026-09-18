@@ -92,3 +92,38 @@ def test_serve_and_pull_over_socket_with_token(home):
         stop.set()
         sock.close()
         t.join(timeout=5)
+
+
+def test_run_single_round_pull_only_merges(home, monkeypatch):
+    canned = [
+        {
+            "guid": "g5",
+            "created_at": 2.0,
+            "from_session": "remote",
+            "from_handle": "r",
+            "topic": "general",
+            "to_session": None,
+            "project": None,
+            "body": "from the box",
+            "urgent": 0,
+        }
+    ]
+    monkeypatch.setattr(lan, "pull_from_peer", lambda *_: (canned, 7))
+    rc = wan.run(
+        "proj",
+        peers=["1.2.3.4:48653"],
+        token="t",  # noqa: S106 - test token, not a real secret
+        bind=None,
+        interval=1,
+        loop=False,
+    )
+    assert rc == 0
+    conn = store.connect()
+    assert conn.execute("SELECT origin FROM messages WHERE guid='g5'").fetchone()["origin"] == "wan"
+    conn.close()
+
+
+def test_run_serves_on_bind_and_returns(home):
+    # bind on an ephemeral loopback port, no peers: one round serves and returns.
+    rc = wan.run("proj", peers=[], token=None, bind="127.0.0.1:0", interval=1, loop=False)
+    assert rc == 0
