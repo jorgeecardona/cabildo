@@ -165,7 +165,23 @@ def test_run_single_round_pull_only_merges(home, monkeypatch):
     conn.close()
 
 
-def test_run_serves_on_bind_and_returns(home):
-    # bind on an ephemeral loopback port, no peers: one round serves and returns.
-    rc = wan.run("proj", peers=[], token=None, bind="127.0.0.1:0", interval=1, loop=False)
+def test_run_serves_on_bind_with_token_and_returns(home):
+    # loopback bind with a token: one round serves and returns cleanly.
+    tok = "s3cret"
+    rc = wan.run("proj", peers=[], token=tok, bind="127.0.0.1:0", interval=1, loop=False)
+    assert rc == 0
+
+
+def test_run_refuses_a_wildcard_bind(home):
+    # 0.0.0.0 is reachable off the tunnel; refused even with a token.
+    tok = "s3cret"
+    assert wan.run("proj", peers=[], token=tok, bind="0.0.0.0:0", loop=False) == 2
+
+
+def test_run_refuses_a_bind_without_a_token(home):
+    assert wan.run("proj", peers=[], token=None, bind="127.0.0.1:0", loop=False) == 2
+
+
+def test_run_insecure_override_allows_a_tokenless_bind(home):
+    rc = wan.run("proj", peers=[], token=None, bind="127.0.0.1:0", loop=False, allow_insecure=True)
     assert rc == 0

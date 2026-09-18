@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import socket
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -35,6 +36,9 @@ from pathlib import Path
 from typing import Any
 
 from . import cloud, lan, store
+
+# Addresses that expose the server beyond the intended tunnel/loopback interface.
+_WILDCARD_HOSTS = {"0.0.0.0", "::", "*", ""}  # noqa: S104
 
 ORIGIN = "wan"
 
@@ -157,6 +161,15 @@ def sync_round(
 # --------------------------------------------------------------------------- #
 # Orchestration: serve + pull, one round or a loop (the `cabildo wan` command)
 # --------------------------------------------------------------------------- #
+def _insecure_bind_reason(host: str, token: str | None) -> str | None:
+    """Why serving on ``host`` with ``token`` would be unauthenticated, or None."""
+    if host in _WILDCARD_HOSTS:
+        return f"refusing to bind the wildcard address {host!r} (reachable off the tunnel)"
+    if not token:
+        return "refusing to serve without a token (an unauthenticated bus)"
+    return None
+
+
 def run(
     project: str,
     *,
@@ -165,12 +178,18 @@ def run(
     bind: str | None = None,
     interval: float = 30.0,
     loop: bool = False,
+    allow_insecure: bool = False,
 ) -> int:
     """Serve this bus to explicit peers and pull from them over the tunnel.
 
     ``peers`` are ``"host:port"`` strings; ``bind`` (``"host"`` or ``"host:port"``)
     is the address to serve pulls on, or ``None`` for pull-only. One round by
     default; ``loop`` keeps serving and syncing until interrupted.
+
+    Serving is refused (returns 2) when it would be reachable without
+    authentication -- a wildcard bind (``0.0.0.0``/``::``) or a bind with no token
+    -- unless ``allow_insecure`` is set. cabildo is meant to sit behind a tunnel;
+    an open, tokenless server on a public interface leaks the project's messages.
     """
     peer_list = [parse_peer(p) for p in peers]
     key = cloud.project_key(project)
@@ -178,6 +197,14 @@ def run(
     srv: socket.socket | None = None
     if bind:
         pb = parse_peer(bind)
+        refusal = _insecure_bind_reason(pb.host, token)
+        if refusal and not allow_insecure:
+            print(
+                f"cabildo wan: {refusal}. Bind a specific tunnel/loopback address "
+                "and set a token, or pass --insecure to override.",
+                file=sys.stderr,
+            )
+            return 2
         srv = open_server(pb.host, pb.port)
         host, port = srv.getsockname()[:2]
         threading.Thread(target=serve, args=(srv, project, token, stop), daemon=True).start()

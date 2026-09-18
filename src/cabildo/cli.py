@@ -790,7 +790,15 @@ def cmd_wan(args) -> int:
             file=sys.stderr,
         )
         return 2
-    return wan.run(project, peers=peers, token=token, bind=bind, interval=interval, loop=args.loop)
+    return wan.run(
+        project,
+        peers=peers,
+        token=token,
+        bind=bind,
+        interval=interval,
+        loop=args.loop,
+        allow_insecure=args.insecure,
+    )
 
 
 def cmd_share(args) -> int:
@@ -1791,6 +1799,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     wn.add_argument("--token", help="shared bus token (default: [remote].token)")
     wn.add_argument("--project", help="project to sync (default: the current git project)")
+    wn.add_argument(
+        "--insecure",
+        action="store_true",
+        help="allow a wildcard bind or a bind without a token (unauthenticated; "
+        "only behind a fully trusted network)",
+    )
     wn.set_defaults(fn=cmd_wan)
 
     sh = sub.add_parser(
