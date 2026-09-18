@@ -1,0 +1,194 @@
+# Broker service and remote agents
+
+Status: draft (proposed). This document is the plan; the code lands phase by
+phase and each phase updates the checklist at the end.
+
+## Motivation
+
+Today every cabildo participant opens the shared SQLite database directly:
+`store.connect()` is called by each session's MCP subprocess, by every hook
+invocation, by the CLI, the TUI, and the daemon. This is deliberate and it is
+why the single-machine case needs no server: if two processes share a
+filesystem, they share a bus.
+
+Direct database access has one hard limit: a process on another machine cannot
+open the file. To let a cabildo agent run on a remote host (a cloud box you
+provision with terraform, libcloud, a GPU box, or any other means) and join your
+bus, the agent needs a network path to the bus, not a filehandle on it.
+
+The fix is to introduce a broker. One long-lived service owns the database; every
+other participant becomes a client that talks to the service over IPC. Local
+clients use a unix socket; a remote client reaches its own local service, and the
+services sync to each other over the network. Local and remote agents become
+symmetric: both are just clients of a service.
+
+## Current architecture
+
+```
+  ┌── session A ──┐   ┌── session B ──┐
+  │ mcp subprocess│   │ mcp subprocess│      hooks (short-lived processes)
+  │  store.connect│   │  store.connect│      cli / tui / daemon
+  └───────┬───────┘   └───────┬───────┘             │
+          └──────────┬────────┴───────────────┬─────┘
+                     ▼                         ▼
+              ┌──────────────────────────────────┐
+              │        one SQLite file (WAL)       │
+              └──────────────────────────────────┘
+```
+
+- `store.py` (1725 lines) is the data layer: schema, migrations, and every
+  query/mutation. `store.connect()` opens the file with `journal_mode=WAL`,
+  `busy_timeout=5000`, `foreign_keys=ON`.
+- ~60 `store.connect()` call sites across `mcp_server.py` (20+),
+  `hooks/*` and `codex_hooks.py` (short-lived), `cli.py`, `actions.py`, `tui.py`,
+  `lan.py`, `daemon.py`.
+- `daemon.py` is a single-threaded worker that drains the intents queue
+  (land / spawn / ask), one action at a time, plus periodic sweeps (reap dead
+  sessions, ingest opted-in transcripts, sample machine conditions). Started with
+  `cabildo service`. It is the natural home for the broker.
+- `lan.py` already syncs messages between machines on one subnet: UDP-broadcast
+  discovery, TCP pull, `guid` dedup, `origin='lan'` tagging, optional shared
+  `secret` on the pull handshake, no transport encryption. Stdlib only. It is the
+  basis for the WAN transport.
+
+## Goals and non-goals
+
+Goals:
+
+- A long-lived service that owns the database and serves the store surface over
+  local IPC.
+- MCP processes and hooks work as clients of that service.
+- A remote agent on another machine joins the bus over an authenticated network
+  transport and can run `request(action="spawn")` to launch a local agent
+  (claude / codex / opencode) on the remote host.
+
+Non-goals:
+
+- Provisioning or starting machines. cabildo assumes the remote box already
+  exists and can run `cabildo`; how it was started (terraform, libcloud, a
+  console, a script) is out of scope.
+- Replacing the zero-server default. The broker is **opt-in**. When no service is
+  running, clients fall back to opening the database directly, exactly as today.
+  The README promise ("no daemon, no network" for the single-machine case) holds.
+
+## Design
+
+### The Bus seam
+
+Introduce one interface that every current `store.connect()` call site goes
+through, so there is a single place that decides "direct SQLite" vs "talk to the
+broker":
+
+```
+class Bus(Protocol):
+    def call(self, op: str, **params) -> Any: ...
+```
+
+- `LocalBus`: wraps `store.connect()` and dispatches `op` to the matching
+  `store` function. Behaviour identical to today.
+- `SocketBus`: encodes the call as a request to the service over a unix socket
+  and returns the decoded response.
+
+Selection: use `SocketBus` when a service socket is present and reachable,
+otherwise `LocalBus`. This keeps the single-machine, no-service path working and
+makes the broker an optimisation/enabler rather than a hard dependency.
+
+### Local IPC
+
+- Transport: a unix domain socket at `store.home()/bus.sock` (a bound TCP port on
+  loopback is the fallback where unix sockets are unavailable).
+- Framing: length-prefixed or newline-delimited JSON. One request → one
+  response. Stdlib only (`socket`, `json`), matching the rest of the package.
+- Surface: the broker exposes the subset of `store` functions that clients call
+  today (the writes and reads enumerated during phase 1). No generic "run this
+  SQL" op ever, for the same reason `actions.py` has no generic "run this
+  command": a named op the caller cannot forge is the boundary.
+- Auth (local): filesystem permissions. The socket is created mode 0600, owned by
+  the user; only that user's processes can connect. No token needed on the local
+  socket.
+- Concurrency: the broker serialises writes through the existing single-threaded
+  daemon, which removes SQLite multi-writer contention (the `busy_timeout` waits)
+  entirely.
+
+### WAN transport
+
+Services, not agents, sync across machines. Each host runs one service; a remote
+service is a peer.
+
+- Reach: the meshing (tunnel, encryption, device identity) is handled by
+  WireGuard / Tailscale. Each box gets a stable, encrypted address on the mesh;
+  Tailscale supplies OIDC-based device auth and ACLs. cabildo does not implement
+  its own tunnel or NAT traversal.
+- Sync: reuse `lan.py`'s pull model and `guid` dedup, but with **explicit peer
+  addresses** (from config) instead of UDP broadcast discovery, since broadcast
+  does not cross subnets. Pulled rows are stamped `origin='wan'` (kept out of the
+  cloud uplink, like `origin='lan'`).
+- Auth (v1): a shared bus token proves membership on the pull handshake (the
+  `secret` hook `lan.py` already has). It rides on top of the Tailscale mesh, so
+  the token is defence in depth, not the only wall.
+- Auth (later): per-agent signed rows. Each peer holds an ed25519 keypair, signs
+  every row it syncs, and the receiver verifies and records a verified identity.
+  This gives per-agent accountability even over an untrusted relay and can be
+  added without changing the transport.
+
+### Remote spawn
+
+- `request(action="spawn")` gains an optional `peer` (or `host`) parameter naming
+  the target service.
+- The intent syncs to the target service, whose daemon (already the single
+  serialisation point) runs the spawn locally and reports the outcome back over
+  the synced bus, exactly as a local spawn reports today.
+- The client on the remote host (claude / codex / opencode) is chosen from what
+  is installed there; the existing client-config abstraction already knows how to
+  launch each.
+
+## Security and trust
+
+Opening the bus to a remote machine that can `spawn` is a remote-code-execution
+channel by design. The network edge becomes a real trust boundary, which the
+single-machine model never needed. Rules:
+
+- Remote spawn is off by default and enabled per peer, the same shape as the
+  daemon's existing `--allow-push` / `--allow-spawn` gates (for example
+  `--allow-remote-spawn <peer>`).
+- The local unix socket is user-only (mode 0600); the WAN transport requires the
+  shared token and rides the Tailscale mesh.
+- `SECURITY.md`'s trust model is updated: with a WAN peer connected, "anyone who
+  can open the database is trusted" no longer holds, and the token plus the mesh
+  identity are what gate a peer.
+
+## Phased plan
+
+Each phase keeps `make check` green and lands as its own commit. No push.
+
+- [ ] **Phase 0 — this design doc.** Committed; nav updated.
+- [ ] **Phase 1 — the Bus seam.** Introduce the `Bus` interface and `LocalBus`,
+  route the current `store.connect()` call sites through it. No behaviour change;
+  `LocalBus` is direct SQLite. Enumerate the exact store op surface here.
+- [ ] **Phase 2 — the broker server.** Add a unix-socket server to the service
+  daemon that dispatches ops to `store`, plus `SocketBus`. Behind a flag; default
+  stays `LocalBus`.
+- [ ] **Phase 3 — clients prefer the socket.** MCP server and hooks select
+  `SocketBus` when the service socket is live, else fall back to `LocalBus`.
+- [ ] **Phase 4 — WAN sync.** Service-to-service pull over explicit peer
+  addresses with the shared token; `origin='wan'`; reuse guid dedup.
+- [ ] **Phase 5 — remote spawn.** `peer` param routing and per-peer gating.
+- [ ] **Phase 6 — polish.** Config wiring (`[remote]`, token), `cabildo doctor`
+  checks, `SECURITY.md` update, an end-to-end test of the remote-agent path.
+
+## Open questions
+
+- Socket framing: newline-delimited JSON vs a length prefix. Leaning
+  newline-delimited for debuggability, with a size cap.
+- Whether phase 3 should make the service auto-start on first client use, or stay
+  explicit (`cabildo service`). Auto-start is convenient but reintroduces a
+  daemon the user did not ask for; explicit is the safer default.
+- Whether the ed25519 signing (WAN auth "later") should land before opening
+  remote spawn to peers outside a fully trusted mesh.
+
+## Prior art
+
+Other MCP coordination buses run a single broker process that agents connect to,
+rather than sharing a database file: agent-bus-mcp, agent-comm, claude-peers-mcp.
+This design adopts the broker model for the cross-machine case while keeping the
+shared-file model as the zero-config local default.

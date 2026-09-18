@@ -48,4 +48,6 @@ plugins:
 
 nav:
   - Home: index.md
+  - Design:
+      - Broker service & remote agents: design/broker-service.md
   - Changelog: changelog.md
