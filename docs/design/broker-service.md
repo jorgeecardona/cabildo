@@ -84,14 +84,31 @@ class Bus(Protocol):
     def call(self, op: str, **params) -> Any: ...
 ```
 
-- `LocalBus`: wraps `store.connect()` and dispatches `op` to the matching
-  `store` function. Behaviour identical to today.
+- `LocalBus`: opens `store.connect()` and runs the op against `store`. Behaviour
+  identical to today.
 - `SocketBus`: encodes the call as a request to the service over a unix socket
   and returns the decoded response.
 
 Selection: use `SocketBus` when a service socket is present and reachable,
 otherwise `LocalBus`. This keeps the single-machine, no-service path working and
 makes the broker an optimisation/enabler rather than a hard dependency.
+
+The op surface is **per operation, not per `store` function.** Two findings from
+the code map force this:
+
+- **Transactions span multiple `store` calls.** `join_topic` is
+  `ensure_topic` + `subscribe` + one `conn.commit()`; `ensure_topic`,
+  `subscribe`, and `unsubscribe` do not self-commit on their own. A naive "one
+  RPC per store function" would split that transaction across round trips. So an
+  op like `join_topic` is one broker call that runs the whole transaction on the
+  owning side.
+- **Identity is caller-local.** `mcp_server._me` resolves "who am I" from the
+  calling process's environment (`CABILDO_TAG`, `CABILDO_SESSION_ID`,
+  `CABILDO_CLIENT`) and PID ancestry (`os.getppid`, `context.resolve_claude_pid`).
+  A broker in the daemon cannot see the client process's env or parent PID, so
+  every RPC carries an explicit identity envelope (tag / session-id / owner-pid /
+  client) and the broker resolves the session from that, not from its own
+  process. Resolution logic stays shared; only its inputs move onto the wire.
 
 ### Local IPC
 
@@ -162,12 +179,18 @@ single-machine model never needed. Rules:
 Each phase keeps `make check` green and lands as its own commit. No push.
 
 - [ ] **Phase 0 — this design doc.** Committed; nav updated.
-- [ ] **Phase 1 — the Bus seam.** Introduce the `Bus` interface and `LocalBus`,
-  route the current `store.connect()` call sites through it. No behaviour change;
-  `LocalBus` is direct SQLite. Enumerate the exact store op surface here.
+- [ ] **Phase 1 — the Bus seam.** Land `bus.py` additively: the `Bus` protocol,
+  the op surface (per operation, with an explicit identity envelope), and
+  `LocalBus` backed by `store`, with tests, touching no existing call site yet.
+  Start with the reads (no transaction caveat), then the self-committing writes,
+  then the multi-call transactional ops (`join_topic`/`leave_topic`). Migrate the
+  call sites to the seam only once the surface is proven, so each step stays green.
 - [ ] **Phase 2 — the broker server.** Add a unix-socket server to the service
-  daemon that dispatches ops to `store`, plus `SocketBus`. Behind a flag; default
-  stays `LocalBus`.
+  daemon that dispatches ops to `store`, plus `SocketBus`. The daemon is
+  single-threaded by design (the intents queue must serialise), and it already
+  holds one long-lived `store.connect()`; the listener runs on its own accept
+  thread and hands work to the owning side without breaking the serial-intents
+  invariant. Behind a flag; default stays `LocalBus`.
 - [ ] **Phase 3 — clients prefer the socket.** MCP server and hooks select
   `SocketBus` when the service socket is live, else fall back to `LocalBus`.
 - [ ] **Phase 4 — WAN sync.** Service-to-service pull over explicit peer
