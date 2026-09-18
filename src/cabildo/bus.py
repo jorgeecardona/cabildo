@@ -163,3 +163,88 @@ def _send(conn: sqlite3.Connection, ident: Identity, params: Mapping[str, Any]) 
         urgent=bool(params.get("urgent", False)),
     )
     return {"id": mid}
+
+
+@op("mark_read")
+def _mark_read(conn: sqlite3.Connection, ident: Identity, params: Mapping[str, Any]) -> Any:
+    ids = params.get("message_ids")
+    n = store.mark_read(
+        conn,
+        ident.session,
+        message_ids=list(ids) if ids is not None else None,
+        topic=params.get("topic"),
+        all_unread=bool(params.get("all_unread", False)),
+    )
+    return {"marked": n}
+
+
+@op("set_handle")
+def _set_handle(conn: sqlite3.Connection, ident: Identity, params: Mapping[str, Any]) -> Any:
+    handle = str(params["handle"])
+    store.set_handle(conn, ident.session, handle)
+    return {"ok": True, "handle": handle}
+
+
+@op("claim")
+def _claim(conn: sqlite3.Connection, ident: Identity, params: Mapping[str, Any]) -> Any:
+    return store.acquire_claim(
+        conn,
+        resource=str(params["resource"]),
+        holder_session=ident.session,
+        holder_handle=ident.handle,
+        project=ident.project,
+        ttl_seconds=float(params.get("ttl_seconds", 600)),
+        note=params.get("note"),
+    )
+
+
+@op("release")
+def _release(conn: sqlite3.Connection, ident: Identity, params: Mapping[str, Any]) -> Any:
+    resource = str(params["resource"])
+    ok = store.release_claim(conn, resource=resource, holder_session=ident.session)
+    return {"ok": ok, "resource": resource}
+
+
+# Transactional ops: several store calls under one commit, run whole on the owning
+# side. join_topic is ensure_topic + subscribe + commit (see mcp_server.join_topic).
+@op("join_topic")
+def _join_topic(conn: sqlite3.Connection, ident: Identity, params: Mapping[str, Any]) -> Any:
+    topic = str(params["topic"])
+    store.ensure_topic(conn, topic, created_by=ident.session)
+    store.subscribe(conn, ident.session, topic)
+    conn.commit()
+    return {"ok": True, "topic": topic}
+
+
+@op("leave_topic")
+def _leave_topic(conn: sqlite3.Connection, ident: Identity, params: Mapping[str, Any]) -> Any:
+    topic = str(params["topic"])
+    store.unsubscribe(conn, ident.session, topic)
+    conn.commit()
+    return {"ok": True, "topic": topic}
+
+
+@op("request")
+def _request(conn: sqlite3.Connection, ident: Identity, params: Mapping[str, Any]) -> Any:
+    from . import actions  # local: keeps bus import-light and avoids a cycle
+
+    action = str(params.get("action", ""))
+    if action not in actions.ACTIONS:
+        return {
+            "ok": False,
+            "error": f"unknown action {action!r}; allowed: {sorted(actions.ACTIONS)}",
+        }
+    # Strip caller-supplied identity keys, then stamp from the resolved identity:
+    # an agent must not be able to request in someone else's name.
+    raw = params.get("params") or {}
+    p = {k: v for k, v in raw.items() if not k.startswith("_")}
+    p |= {"_from_session": ident.session, "_from_handle": ident.handle, "_project": ident.project}
+    iid = store.request_intent(
+        conn,
+        from_session=ident.session,
+        from_handle=ident.handle,
+        project=ident.project,
+        action=action,
+        params=p,
+    )
+    return {"ok": True, "intent_id": iid, "status": "pending"}
