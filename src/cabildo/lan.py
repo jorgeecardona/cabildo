@@ -150,10 +150,11 @@ def select_outbound(
     return out, max_id
 
 
-def merge_incoming(conn, rows: list[dict[str, Any]]) -> int:
-    """Insert peer rows not already present (dedup by guid), stamped
-    origin='lan', keeping their original guid + created_at so identity and
-    ordering survive the hop. Returns the count newly inserted.
+def merge_incoming(conn, rows: list[dict[str, Any]], *, origin: str = "lan") -> int:
+    """Insert peer rows not already present (dedup by guid), stamped with
+    ``origin`` (``'lan'`` for the local wire, ``'wan'`` for a tunnelled peer),
+    keeping their original guid + created_at so identity and ordering survive the
+    hop. Returns the count newly inserted.
     """
     if not rows:
         return 0
@@ -174,14 +175,14 @@ def merge_incoming(conn, rows: list[dict[str, Any]]) -> int:
             continue  # exactly one of topic / to_session must be set; skip malformed
         store.post_message(
             conn,
-            from_session=r.get("from_session") or "lan:unknown",
+            from_session=r.get("from_session") or f"{origin}:unknown",
             from_handle=r.get("from_handle"),
             body=r.get("body") or "",
             topic=topic,
             to_session=to_session,
             project=r.get("project"),
             urgent=bool(r.get("urgent")),
-            origin="lan",
+            origin=origin,
             guid=g,
             created_at=r.get("created_at"),
         )
