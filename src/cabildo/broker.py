@@ -116,5 +116,5 @@ def serve(
 
 
 def socket_path() -> str:
-    """The default broker socket, beside the bus DB."""
-    return str(store.home() / "bus.sock")
+    """The default broker socket (shared with the client's selection logic)."""
+    return bus.default_socket_path()

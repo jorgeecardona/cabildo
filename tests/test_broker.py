@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from cabildo import broker, daemon, store
+from cabildo import broker, bus, daemon, store
 from cabildo.bus import BusError, Identity, LocalBus, SocketBus
 from tests.conftest import make_session
 
@@ -119,3 +119,27 @@ def test_daemon_serves_the_broker(home):
         stop.set()
         t.join(timeout=5)
     Path(addr).unlink(missing_ok=True)
+
+
+def test_default_bus_is_local_without_a_broker(home, monkeypatch):
+    monkeypatch.delenv("CABILDO_BROKER", raising=False)
+    monkeypatch.delenv("CABILDO_BROKER_SOCKET", raising=False)
+    assert isinstance(bus.default_bus(), LocalBus)
+
+
+def test_default_bus_uses_the_socket_when_a_broker_is_live(running_broker, monkeypatch):
+    monkeypatch.delenv("CABILDO_BROKER", raising=False)
+    monkeypatch.setenv("CABILDO_BROKER_SOCKET", running_broker)
+    assert isinstance(bus.default_bus(), SocketBus)
+
+
+def test_default_bus_off_switch_forces_local(running_broker, monkeypatch):
+    monkeypatch.setenv("CABILDO_BROKER_SOCKET", running_broker)
+    monkeypatch.setenv("CABILDO_BROKER", "0")
+    assert isinstance(bus.default_bus(), LocalBus)
+
+
+def test_socket_live_is_false_for_a_stale_socket_file(home, tmp_path):
+    stale = str(tmp_path / "stale.sock")
+    Path(stale).touch()  # a plain file where a socket used to be: exists but dead
+    assert bus._socket_live(stale) is False

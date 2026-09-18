@@ -234,6 +234,21 @@ Each phase keeps `make check` green and lands as its own commit. No push.
 - Whether the ed25519 signing (WAN auth "later") should land before opening
   remote spawn to peers outside a fully trusted mesh.
 
+## Why stdlib, not a message-queue library
+
+A message-queue library (ZeroMQ via pyzmq is the obvious one) would hand us
+ROUTER/DEALER for the broker, PUB/SUB for message fan-out instead of polling,
+`ipc://` and `tcp://` transports, and CurveZMQ for the encryption and peer
+authentication the WAN case wants. It is a genuinely good fit.
+
+It is still not adopted, for one reason: cabildo is stdlib-only at runtime (the
+sole runtime dependency is `mcp`), and pyzmq bundles a native library. That rule
+is worth keeping for a tool that installs into every agent's environment. The
+`Bus` seam is what makes the choice reversible: the wire transport lives entirely
+in `broker.py` and `SocketBus`, so swapping the hand-rolled unix-socket +
+newline-JSON layer for ZMQ later would touch those two places, not the call
+sites. Decision: stdlib for now, seam keeps the door open.
+
 ## Prior art
 
 Other MCP coordination buses run a single broker process that agents connect to,

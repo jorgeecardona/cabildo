@@ -22,6 +22,7 @@ operation runs on the owning side against one connection.
 from __future__ import annotations
 
 import json
+import os
 import socket
 import sqlite3
 from collections.abc import Callable, Mapping
@@ -185,6 +186,51 @@ class SocketBus:
                 str(err.get("message") or "broker error"), kind=str(err.get("type") or "error")
             )
         return resp.get("result")
+
+
+# --------------------------------------------------------------------------- #
+# Backend selection
+# --------------------------------------------------------------------------- #
+_BROKER_OFF = ("0", "off", "no", "false")
+
+
+def default_socket_path() -> str:
+    """The broker's unix socket, beside the bus DB, unless overridden by
+    ``CABILDO_BROKER_SOCKET``.
+    """
+    return os.environ.get("CABILDO_BROKER_SOCKET") or str(store.home() / "bus.sock")
+
+
+def _socket_live(path: str) -> bool:
+    """Is a broker actually listening on ``path``? A stale socket file left by a
+    crashed daemon exists but refuses connections, so probe rather than stat.
+    """
+    if not os.path.exists(path):
+        return False
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    probe.settimeout(0.25)
+    try:
+        probe.connect(path)
+    except OSError:
+        return False
+    else:
+        return True
+    finally:
+        probe.close()
+
+
+def default_bus() -> Bus:
+    """``SocketBus`` when a broker is live, else ``LocalBus``.
+
+    Opt-out and self-healing: with no broker running (the zero-service local
+    default), or ``CABILDO_BROKER`` set to a falsey value, a client just opens the
+    DB directly as it always has. When a broker is up, the client routes through
+    it -- the same selection a remote agent uses to reach its own local broker.
+    """
+    if os.environ.get("CABILDO_BROKER", "").strip().lower() in _BROKER_OFF:
+        return LocalBus()
+    path = default_socket_path()
+    return SocketBus(path) if _socket_live(path) else LocalBus()
 
 
 # --------------------------------------------------------------------------- #
