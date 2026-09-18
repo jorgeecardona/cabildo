@@ -204,3 +204,38 @@ def test_wheel_direction_maps_wheel_buttons():
     assert wheel_direction(down) == -1  # wheel down
     assert wheel_direction(getattr(curses, "BUTTON1_PRESSED", 0)) == 0  # a click is not a scroll
     assert wheel_direction(0) == 0
+
+
+# --------------------------------------------------------------------------- #
+# chat scroll offset — the return-to-live behaviour, without a terminal
+# --------------------------------------------------------------------------- #
+def test_scroll_up_enters_scrollback_and_pins():
+    from cabildo.tui import chat_scroll
+
+    # From live (offset 0, unpinned), one notch up goes into scrollback and pins.
+    assert chat_scroll(0, False, direction=1, step=3) == (3, True)
+    # A further notch up deepens the scrollback, still pinned.
+    assert chat_scroll(3, True, direction=1, step=3) == (6, True)
+
+
+def test_scroll_down_heads_to_live_and_unpins():
+    from cabildo.tui import chat_scroll
+
+    # Scrolling down clears the pin so arrivals stop fighting the descent.
+    assert chat_scroll(6, True, direction=-1, step=3) == (3, False)
+    # Down never runs past the live bottom (offset floored at 0).
+    assert chat_scroll(2, False, direction=-1, step=3) == (0, False)
+    assert chat_scroll(0, False, direction=-1, step=3) == (0, False)
+
+
+def test_arrivals_pin_while_reading_but_yield_after_scrolling_down():
+    from cabildo.tui import hold_offset
+
+    # Reading scrollback (pinned): a 4-row arrival bumps the offset so the same
+    # messages stay on screen.
+    assert hold_offset(6, True, 4) == 10
+    # Following live (offset 0): arrivals never create scrollback.
+    assert hold_offset(0, True, 4) == 0
+    # Heading to live (pin cleared by a downward scroll): arrivals don't push the
+    # offset back up, so the view can actually reach the bottom on a busy channel.
+    assert hold_offset(6, False, 4) == 6

@@ -127,6 +127,36 @@ def wheel_direction(bstate: int) -> int:
     return 0
 
 
+def chat_scroll(offset: int, pin: bool, direction: int, step: int) -> tuple[int, bool]:
+    """New (offset, pin) after a chat scroll. ``offset`` is rows up from the live
+    bottom (0 = following the tail); ``direction`` is +1 for up (older messages)
+    and -1 for down (toward live).
+
+    Scrolling up pins the view so a new arrival can't yank it (see hold_offset).
+    Scrolling down clears the pin: the user is heading back to live, so arrivals
+    are allowed to carry the view there instead of fighting each notch. Without
+    this, on a busy channel a single 3-row notch loses to a burst of arrivals and
+    the view can never reach the bottom -- the "can't get back to live" bug.
+
+    Pure, so the return-to-live behaviour is unit-tested without a terminal.
+    """
+    if direction > 0:
+        return offset + step, True
+    if direction < 0:
+        return max(0, offset - step), False
+    return offset, pin
+
+
+def hold_offset(offset: int, pin: bool, rows: int) -> int:
+    """New scrollback offset after ``rows`` new rows arrive at the bottom.
+
+    Pinned in scrollback (pin and offset>0), the offset grows with the arrival so
+    the same messages stay on screen. Once the user has scrolled down (pin
+    cleared) arrivals are free to slide the view toward live. Pure.
+    """
+    return offset + rows if (pin and offset) else offset
+
+
 class InputHistory:
     """Readline-style recall of the lines the human has submitted.
 
@@ -224,7 +254,8 @@ class Chat:
         self.agenda_lines: list[list] = []  # rendered agenda rows, refreshed while viewing it
         self.topics: list[str] = []  # channel names, for # completion; refreshed with the roster
         self.tab: dict | None = None  # active Tab-completion cycle, or None
-        self.offset = 0  # scrollback: rows up from the bottom
+        self.offset = 0  # scrollback: rows up from the bottom (0 = following live)
+        self.pin = False  # hold the scrollback position against arrivals; see chat_scroll
         self.last_id = 0
         self.roster: list = []
         self.claims: list = []
@@ -285,10 +316,11 @@ class Chat:
 
     def _append(self, m: dict) -> None:
         self.msgs.append(m)
-        self.lines.extend(self._wrap(m, self._pane_width()))
-        if self.offset:
-            # Reading scrollback: don't let new arrivals yank the view.
-            self.offset += len(self._wrap(m, self._pane_width()))
+        wrapped = self._wrap(m, self._pane_width())
+        self.lines.extend(wrapped)
+        # Reading scrollback (pinned): hold the view against arrivals. After a
+        # downward scroll the pin is off, so arrivals carry the view toward live.
+        self.offset = hold_offset(self.offset, self.pin, len(wrapped))
 
     def _wrap(self, m: dict, width: int) -> list[list]:
         width = max(20, width)
@@ -485,6 +517,7 @@ class Chat:
         if kind == "agenda":
             self.view = "chat" if self.view == "agenda" else "agenda"
             self.offset = 0  # the two panes have different lengths
+            self.pin = False
             if self.view == "agenda":
                 self._refresh_agenda()
             return True
@@ -557,10 +590,12 @@ class Chat:
             # chat is bottom-anchored (up = more offset); the agenda is top-anchored
             # (up = less offset). End goes to the live/top edge either way.
             if self.view == "agenda":
-                up = not up
-            self.offset = max(0, self.offset + (step if up else -step))
+                self.offset = max(0, self.offset + (-step if up else step))
+            else:
+                self.offset, self.pin = chat_scroll(self.offset, self.pin, 1 if up else -1, step)
         elif ch == curses.KEY_END:
             self.offset = 0
+            self.pin = False
         elif ch == curses.KEY_MOUSE:
             self._wheel_scroll()
         elif ch == curses.KEY_RESIZE:
@@ -581,8 +616,9 @@ class Chat:
         # chat is bottom-anchored (wheel up = more offset = older messages); the
         # agenda is top-anchored, so invert, matching the PgUp/PgDn logic above.
         if self.view == "agenda":
-            d = -d
-        self.offset = max(0, self.offset + d * step)
+            self.offset = max(0, self.offset - d * step)
+        else:
+            self.offset, self.pin = chat_scroll(self.offset, self.pin, d, step)
 
     def run(self) -> int:
         self._refresh_roster()
