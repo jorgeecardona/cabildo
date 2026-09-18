@@ -201,34 +201,37 @@ reimplement them.
 
 ## Phased plan
 
-Each phase keeps `make check` green and lands as its own commit. No push.
+Each phase keeps `make check` green and lands as its own commit. No push. The
+foundation (phases 0-3a) is additive: nothing in the live hooks/MCP has changed.
+Two later steps are sensitive and gated on an explicit go-ahead: **3b** touches
+the tooling running the current session, and **5** is the remote-code-execution
+surface. Current order: 4 next, then 3b and 5 once reviewed.
 
-- [ ] **Phase 0 — this design doc.** Committed; nav updated.
-- [ ] **Phase 1 — the Bus seam.** Land `bus.py` additively: the `Bus` protocol,
-  the op surface (per operation, with an explicit identity envelope), and
-  `LocalBus` backed by `store`, with tests, touching no existing call site yet.
-  Start with the reads (no transaction caveat), then the self-committing writes,
-  then the multi-call transactional ops (`join_topic`/`leave_topic`). Migrate the
-  call sites to the seam only once the surface is proven, so each step stays green.
-- [ ] **Phase 2 — the broker server.** Add a unix-socket server to the service
-  daemon that dispatches ops to `store`, plus `SocketBus`. The daemon is
-  single-threaded by design (the intents queue must serialise), and it already
-  holds one long-lived `store.connect()`; the listener runs on its own accept
-  thread and hands work to the owning side without breaking the serial-intents
-  invariant. Behind a flag; default stays `LocalBus`.
-- [ ] **Phase 3 — clients prefer the socket.** MCP server and hooks select
-  `SocketBus` when the service socket is live, else fall back to `LocalBus`.
-- [ ] **Phase 4 — WAN sync.** Service-to-service pull over explicit peer
-  addresses with the shared token; `origin='wan'`; reuse guid dedup.
-- [ ] **Phase 5 — remote spawn.** `peer` param routing and per-peer gating.
+- [x] **Phase 0 — this design doc.** Committed; nav updated.
+- [x] **Phase 1 — the Bus seam.** `bus.py`: `Bus` protocol, the op surface (per
+  operation, explicit identity envelope), `LocalBus`, reads + writes +
+  transactional ops, tested. Additive; no call site routes through it yet.
+- [x] **Phase 2 — the broker server.** `broker.serve` (unix socket, one owned
+  connection under a lock) + `SocketBus`; the daemon serves it on its own thread
+  unless `--no-broker`/`--once`. Tested, including a daemon integration test.
+- [x] **Phase 3a — client selection.** `bus.default_bus()` picks `SocketBus` when
+  a broker is live (probed), else `LocalBus`; `CABILDO_BROKER=0` forces local.
+- [ ] **Phase 4 — WAN sync (next).** Service-to-service pull over explicit peer
+  addresses with the shared token; `origin='wan'`; reuse `lan.py`'s guid dedup.
+  Additive, no live-tooling change.
+- [ ] **Phase 3b — migrate the hot path (gated).** Route the MCP tools + hooks
+  through `default_bus()`. Touches live tooling and must reproduce each tool's
+  full logic server-side, so it waits for a go-ahead.
+- [ ] **Phase 5 — remote spawn (gated).** `peer` param routing and per-peer
+  gating. This is the remote-code-execution surface, so it waits for a go-ahead.
 - [ ] **Phase 6 — polish.** Config wiring (`[remote]`, token), `cabildo doctor`
   checks, `SECURITY.md` update, an end-to-end test of the remote-agent path.
 
 ## Open questions
 
-- Socket framing: newline-delimited JSON vs a length prefix. Leaning
-  newline-delimited for debuggability, with a size cap.
-- Whether phase 3 should make the service auto-start on first client use, or stay
+- Socket framing: **resolved** — newline-delimited JSON with a size cap
+  (`bus.MAX_LINE`), for debuggability.
+- Whether phase 3b should make the service auto-start on first client use, or stay
   explicit (`cabildo service`). Auto-start is convenient but reintroduces a
   daemon the user did not ask for; explicit is the safer default.
 - Whether the ed25519 signing (WAN auth "later") should land before opening
