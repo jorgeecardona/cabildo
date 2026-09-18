@@ -53,7 +53,15 @@ cabildo-hook = "cabildo.hooks.cli:main"
 cabildo-codex-hook = "cabildo.codex_hooks:main"
 
 [dependency-groups]
-dev = ["ruff>=0.6", "pyright>=1.1.390", "pytest>=8"]
+# musil is a dev-only model checker (dependency-free); the runtime stays stdlib-only.
+# It needs Python >=3.12, so it is conditional; the model tests importorskip it,
+# keeping cabildo's own 3.11 support intact.
+dev = [
+    "ruff>=0.6",
+    "pyright>=1.1.390",
+    "pytest>=8",
+    "musil>=0.35; python_version >= '3.12'",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

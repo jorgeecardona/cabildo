@@ -4,8 +4,10 @@ requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and sys_platform != 'win32'",
-    "python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'win32'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform != 'win32'",
 ]
 
 [[package]]
@@ -77,6 +79,7 @@ docs = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "musil", marker = "python_full_version >= '3.12'" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "ruff" },
@@ -92,6 +95,7 @@ provides-extras = ["docs"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "musil", marker = "python_full_version >= '3.12'", specifier = ">=0.35" },
     { name = "pyright", specifier = ">=1.1.390" },
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.6" },
@@ -724,6 +728,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/79/9b/9b4c96d6593b2a541e1cb8b34899a6d021d208bb357042823d4d2cabdbe7/mkdocs_material_extensions-1.3.1.tar.gz", hash = "sha256:10c9511cea88f568257f960358a467d12b970e1f7b2c0e5fb2bb48cab1928443", size = 11847, upload-time = "2023-11-22T19:09:45.208Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5b/54/662a4743aa81d9582ee9339d4ffa3c8fd40a4965e033d77b9da9774d3960/mkdocs_material_extensions-1.3.1-py3-none-any.whl", hash = "sha256:adff8b62700b25cb77b53358dad940f3ef973dd6db797907c49e3c2ef3ab4e31", size = 8728, upload-time = "2023-11-22T19:09:43.465Z" },
+]
+
+[[package]]
+name = "musil"
+version = "0.35.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/25/80/81ddfc14c213b6f282a6e0d183eca97727186c93b5a83e85f5417f10df12/musil-0.35.6.tar.gz", hash = "sha256:eb8e42916e3db2793f854d58297a06f41b9be75f2a572951186f0ec65b79ef2a", size = 374026, upload-time = "2026-09-02T15:16:06.243Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8e/e6/6b4203b77594e86dde0fcc1056a437e9158a78addad6b3feb26657967698/musil-0.35.6-py3-none-any.whl", hash = "sha256:9e5468e7adcafff02c2f9cbeaad56b1a0f52f80ad39cb306a6321a0d90f2b687", size = 186247, upload-time = "2026-09-02T15:16:07.436Z" },
 ]
 
 [[package]]
