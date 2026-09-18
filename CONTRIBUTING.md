@@ -7,6 +7,9 @@ state lives in one shared SQLite DB.
 AI coding agents: read [AGENTS.md](AGENTS.md) instead; it is the machine-facing
 version of this file.
 
+This project follows a [Code of Conduct](CODE_OF_CONDUCT.md). To report a
+security issue, see [SECURITY.md](SECURITY.md) rather than filing a public issue.
+
 ## Prerequisites
 
 The toolchain (moon, uv) is pinned in `.prototools`. Install it with
