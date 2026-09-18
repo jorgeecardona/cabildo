@@ -103,14 +103,6 @@ def test_cabildo_home_travels_when_set(linux, monkeypatch):
     assert "CABILDO_HOME" not in service.render(service.daemon_unit())
 
 
-def test_sync_unit_loops_and_keeps_the_token_out_of_the_unit(linux):
-    text = service.render(service.sync_unit(interval=30, base="https://example.test"))
-    assert "cabildo.cli sync --loop --interval 30" in text
-    assert "--base https://example.test" in text
-    assert "token" not in text.lower()  # it stays in cloud.json, mode 600
-    assert "RestartSec=30" in text  # back off harder than the daemon
-
-
 def test_quoting_survives_a_path_with_spaces(linux, monkeypatch):
     monkeypatch.setattr(service, "_python", lambda: "/home/a b/py")
     assert 'ExecStart="/home/a b/py" -m cabildo.daemon' in service.render(service.daemon_unit())
@@ -129,11 +121,10 @@ def test_install_writes_enables_and_restarts(units_home, monkeypatch):
         return subprocess.CompletedProcess(list(args), 0, "", "")
 
     monkeypatch.setattr(service, "systemctl", fake)
-    units = [service.daemon_unit(), service.sync_unit()]
+    units = [service.daemon_unit()]
     steps = service.install(units)
 
     assert (units_home / "cabildo-daemon.service").exists()
-    assert (units_home / "cabildo-sync.service").exists()
     assert all(rc == 0 for _, rc, _ in steps)
     assert calls[0] == ("daemon-reload",)
     # An already-running unit keeps the OLD ExecStart until restarted, so
@@ -174,17 +165,17 @@ def test_uninstall_stops_disables_and_deletes(units_home, monkeypatch):
 
 
 def test_a_hand_rolled_unit_is_not_clobbered(units_home):
-    """`cabildo-sync.service` is an obvious enough name that people already have
+    """`cabildo-daemon.service` is an obvious enough name that people already have
     one running something else — replacing its ExecStart silently would break a
     working setup with nothing to restore it from.
     """
     units_home.mkdir(parents=True)
-    mine = units_home / "cabildo-sync.service"
-    mine.write_text("[Service]\nExecStart=/usr/bin/python runner.py --sync\n")
+    mine = units_home / "cabildo-daemon.service"
+    mine.write_text("[Service]\nExecStart=/usr/bin/python runner.py --daemon\n")
 
-    unit = service.sync_unit()
+    unit = service.daemon_unit()
     assert service.foreign(unit) is True
-    assert service.exec_start_of(mine) == "/usr/bin/python runner.py --sync"
+    assert service.exec_start_of(mine) == "/usr/bin/python runner.py --daemon"
     with pytest.raises(FileExistsError):
         service.write_units([unit])
     assert "runner.py" in mine.read_text()  # untouched
@@ -204,10 +195,10 @@ def test_uninstall_leaves_a_foreign_unit_alone(units_home, monkeypatch):
         ),
     )
     units_home.mkdir(parents=True)
-    mine = units_home / "cabildo-sync.service"
-    mine.write_text("[Service]\nExecStart=/usr/bin/python runner.py --sync\n")
+    mine = units_home / "cabildo-daemon.service"
+    mine.write_text("[Service]\nExecStart=/usr/bin/python runner.py --daemon\n")
 
-    steps = service.uninstall([service.sync_unit()])
+    steps = service.uninstall([service.daemon_unit()])
     assert mine.exists()
     assert any(s[0].startswith("skip") for s in steps)
     assert not any(c[0] == "stop" for c in calls)
@@ -261,7 +252,6 @@ def test_darwin_naming_is_reverse_dns(darwin):
     unit = service.daemon_unit()
     assert unit.label == "com.cabildo.daemon"
     assert unit.name == "com.cabildo.daemon.plist"
-    assert service.sync_unit().label == "com.cabildo.sync"
 
 
 def test_darwin_unit_dir_is_launch_agents(agents_home):
@@ -330,16 +320,6 @@ def test_plist_cabildo_home_travels_when_set(darwin, monkeypatch):
     assert _plist(service.daemon_unit())["EnvironmentVariables"]["CABILDO_HOME"] == "/data/bus"
 
 
-def test_plist_sync_unit_loop_and_throttle(darwin):
-    data = _plist(service.sync_unit(interval=30, base="https://example.test"))
-    assert "cabildo.cli" in data["ProgramArguments"]
-    assert "--interval" in data["ProgramArguments"] and "30" in data["ProgramArguments"]
-    assert (
-        "--base" in data["ProgramArguments"] and "https://example.test" in data["ProgramArguments"]
-    )
-    assert data["ThrottleInterval"] == 30  # back off harder than the daemon, same as systemd
-
-
 # --- writing and driving launchd --------------------------------------------- #
 def test_launchd_install_writes_unloads_and_loads(agents_home, monkeypatch):
     calls = []
@@ -351,12 +331,11 @@ def test_launchd_install_writes_unloads_and_loads(agents_home, monkeypatch):
         return subprocess.CompletedProcess(list(args), 0, "", "")
 
     monkeypatch.setattr(service, "launchctl", fake)
-    units = [service.daemon_unit(), service.sync_unit()]
+    units = [service.daemon_unit()]
     steps = service.install(units)
 
     daemon_path = agents_home / "com.cabildo.daemon.plist"
-    sync_path = agents_home / "com.cabildo.sync.plist"
-    assert daemon_path.exists() and sync_path.exists()
+    assert daemon_path.exists()
     assert all(rc == 0 for _, rc, _ in steps)
     # Unloaded before loaded, so a currently-loaded copy can't keep running on
     # its old ProgramArguments.
@@ -393,19 +372,19 @@ def test_launchd_uninstall_unloads_and_deletes(agents_home, monkeypatch):
 
 def test_launchd_a_hand_rolled_plist_is_not_clobbered(agents_home):
     agents_home.mkdir(parents=True)
-    mine = agents_home / "com.cabildo.sync.plist"
+    mine = agents_home / "com.cabildo.daemon.plist"
     mine.write_bytes(
         plistlib.dumps(
             {
-                "Label": "com.cabildo.sync",
-                "ProgramArguments": ["/usr/bin/python3", "runner.py", "--sync"],
+                "Label": "com.cabildo.daemon",
+                "ProgramArguments": ["/usr/bin/python3", "runner.py", "--daemon"],
             }
         )
     )
 
-    unit = service.sync_unit()
+    unit = service.daemon_unit()
     assert service.foreign(unit) is True
-    assert service.exec_start_of(mine) == "/usr/bin/python3 runner.py --sync"
+    assert service.exec_start_of(mine) == "/usr/bin/python3 runner.py --daemon"
     with pytest.raises(FileExistsError):
         service.write_units([unit])
     assert b"runner.py" in mine.read_bytes()  # untouched
@@ -419,10 +398,10 @@ def test_launchd_uninstall_leaves_a_foreign_agent_alone(agents_home, monkeypatch
     calls = []
     monkeypatch.setattr(service, "launchctl", lambda *a, capture=True: calls.append(a))
     agents_home.mkdir(parents=True)
-    mine = agents_home / "com.cabildo.sync.plist"
-    mine.write_bytes(plistlib.dumps({"Label": "com.cabildo.sync"}))
+    mine = agents_home / "com.cabildo.daemon.plist"
+    mine.write_bytes(plistlib.dumps({"Label": "com.cabildo.daemon"}))
 
-    steps = service.uninstall([service.sync_unit()])
+    steps = service.uninstall([service.daemon_unit()])
     assert mine.exists()
     assert any(s[0].startswith("skip") for s in steps)
     assert not calls  # never touched launchctl for a foreign agent

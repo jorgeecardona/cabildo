@@ -1,14 +1,12 @@
-"""Push the local SQLite bus up to the hosted App Engine mirror.
+"""The local project registry and per-project visibility dials.
 
-The hosted dashboard only knows about agents/messages/locks that were reported to
-it; your local Claude sessions are invisible until something mirrors them. The
-`webapp/runner.py` daemon does this as part of its machine-registration loop;
-this module is the same one-way (local -> cloud) mirror exposed as `cabildo sync`
-so a human can push from any terminal without the full runner.
+`cloud.json` under ~/.cabildo is the writable store for this: which folders
+belong to which project, which projects may see each other on the local bus
+(peers), and a per-project `uplink` dial. Everything here is local: nothing in
+this module talks to the network. The `uplink` dial is currently inert (no
+transport reads it) but is kept in place so a later redesign can revisit it.
 
-Config comes from, in order: explicit args, environment (CABILDO_TOKEN /
-CABILDO_BASE), then ~/.cabildo/cloud.json ({"token": ..., "base": ...}) written
-once by `cabildo sync --set-token`. Stdlib only, like the rest of the package.
+Stdlib only, like the rest of the package.
 """
 
 from __future__ import annotations
@@ -17,18 +15,13 @@ import json
 import os
 import stat
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
 
-from . import store
-
-DEFAULT_BASE = "https://cabildo-503120.ew.r.appspot.com"
-
 
 # --------------------------------------------------------------------------- #
-# Config — a tiny 600-mode json file so the token never rides on argv/history.
+# Config — cloud.json under ~/.cabildo, a 600-mode json file that doubles as the
+# writable store for the project registry below.
 # --------------------------------------------------------------------------- #
 def config_path() -> Path:
     return Path(os.path.expanduser("~/.cabildo/cloud.json"))
@@ -39,29 +32,6 @@ def load_config() -> dict:
         return json.loads(config_path().read_text())
     except Exception:
         return {}
-
-
-def save_token(token: str, base: str | None = None) -> Path:
-    p = config_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    cfg = load_config()
-    cfg["token"] = token
-    cfg["base"] = base or cfg.get("base") or DEFAULT_BASE
-    p.write_text(json.dumps(cfg, indent=2))
-    os.chmod(p, stat.S_IRUSR | stat.S_IWUSR)  # 600 — it holds a secret
-    return p
-
-
-def resolve(token: str | None = None, base: str | None = None) -> tuple[str, str]:
-    """(base, token) from args > env > cloud.json; raises if no token anywhere."""
-    cfg = load_config()
-    token = token or os.environ.get("CABILDO_TOKEN") or cfg.get("token")
-    base = base or os.environ.get("CABILDO_BASE") or cfg.get("base") or DEFAULT_BASE
-    if not token:
-        raise RuntimeError(
-            "no cloud token — run `cabildo sync --set-token <token>` once, or set CABILDO_TOKEN"
-        )
-    return base.rstrip("/"), token
 
 
 # --------------------------------------------------------------------------- #
@@ -381,365 +351,20 @@ def message_project(topic: Any, project: Any = None) -> str | None:
     return None
 
 
-# ---- Backward-compatible content-allowlist shims (used by capture_turns and the
-# `cabildo share` shortcut, now expressed as uplink=='content'). --------------- #
+# ---- Content-allowlist helpers: the projects raised to uplink=='content'.
+# Inert for now (no transport reads the uplink dial); kept for the redesign. ---- #
 def shared_projects() -> list[str]:
-    """Projects whose uplink is 'content' — cleared to push conversation turns."""
+    """Projects whose uplink is 'content'."""
     return [n for n, e in _registry().items() if _norm(e.get("uplink")) == "content"]
 
 
 def add_shared_project(project: str) -> list[str]:
-    """`cabildo share <p>` — raise a project to content uplink."""
+    """Raise a project to content uplink."""
     set_uplink(project, "content")
     return shared_projects()
 
 
 def remove_shared_project(project: str) -> list[str]:
-    """`cabildo share <p> --remove` — drop content back to the default uplink."""
+    """Drop a project's content uplink back to the default."""
     set_uplink(project, default_uplink())
     return shared_projects()
-
-
-# --------------------------------------------------------------------------- #
-# HTTP
-# --------------------------------------------------------------------------- #
-def _api(base: str, token: str, method: str, path: str, body=None) -> dict | list:
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(base + path, data=data, method=method)
-    req.add_header("Authorization", f"Bearer {token}")
-    if data is not None:
-        req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            return json.loads(r.read() or "{}")
-    except urllib.error.HTTPError as e:
-        return {"ok": False, "error": f"HTTP {e.code}", "body": e.read().decode("utf-8", "replace")}
-    except Exception as e:
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
-
-
-# --------------------------------------------------------------------------- #
-# The mirror — active sessions, new messages (incremental), live claims.
-# --------------------------------------------------------------------------- #
-def _cursor_file() -> Path:
-    return store.db_path().parent / "cloud_sync.json"
-
-
-def _load_cursor() -> dict:
-    try:
-        return json.loads(_cursor_file().read_text())
-    except Exception:
-        return {"msg": 0, "out": 0}
-
-
-def _save_cursor(cur: dict) -> None:
-    try:
-        _cursor_file().write_text(json.dumps(cur))
-    except Exception:
-        pass
-
-
-def sync_once(base: str, token: str) -> dict:
-    """One pass: push active sessions, any new messages since the cursor, and
-    live claims. Reads the bus read-only; the cursor keeps message sync
-    incremental and restart-safe. Returns a small counts dict.
-    """
-    dbp = store.db_path()
-    if not dbp.exists():
-        return {"ok": False, "error": f"no local bus at {dbp}"}
-    import sqlite3
-
-    cur = _load_cursor()
-    now = time.time()
-    conn = sqlite3.connect(f"file:{dbp}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    try:
-        # Presence (uplink>=presence): a project's agents show up on the
-        # dashboard. Isolated projects (uplink=none) never appear at all.
-        agents = conn.execute(
-            "SELECT session_id, handle, project_name, cwd FROM sessions "
-            "WHERE status='active' AND last_seen_at>=?",
-            (now - 1800,),
-        ).fetchall()
-        agents = [a for a in agents if uplink_allows(a["project_name"], "presence")]
-        for a in agents:
-            _api(
-                base,
-                token,
-                "POST",
-                "/api/agents",
-                {
-                    "session_id": a["session_id"],
-                    "handle": a["handle"],
-                    "project": a["project_name"],
-                    "cwd": a["cwd"],
-                },
-            )
-
-        # Message bodies (uplink>=messages). Anything the downlink injected is
-        # already in the cloud; mirroring it back up would duplicate it forever.
-        has_origin = any(r["name"] == "origin" for r in conn.execute("PRAGMA table_info(messages)"))
-        has_proj = any(r["name"] == "project" for r in conn.execute("PRAGMA table_info(messages)"))
-        # Skip anything not born here: 'cloud' rows came down the downlink (echoing
-        # them up duplicates forever), and 'lan'/'wan' rows came from a peer over a
-        # local or tunnelled transport — those must never silently escape to the
-        # hosted mirror (that is the point of the local-only transports in
-        # lan.py / wan.py).
-        not_echo = (
-            " AND COALESCE(origin,'local') NOT IN ('cloud','lan','wan')" if has_origin else ""
-        )
-        proj_col = ", project" if has_proj else ""
-        msgs = conn.execute(
-            f"SELECT id, from_session, from_handle, topic, to_session, body, urgent"
-            f"{proj_col} FROM messages WHERE id>?{not_echo} ORDER BY id LIMIT 300",
-            (cur.get("msg", 0),),
-        ).fetchall()
-        pushed_msgs = 0
-        for m in msgs:
-            cur["msg"] = m["id"]  # advance regardless — skipped ones don't retry
-            mp = message_project(m["topic"], m["project"] if has_proj else None)
-            if not uplink_allows(mp, "messages"):
-                continue
-            _api(
-                base,
-                token,
-                "POST",
-                "/api/messages",
-                {
-                    "from_session": m["from_session"],
-                    "from_handle": m["from_handle"],
-                    "topic": m["topic"],
-                    "to_session": m["to_session"],
-                    "body": m["body"],
-                    "urgent": bool(m["urgent"]),
-                },
-            )
-            pushed_msgs += 1
-
-        # Locks (uplink>=presence): a coordination signal, not content.
-        claims = conn.execute(
-            "SELECT resource, holder_session, holder_handle, project, note, expires_at "
-            "FROM claims WHERE expires_at>?",
-            (now,),
-        ).fetchall()
-        claims = [c for c in claims if uplink_allows(c["project"], "presence")]
-        for c in claims:
-            _api(
-                base,
-                token,
-                "POST",
-                "/api/claims",
-                {
-                    "resource": c["resource"],
-                    "holder_session": c["holder_session"],
-                    "holder_handle": c["holder_handle"],
-                    "project": c["project"],
-                    "note": c["note"],
-                    "ttl_seconds": max(1, c["expires_at"] - now),
-                },
-            )
-
-        # Conversation capture (uplink==content) — only opted-in projects.
-        turns_pushed = capture_turns(base, token, cur, agents)
-    finally:
-        conn.close()
-
-    # Cost telemetry is derived from a full transcript scan, so throttle it to
-    # once every COST_EVERY seconds regardless of how often we mirror the bus.
-    cost_pushed = False
-    if now - cur.get("cost_at", 0) >= COST_EVERY:
-        try:
-            _api(base, token, "POST", "/api/cost", cost_snapshot())
-            cur["cost_at"] = now
-            cost_pushed = True
-        except Exception:
-            pass
-
-    _save_cursor(cur)
-    return {
-        "ok": True,
-        "agents": len(agents),
-        "messages": pushed_msgs,
-        "claims": len(claims),
-        "cost": cost_pushed,
-        "turns": turns_pushed,
-    }
-
-
-def drain_once(base: str, token: str) -> dict:
-    """The downlink: pull messages composed in the hosted dashboard into the
-    local bus, so a reply typed in the browser reaches the agent it addresses.
-
-    Rows land with origin='cloud' and `sync_once` skips those, which is what
-    stops the mirror from bouncing them back up as duplicates.
-    """
-    dbp = store.db_path()
-    if not dbp.exists():
-        return {"ok": False, "error": f"no local bus at {dbp}"}
-    cur = _load_cursor()
-    msgs = _api(base, token, "GET", f"/api/messages/outbound?since={cur.get('out', 0)}")
-    if not isinstance(msgs, list):
-        return {"ok": False, "error": str(msgs)[:200]}
-    conn = store.connect()  # opening through store runs the migration
-    n = skipped = 0
-    try:
-        for m in msgs:
-            topic, to_session = m.get("topic"), m.get("to_session")
-            cur["out"] = max(cur.get("out", 0), m.get("created") or 0)
-            if bool(topic) == bool(to_session):
-                skipped += 1  # exactly one of the two must be set
-                continue
-            project = topic[5:] if topic and topic.startswith("proj:") else None
-            store.post_message(
-                conn,
-                from_session=m.get("from_session") or "human:cloud",
-                from_handle=m.get("from_handle"),
-                body=m.get("body") or "",
-                topic=topic,
-                to_session=to_session,
-                project=project,
-                urgent=bool(m.get("urgent")),
-                origin="cloud",
-            )
-            n += 1
-    finally:
-        conn.close()
-    _save_cursor(cur)
-    return {"ok": True, "delivered": n, "skipped": skipped}
-
-
-# --------------------------------------------------------------------------- #
-# Conversation capture — ship allowlisted sessions' prompts + replies up.
-#
-# This is the private half of a session: what the human typed and what Claude
-# said back, distinct from the inter-agent bus messages. Only projects on the
-# allowlist are touched (see shared_projects). Transcripts are append-only, so a
-# per-session byte offset in cur["turns"] makes capture incremental and
-# restart-safe — we ship only what's new since last pass.
-# --------------------------------------------------------------------------- #
-def _transcript_path(root, session_id: str, cwd: str | None):
-    """Locate a session's transcript file. Claude names the directory after the
-    cwd (project_slug), so the precise path is root/<slug>/<sid>.jsonl; if the
-    session ran from a different cwd than we recorded, fall back to a recursive
-    glob for the id.
-    """
-    from .transcript import project_slug
-
-    if cwd:
-        precise = root / project_slug(cwd) / f"{session_id}.jsonl"
-        if precise.exists():
-            return precise
-    hits = list(root.glob(f"**/{session_id}.jsonl"))
-    return hits[0] if hits else None
-
-
-def capture_turns(base: str, token: str, cur: dict, agents, log=None) -> int:
-    """For each allowlisted active session, push conversation turns new since the
-    last byte offset and advance that offset. `agents` is the same session rows
-    sync_once already fetched (session_id, handle, project_name, cwd). Returns
-    the number of sessions that shipped at least one new turn.
-
-    Offsets live in cur["turns"][session_id]; on a push failure we leave the
-    offset unadvanced so the turns retry next pass rather than being lost.
-    """
-    from . import transcript
-
-    allow = set(shared_projects())
-    if not allow:
-        return 0
-    root = transcript.transcript_root()
-    offsets = cur.setdefault("turns", {})
-    pushed = 0
-    for a in agents:
-        project = (a["project_name"] or "").strip().lower()
-        if project not in allow:
-            continue
-        sid = a["session_id"]
-        path = _transcript_path(root, sid, a["cwd"])
-        if path is None:
-            continue
-        after = int(offsets.get(sid, 0))
-        turns, new_off = transcript.session_turns(path, after_bytes=after)
-        if not turns:
-            offsets[sid] = new_off  # nothing new, but keep any rotation reset
-            continue
-        resp = _api(
-            base,
-            token,
-            "POST",
-            "/api/turns",
-            {
-                "session_id": sid,
-                "handle": a["handle"],
-                "project": a["project_name"],
-                "cwd": a["cwd"],
-                "turns": turns,
-            },
-        )
-        if isinstance(resp, dict) and resp.get("ok") is False:
-            if log:
-                log(f"turns push failed for {sid[:8]}: {resp.get('error')}")
-            continue  # leave offset unadvanced — retry next pass
-        offsets[sid] = new_off
-        pushed += 1
-    return pushed
-
-
-COST_EVERY = 300  # seconds — recompute the (transcript-scanning) cost at most this often
-
-
-def cost_snapshot() -> dict:
-    """A compact version of `cabildo cost` for the hosted dashboard: context this
-    machine injects into sessions, hook latency per event, and the tokens agents
-    spend calling cabildo tools. Char->token is the same rough /4 as the CLI.
-    """
-    import socket
-
-    from . import transcript
-    from .transcript import CHARS_PER_TOKEN
-
-    conn = store.connect()
-    m = store.hook_metrics_summary(conn)
-    tr = transcript.scan()
-    t = m["total"]
-    injected_tok = (t["chars"] or 0) // CHARS_PER_TOKEN
-    return {
-        "machine": socket.gethostname(),
-        "injected": {
-            "chars": t["chars"] or 0,
-            "tokens": injected_tok,
-            "fires": t["fires"] or 0,
-            "sessions": t["sessions"] or 0,
-        },
-        "hooks": [
-            {
-                "event": e["event"],
-                "fires": e["fires"],
-                "injections": e["injections"],
-                "chars": e["chars"],
-                "avg_ms": round(e["avg_ms"] or 0, 1),
-                "total_s": round((e["total_ms"] or 0) / 1000, 1),
-            }
-            for e in m["per_event"]
-        ],
-        "traffic": {
-            "calls": tr["calls"],
-            "files": tr["files"],
-            "in_tok": tr["input_chars"] // CHARS_PER_TOKEN,
-            "out_tok": tr["output_chars"] // CHARS_PER_TOKEN,
-            "tokens_est": tr["tokens_est"],
-            "by_tool": sorted(
-                [
-                    {
-                        "tool": name.replace("mcp__cabildo__", ""),
-                        "calls": e["calls"],
-                        "in_tok": e["input_chars"] // CHARS_PER_TOKEN,
-                        "out_tok": e["output_chars"] // CHARS_PER_TOKEN,
-                    }
-                    for name, e in tr["by_tool"].items()
-                ],
-                key=lambda x: -(x["in_tok"] + x["out_tok"]),
-            )[:20],
-        },
-        "total_tok": injected_tok + tr["tokens_est"],
-    }

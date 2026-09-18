@@ -588,8 +588,8 @@ over TCP into its own `~/.cabildo/chat.db`. Both peers run both halves, so the
 sync is bidirectional; the serving side only ever reads its database — a peer
 never writes to another's bus directly. Messages carry a global `guid`, so a
 message that reaches you from two peers, or after a restart, merges once instead
-of duplicating. Pulled rows are stamped `origin='lan'`, which the `cabildo sync`
-uplink skips — a LAN peer's messages **never** escape to the hosted mirror.
+of duplicating. Pulled rows are stamped `origin='lan'`, marking them as arriving
+from a LAN peer rather than born on this machine.
 
 Single-machine SQLite stays the default; this is opt-in and only for the
 machines you run it on. Scope and honesty for this first version:
@@ -643,17 +643,16 @@ they're missing.
 
 ## Background services
 
-The daemon (intents queue + desktop notifications) and the cloud mirror want to
-outlive the terminal you started them in. `cabildo service` writes plain
-**systemd --user** units to `~/.config/systemd/user/`:
+The daemon (intents queue + desktop notifications) wants to outlive the terminal
+you started it in. `cabildo service` writes a plain **systemd --user** unit to
+`~/.config/systemd/user/`:
 
 ```bash
 cabildo service install --allow-push --allow-spawn   # the daemon
-cabildo service install --sync                       # + mirror to the dashboard
-cabildo service install --print                      # show the units, write nothing
+cabildo service install --print                      # show the unit, write nothing
 cabildo service                                      # status
-cabildo service logs -f                              # journalctl for both units
-cabildo service restart --unit daemon
+cabildo service logs -f                              # journalctl for the daemon
+cabildo service restart
 cabildo service uninstall
 ```
 
@@ -670,12 +669,10 @@ The daemon installs **dry-run** unless you pass `--allow-push` / `--allow-spawn`
 Services stop at logout unless you pass `--linger`.
 
 Every unit cabildo writes is stamped, and the installer **refuses to overwrite a
-unit file it didn't write** (it prints the existing `ExecStart` and stops).
-`cabildo-sync.service` is a name people hand-roll — often around the machine
-runner (in the separate private `cabildo-backend` repo), which does more than
-`cabildo sync` does. Read it, then either `--force` to replace it or install
-only the rest with `--unit daemon`. Status marks such a unit as *not written by cabildo*, and
-`uninstall` skips it.
+unit file it didn't write** (it prints the existing `ExecStart` and stops):
+`cabildo-daemon.service` is an obvious enough name that someone may already have
+one running something else. Read it, then `--force` to replace it. Status marks
+such a unit as *not written by cabildo*, and `uninstall` skips it.
 
 ## Config
 

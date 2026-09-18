@@ -22,7 +22,6 @@ is unaffected by whether any agent happens to be awake.
     python -m cabildo.cli conditions            # what the fleet is being told right now
     python -m cabildo.cli alert "CI is down"    # nudge every session on this machine
     python -m cabildo.cli cost -d 7 --rate 3    # what running cabildo cost you
-    python -m cabildo.cli sync                   # push your sessions to the hosted dashboard
     python -m cabildo.cli add -p paas .          # put this folder on the bus (name + .mcp.json)
     python -m cabildo.cli viewer                  # read-only web view of the local bus on localhost
     python -m cabildo.cli doctor                   # verify the install + flag platform gaps
@@ -693,56 +692,6 @@ def cmd_fleet(args) -> int:
     return 0
 
 
-# --------------------------------------------------------------------------- #
-# Cloud mirror
-# --------------------------------------------------------------------------- #
-def cmd_sync(args) -> int:
-    """Push this laptop's bus up to the hosted dashboard, and pull back anything
-    typed into it. Observability flows up; only human replies flow down.
-    """
-    from . import cloud
-
-    if args.set_token:
-        p = cloud.save_token(args.set_token, args.base)
-        print(f"{C.GREEN}saved{C.OFF} cloud token → {p}")
-        return 0
-    try:
-        base, token = cloud.resolve(base=args.base)
-    except RuntimeError as e:
-        print(f"{C.DIM}{e}{C.OFF}", file=sys.stderr)
-        return 2
-
-    def once() -> None:
-        r = cloud.sync_once(base, token)
-        if not r.get("ok"):
-            print(f"{C.DIM}sync failed: {r.get('error')}{C.OFF}", file=sys.stderr)
-            return
-        d = cloud.drain_once(base, token)
-        stamp = datetime.now().strftime("%H:%M:%S")
-        cost = f" · {C.DIM}+cost{C.OFF}" if r.get("cost") else ""
-        down = f" · {C.GREEN}{d['delivered']} in{C.OFF}" if d.get("delivered") else ""
-        print(
-            f"{C.DIM}{stamp}{C.OFF} {C.GREEN}synced{C.OFF} "
-            f"{r['agents']} agents · {r['messages']} new msgs · {r['claims']} locks{cost} "
-            f"→ {base}{down}"
-        )
-
-    if not args.loop:
-        once()
-        return 0
-    print(
-        f"{C.DIM}mirroring {store.db_path()} → {base} every {args.interval}s "
-        f"(Ctrl-C to stop){C.OFF}"
-    )
-    try:
-        while True:
-            once()
-            time.sleep(args.interval)
-    except KeyboardInterrupt:
-        print(f"\n{C.DIM}stopped{C.OFF}")
-    return 0
-
-
 def cmd_lan(args) -> int:
     """Share this project's bus with peers on the local network — no cloud.
 
@@ -804,40 +753,6 @@ def cmd_wan(args) -> int:
         loop=args.loop,
         allow_insecure=args.insecure,
     )
-
-
-def cmd_share(args) -> int:
-    """Manage which projects may push their conversation content (your prompts +
-    Claude's replies) to the hosted dashboard. Opt-in per project: everything
-    NOT listed here stays on this laptop. Personal 'second-brain' sessions must
-    never be added.
-    """
-    from . import cloud
-
-    if args.project:
-        project = args.project.strip().lower()
-        if args.remove:
-            now = cloud.remove_shared_project(project)
-            print(f"{C.YELLOW}unshared{C.OFF} {project}")
-        else:
-            now = cloud.add_shared_project(project)
-            print(
-                f"{C.GREEN}shared{C.OFF} {project} — its prompts + replies will "
-                f"now mirror to the dashboard"
-            )
-    else:
-        now = cloud.shared_projects()
-
-    if now:
-        print(
-            f"\n{C.BOLD}shared projects{C.OFF} "
-            f"{C.DIM}(conversation content pushed to the cloud):{C.OFF}"
-        )
-        for p in now:
-            print(f"  {C.CYAN}{p}{C.OFF}")
-    else:
-        print(f"{C.DIM}no projects shared — all conversation content stays local.{C.OFF}")
-    return 0
 
 
 def _known_projects() -> list[str]:
@@ -1418,42 +1333,32 @@ def cmd_issues(args) -> int:
 # Background services
 # --------------------------------------------------------------------------- #
 def _service_units(args):
-    """The units `install` should write: the daemon, plus the mirror if asked —
-    narrowed to one when --unit names it, which is how you install the rest
-    after refusing to overwrite a hand-rolled unit.
-    """
+    """The unit `install` should write: the daemon."""
     from . import service
 
-    units = []
-    if args.unit in (None, "daemon"):
-        units.append(
-            service.daemon_unit(
-                allow_push=args.allow_push,
-                allow_spawn=args.allow_spawn,
-                max_agents=args.max_agents,
-                max_depth=args.max_depth,
-                budget=args.budget,
-                budget_days=args.budget_days,
-                max_intent_age=args.max_intent_age,
-                notify=not args.no_notify,
-                save_messages=args.save_messages,
-            )
+    return [
+        service.daemon_unit(
+            allow_push=args.allow_push,
+            allow_spawn=args.allow_spawn,
+            max_agents=args.max_agents,
+            max_depth=args.max_depth,
+            budget=args.budget,
+            budget_days=args.budget_days,
+            max_intent_age=args.max_intent_age,
+            notify=not args.no_notify,
+            save_messages=args.save_messages,
         )
-    if args.sync or args.unit == "sync":
-        units.append(service.sync_unit(interval=args.sync_interval, base=args.base))
-    return units
+    ]
 
 
 def _service_selected(args):
-    """Which units a status/logs/restart/uninstall applies to: what --unit says,
-    else whatever is actually installed, else both shapes so status can report
-    'not installed' rather than nothing.
+    """Which unit a status/logs/restart/uninstall applies to: the daemon, whether
+    or not it is installed, so status can report 'not installed' rather than
+    nothing.
     """
     from . import service
 
-    units = [service.daemon_unit(), service.sync_unit()]
-    if args.unit:
-        units = [u for u in units if u.key == args.unit]
+    units = [service.daemon_unit()]
     installed = [u for u in units if u.path.exists()]
     return installed or units
 
@@ -1468,8 +1373,8 @@ def _print_steps(steps) -> int:
 
 
 def cmd_service(args) -> int:
-    """Install cabildo's long-lived pieces as systemd --user services, so the
-    daemon (and optionally the cloud mirror) survive closing the terminal.
+    """Install cabildo's daemon as a systemd --user service, so it survives
+    closing the terminal.
     """
     from . import service
 
@@ -1498,16 +1403,9 @@ def cmd_service(args) -> int:
                     f"  {u.path}\n    {C.DIM}ExecStart={service.exec_start_of(u.path)}{C.OFF}",
                     file=sys.stderr,
                 )
-            others = [u.key for u in units if u not in clash]
             print(
                 f"\n{C.DIM}that one is doing a job this installer may not do the same "
-                f"way — read it first. Then either --force to replace it, or "
-                f"install just the rest: {C.OFF}"
-                + (
-                    f"cabildo service install --unit {others[0]} ..."
-                    if others
-                    else "(nothing else to install)"
-                ),
+                f"way — read it first, then --force to replace it.{C.OFF}",
                 file=sys.stderr,
             )
             return 2
@@ -1578,7 +1476,7 @@ def cmd_service(args) -> int:
 
     print(f"{C.BOLD}cabildo services{C.OFF} {C.DIM}{sv.unit_dir()}{C.OFF}")
     any_installed = False
-    for u in (sv.daemon_unit(), sv.sync_unit()):
+    for u in (sv.daemon_unit(),):
         st = sv.status(u)
         if not st["installed"]:
             print(f"  {C.DIM}○ {u.name:<24} not installed{C.OFF}")
@@ -1602,11 +1500,7 @@ def cmd_service(args) -> int:
                 f"{C.DIM}— {sv.exec_start_of(u.path)}{C.OFF}"
             )
     if not any_installed:
-        print(
-            f"\n{C.DIM}nothing installed yet: "
-            f"{C.OFF}cabildo service install --allow-push{C.DIM} "
-            f"(add --sync to mirror to the dashboard){C.OFF}"
-        )
+        print(f"\n{C.DIM}nothing installed yet: {C.OFF}cabildo service install --allow-push{C.OFF}")
         return 0
     linger = sv.linger_enabled()
     if linger is False:
@@ -1766,15 +1660,6 @@ def main(argv: list[str] | None = None) -> int:
     co.add_argument("--rate", type=float, help="€ per 1M tokens, for a rough € estimate")
     co.set_defaults(fn=cmd_cost)
 
-    sy = sub.add_parser("sync", help="mirror this laptop's bus up to the hosted dashboard")
-    sy.add_argument("-l", "--loop", action="store_true", help="keep syncing (default: one pass)")
-    sy.add_argument("--interval", type=float, default=60.0, help="loop seconds (default: 60)")
-    sy.add_argument("--base", help="override the cloud URL")
-    sy.add_argument(
-        "--set-token", metavar="TOKEN", help="save a cloud token to ~/.cabildo/cloud.json and exit"
-    )
-    sy.set_defaults(fn=cmd_sync)
-
     ln = sub.add_parser("lan", help="share this bus with peers on the local network (no cloud)")
     ln.add_argument(
         "-l", "--loop", action="store_true", help="keep serving + syncing (default: one round)"
@@ -1818,15 +1703,6 @@ def main(argv: list[str] | None = None) -> int:
         "only behind a fully trusted network)",
     )
     wn.set_defaults(fn=cmd_wan)
-
-    sh = sub.add_parser(
-        "share", help="opt a project's conversation content into the dashboard (default: list)"
-    )
-    sh.add_argument(
-        "project", nargs="?", help="project to share; omit to list what's currently shared"
-    )
-    sh.add_argument("--remove", action="store_true", help="unshare instead of share")
-    sh.set_defaults(fn=cmd_share)
 
     pr = sub.add_parser(
         "project", help="list projects and set their dials: cloud uplink + local peer links"
@@ -1991,9 +1867,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     iss.set_defaults(fn=cmd_issues)
 
-    sv = sub.add_parser(
-        "service", help="run the daemon (and cloud sync) as systemd --user services"
-    )
+    sv = sub.add_parser("service", help="run the daemon as a systemd --user service")
     sv.add_argument(
         "action",
         nargs="?",
@@ -2001,16 +1875,6 @@ def main(argv: list[str] | None = None) -> int:
         choices=["install", "status", "logs", "start", "stop", "restart", "uninstall"],
         help="default: status",
     )
-    sv.add_argument(
-        "--sync", action="store_true", help="install: also run `cabildo sync --loop` as a service"
-    )
-    sv.add_argument(
-        "--sync-interval",
-        type=float,
-        default=60.0,
-        help="seconds between cloud syncs (default: 60)",
-    )
-    sv.add_argument("--base", help="override the cloud URL for the sync unit")
     sv.add_argument(
         "--allow-push", action="store_true", help="let the daemon actually push (default: dry run)"
     )
@@ -2054,7 +1918,6 @@ def main(argv: list[str] | None = None) -> int:
     sv.add_argument(
         "--no-start", action="store_true", help="install: enable at login but don't start now"
     )
-    sv.add_argument("--unit", choices=["daemon", "sync"], help="restrict the action to one unit")
     sv.add_argument(
         "--force", action="store_true", help="replace (or remove) a unit file cabildo didn't write"
     )

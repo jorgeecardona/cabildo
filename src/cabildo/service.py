@@ -8,15 +8,14 @@ system service would see none of that and would need a pile of
 `User=`/`Environment=` patching to pretend otherwise. `systemctl --user` (or a
 launchd LaunchAgent, its macOS equivalent) already runs as him, in his session.
 
-Two units, installed independently:
+One unit:
 
   cabildo-daemon   drains the intents queue (land, spawn) and pops desktop
                    notifications for messages addressed to you
-  cabildo-sync     mirrors this laptop's bus up to the hosted dashboard
 
-On Linux they're written to ~/.config/systemd/user/ as plain-text unit files;
-on macOS to ~/Library/LaunchAgents/ as plist agents. Either way: read them,
-edit them, delete them. Nothing here hides state anywhere else.
+On Linux it's written to ~/.config/systemd/user/ as a plain-text unit file;
+on macOS to ~/Library/LaunchAgents/ as a plist agent. Either way: read it,
+edit it, delete it. Nothing here hides state anywhere else.
 
 Two environment details make the difference between "works in my terminal" and
 "works as a service":
@@ -44,10 +43,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 DAEMON = "daemon"
-SYNC = "sync"
 
 # Stamped into every unit we write, and looked for before we overwrite one.
-# These names are obvious enough that a hand-rolled cabildo-sync.service is a
+# The name is obvious enough that a hand-rolled cabildo-daemon.service is a
 # thing people already have — silently replacing it with a different ExecStart
 # would break a working setup and leave no trace of what it used to run.
 MARKER = "# Written by `cabildo service install`."
@@ -61,7 +59,7 @@ class Unit:
     tool that drives it (`systemctl` vs `launchctl`) differ.
     """
 
-    key: str  # "daemon" | "sync"
+    key: str  # "daemon"
     description: str
     exec_start: list[str]
     restart_sec: int = 5
@@ -70,7 +68,7 @@ class Unit:
     @property
     def label(self) -> str:
         """Launchd's identifier — reverse-DNS by convention. Keyed the same as
-        the systemd unit name so 'daemon'/'sync' means the same job either way.
+        the systemd unit name so 'daemon' means the same job either way.
         """
         return f"com.cabildo.{self.key}"
 
@@ -202,25 +200,6 @@ def daemon_unit(
         description="cabildo daemon — drains the intents queue and notifies the human",
         exec_start=cmd,
         env=env,
-    )
-
-
-def sync_unit(*, interval: float = 60.0, base: str | None = None) -> Unit:
-    """The cloud mirror. The token stays in ~/.cabildo/cloud.json (mode 600) —
-    never on the unit's command line, where `systemctl cat` and the journal
-    would happily republish it.
-    """
-    cmd = [_python(), "-m", "cabildo.cli", "sync", "--loop", "--interval", f"{interval:g}"]
-    if base:
-        cmd += ["--base", base]
-    return Unit(
-        key=SYNC,
-        description="cabildo sync — mirrors this machine's bus to the hosted dashboard",
-        exec_start=cmd,
-        # A cloud that's down or a laptop that's offline is normal; back off
-        # harder than the daemon so a dead network doesn't spin the journal.
-        restart_sec=30,
-        env=_passthrough_env(),
     )
 
 
@@ -375,7 +354,7 @@ def write_units(units: list[Unit], *, force: bool = False) -> list[Path]:
     """Write (or overwrite) the unit files. Returns the paths written.
 
     Refuses to overwrite a unit file we didn't write unless forced: a
-    `cabildo-sync.service` you hand-rolled to run something else is a working
+    `cabildo-daemon.service` you hand-rolled to run something else is a working
     setup, and clobbering it would leave nothing to restore it from.
     """
     d = unit_dir()

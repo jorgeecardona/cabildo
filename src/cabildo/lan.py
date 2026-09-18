@@ -1,9 +1,8 @@
 """Peer-to-peer LAN sync: share a cabildo bus between machines on one network,
 with nothing leaving the local subnet.
 
-The default bus is a single machine's SQLite file. The only cross-machine path
-until now was `cabildo sync` to the hosted App Engine mirror — a cloud round
-trip. This module adds a second transport that keeps the traffic on the LAN:
+The default bus is a single machine's SQLite file. This module adds a
+cross-machine transport that keeps the traffic on the LAN:
 
   * discovery   — each peer periodically UDP-broadcasts a small beacon on the
                   local subnet (255.255.255.255, so it never routes off-LAN)
@@ -17,8 +16,6 @@ trip. This module adds a second transport that keeps the traffic on the LAN:
                   pulled row is inserted only if its guid is new, stamped
                   origin='lan', keeping the original guid + created_at so a
                   message that hops A->B->C keeps one identity and merges once.
-                  The App Engine uplink excludes origin='lan', so a LAN peer's
-                  messages never silently escape to the cloud — the whole point.
 
 Scope of this first increment: MESSAGES for one project. Presence and claim
 sync across the LAN, and encryption/authenticated pairing, are the follow-up
@@ -91,9 +88,9 @@ class Peer:
 # --------------------------------------------------------------------------- #
 # Per-peer cursor: the highest remote row-id we have consumed from each peer.
 # The peer's local `id` is monotonic on that peer, so "give me rows with id >
-# cursor" is a stable incremental read (the same shape cloud.sync_once uses),
-# and guid dedup covers the rest. Restart-safe: a lost cursor just re-pulls and
-# re-dedups by guid rather than double-inserting.
+# cursor" is a stable incremental read, and guid dedup covers the rest.
+# Restart-safe: a lost cursor just re-pulls and re-dedups by guid rather than
+# double-inserting.
 # --------------------------------------------------------------------------- #
 def _cursor_file() -> Path:
     return store.home() / "lan_sync.json"
@@ -128,10 +125,9 @@ def select_outbound(
     id scanned.
 
     The scanned-max is returned even for rows filtered out by project, so the
-    puller advances its cursor past them and never re-scans them — the same
-    per-row cursor advance cloud.sync_once relies on. Origin is not filtered:
-    a cloud reply or a message relayed from a third peer is served onward too,
-    and guid dedup keeps it single on the receiver.
+    puller advances its cursor past them and never re-scans them. Origin is not
+    filtered: a message relayed from a third peer is served onward too, and guid
+    dedup keeps it single on the receiver.
     """
     key = cloud.project_key(project)
     rows = conn.execute(

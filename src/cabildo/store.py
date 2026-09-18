@@ -124,19 +124,15 @@ CREATE TABLE IF NOT EXISTS messages (
     project       TEXT,
     body          TEXT NOT NULL,
     urgent        INTEGER NOT NULL DEFAULT 0,
-    -- 'local'  => born here; the cloud mirror pushes it up.
-    -- 'cloud'  => composed in the hosted dashboard and pulled down by the
-    --             runner. The uplink must skip these or it echoes them back up
-    --             as duplicates, forever.
-    -- 'lan'    => pulled from a peer over the LAN (see lan.py). Like 'cloud' it
-    --             is skipped by the uplink, so a LAN peer's messages never
-    --             silently escape to the hosted mirror.
+    -- 'local'  => born on this machine.
+    -- 'lan'    => pulled from a peer over the LAN (see lan.py).
+    -- 'wan'    => pulled from an explicit remote peer over a tunnel (see wan.py).
     origin        TEXT NOT NULL DEFAULT 'local',
     -- A globally-unique id minted at the row's birth, stable across machines.
     -- The autoincrement `id` is only meaningful on the machine that generated
-    -- it; `guid` is what lets two peers (or the cloud downlink) dedup the same
-    -- message instead of re-inserting it, so a message that hops A->B->C merges
-    -- once. Unique index lives in _migrate (added to existing rows there too).
+    -- it; `guid` is what lets two peers dedup the same message instead of
+    -- re-inserting it, so a message that hops A->B->C merges once. Unique index
+    -- lives in _migrate (added to existing rows there too).
     guid          TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_messages_topic ON messages(topic);
@@ -292,8 +288,7 @@ CREATE TABLE IF NOT EXISTS condition_deliveries (
 -- --save-messages AND the turn's project has [record] messages = true. `uuid` is
 -- the transcript entry's own id, so re-ingesting a file (rotation, overlap) is an
 -- INSERT OR IGNORE no-op. Only user/assistant text is stored; tool traffic and
--- hook/meta lines are dropped. Not part of the cloud uplink -- these rows stay on
--- the machine that recorded them.
+-- hook/meta lines are dropped. These rows stay on the machine that recorded them.
 CREATE TABLE IF NOT EXISTS transcript_messages (
     session_id    TEXT NOT NULL,
     uuid          TEXT NOT NULL,
@@ -868,8 +863,8 @@ def post_message(
     """Insert a message and return its local id.
 
     `guid` is the global identity; a fresh one is minted for a locally-born
-    message, but the cloud downlink and the LAN transport pass the original so
-    the same message is not re-inserted on another machine. Insert is idempotent
+    message, but the LAN and WAN transports pass the original so the same message
+    is not re-inserted on another machine. Insert is idempotent
     by guid (ON CONFLICT DO NOTHING) — a second post of the same guid returns the
     existing row's id instead of a duplicate. `created_at` is likewise preserved
     across a hop so ordering and merge stay consistent everywhere.
