@@ -30,6 +30,9 @@ GATE_TIMEOUT = 1800
 # Repo-owned, not requester-supplied. The agent asking to land does not get to
 # choose the thing that judges it.
 GATE_PATH = ".cabildo/gate.sh"
+# Optional repo-owned env setup, run after rebase and before the gate so a fresh
+# worktree is provisioned before it is judged (issue #18). Idempotent by contract.
+PROVISION_PATH = ".cabildo/provision.sh"
 
 # Worktrees live beside the repo, never inside it: a worktree under the repo
 # shows up in its own status and gets swept into someone's `git add`, which is
@@ -290,6 +293,27 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
             "HEAD — refusing to push work that isn't actually rebased.",
             steps,
         )
+
+    # 3.5 Provision (optional, repo-owned). Runs AFTER the rebase and BEFORE the
+    #    gate, so a fresh worktree has its environment (deps, venv, node_modules)
+    #    before it is judged. A failure here is reported as PROVISIONING, not a gate
+    #    failure — a missing `.venv`/`node_modules` is an env problem, not a broken
+    #    change, and conflating them costs a whole land cycle chasing the wrong
+    #    thing (issue #18). Should be idempotent; it re-runs on every land, which is
+    #    also how a rebase that pulled in a new package is picked up.
+    provision = os.path.join(root, PROVISION_PATH)
+    if os.path.exists(provision):
+        if not os.access(provision, os.X_OK):
+            return _fail(f"{PROVISION_PATH} exists but is not executable — refusing to land", steps)
+        ctx.log(f"  running provision {PROVISION_PATH} (timeout {GATE_TIMEOUT}s)")
+        rc, out = run([provision], root, timeout=GATE_TIMEOUT)
+        steps.append({"step": "provision", "rc": rc, "out": out[-4000:]})
+        if rc != 0:
+            return _fail(
+                f"provisioning failed (rc={rc}) — not gating or pushing. This is an "
+                f"environment/setup failure in {PROVISION_PATH}, not your change:\n{out[-2000:]}",
+                steps,
+            )
 
     # 4. Gate. Repo-owned. A gate that cannot run must FAIL, not skip: a gate
     #    that skips silently is worse than no gate, because it grants confidence

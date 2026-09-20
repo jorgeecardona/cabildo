@@ -143,6 +143,38 @@ def test_dry_run_land_reports_dry_run_and_pushes_nothing(repo, home):
     assert not on_remote(origin, sha), "a dry run must push nothing"
 
 
+def _add_provision(work, script):
+    d = work / ".cabildo"
+    d.mkdir(exist_ok=True)
+    p = d / "provision.sh"
+    p.write_text(script)
+    p.chmod(0o755)
+
+
+def test_failing_provision_is_reported_as_provisioning_not_gate(repo, home):
+    """Issue #18: a fresh worktree's missing env is a provisioning failure, not a
+    broken change, and must not read as a gate failure.
+    """
+    origin, work, sha = repo
+    _add_provision(work, "#!/bin/bash\necho 'no .venv here' >&2\nexit 3\n")
+    res = land(work)
+    assert res["ok"] is False and not res["landed"]
+    assert "provisioning failed" in res["reason"].lower()
+    assert not on_remote(origin, sha)
+
+
+def test_provision_runs_before_the_gate(repo, home):
+    origin, work, sha = repo
+    # provision writes a marker; a gate that requires it proves the ordering.
+    _add_provision(work, "#!/bin/bash\ntouch provisioned.marker\n")
+    gate = work / ".cabildo" / "gate.sh"
+    gate.write_text("#!/bin/bash\ntest -f provisioned.marker\n")
+    gate.chmod(0o755)
+    res = land(work)
+    assert res["ok"] and res["landed"] is True
+    assert on_remote(origin, sha)
+
+
 def test_push_verify_true_keeps_the_pre_push_hook(repo, home):
     """Opt back in: [push].verify = true runs the repo's pre-push hook on the
     daemon's push, so a failing hook blocks the land.
