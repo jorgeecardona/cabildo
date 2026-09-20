@@ -320,8 +320,10 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         return {
             "ok": True,
             "landed": False,
-            "reason": "dry run — everything up to push succeeded. Start the daemon "
-            "with --allow-push to actually push.",
+            "status": "dry_run",  # not "done": nothing reached the remote (issue #15)
+            "reason": "dry run — everything up to push succeeded, but the daemon is "
+            "NOT pushing (started without --allow-push). Nothing reached the remote. "
+            "Enable with `cabildo service install --allow-push`.",
             "branch": branch,
             "gate": gate_state,
             "steps": steps,
@@ -377,6 +379,7 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         return {
             "ok": True,
             "landed": None,
+            "status": "unverified",  # not "done": the remote could not be checked
             "reason": f"push reported rc={push_rc} but the remote could not be "
             "reached to verify — the land is UNVERIFIED, not failed. Check the "
             "remote yourself before retrying anything.",

@@ -99,7 +99,9 @@ def _report(conn, intent: dict, status: str, result: dict) -> None:
         body.append(
             f"landed {result.get('head')} on {result.get('target')} (gate: {result.get('gate')})"
         )
-    if result.get("gate") == "ABSENT":
+    if result.get("landed") and result.get("gate") == "ABSENT":
+        # Only for a real push: on a dry run nothing was pushed, so "pushed on
+        # your word alone" would be doubly wrong (issue #15).
         body.append(
             f"⚠ NOTHING WAS VERIFIED: no {actions.GATE_PATH} in this repo. The "
             "daemon pushed on your word alone."
@@ -161,7 +163,9 @@ def handle(conn, intent: dict, ctx: actions.Ctx) -> None:
     )
     try:
         result = fn(intent["params"], ctx)
-        status = "done" if result.get("ok") else "failed"
+        # An action may name its own terminal status (e.g. land distinguishes a
+        # dry run from a real landing, so `done` always means "on the remote").
+        status = result.get("status") or ("done" if result.get("ok") else "failed")
     except actions.Reject as e:
         result, status = {"ok": False, "reason": str(e)}, "rejected"
     except Exception as e:  # never let one bad intent kill the daemon

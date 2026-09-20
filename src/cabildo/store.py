@@ -1305,8 +1305,10 @@ def finish_intent(
 ) -> None:
     # 'expired' is its own terminal state, not a flavour of 'failed': nothing was
     # attempted, so nothing failed, and a retry-on-failure reader must be able to
-    # tell those apart.
-    if status not in ("done", "failed", "rejected", "expired"):
+    # tell those apart. 'dry_run' (the daemon isn't pushing) and 'unverified' (the
+    # remote couldn't be checked) are likewise distinct from a real 'done' so
+    # `done` always means "landed on the remote" (issue #15).
+    if status not in ("done", "failed", "rejected", "expired", "dry_run", "unverified"):
         raise ValueError(f"bad terminal status {status!r}")
     conn.execute(
         "UPDATE intents SET status=?, finished_at=?, result=? WHERE id=?",

@@ -45,6 +45,31 @@ def drain(conn, c: actions.Ctx) -> None:
         daemon.handle(conn, intent, c)
 
 
+def test_dry_run_land_reports_dry_run_not_done(conn, monkeypatch):
+    # Issue #15: a dry-run land (ok, but nothing pushed) must not land as `done`,
+    # and the requester's DM must not claim a push happened.
+    monkeypatch.setitem(
+        actions.ACTIONS,
+        "land",
+        lambda _p, _c: {
+            "ok": True,
+            "landed": False,
+            "status": "dry_run",
+            "gate": "ABSENT",
+            "reason": "dry run — nothing pushed",
+        },
+    )
+    queue(conn, age_h=0)
+    drain(conn, ctx(max_intent_age=0))
+
+    row = store.list_intents(conn)[0]
+    assert row["status"] == "dry_run"  # not "done"
+
+    body = store.inbox(conn, "s1")[-1]["body"]
+    assert "pushed on your word alone" not in body  # nothing was pushed
+    assert "dry run" in body.lower()
+
+
 def test_a_stale_intent_is_refused_not_run(conn, monkeypatch):
     called = []
     monkeypatch.setitem(actions.ACTIONS, "land", lambda p, c: called.append(p) or {"ok": True})

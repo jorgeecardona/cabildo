@@ -130,6 +130,19 @@ def test_daemon_push_skips_the_repos_pre_push_hook(repo, home):
     assert res["ok"] and res["landed"] is True
 
 
+def test_dry_run_land_reports_dry_run_and_pushes_nothing(repo, home):
+    """Issue #15: a dry run (no --allow-push) must not read as landed. It carries
+    an explicit status so the daemon reports `dry_run`, not `done`.
+    """
+    origin, work, sha = repo
+    ctx = actions.Ctx(worker="t", allow_push=False, log=lambda _m: None)
+    res = actions.land({"cwd": str(work), "target": "main"}, ctx)
+    assert res["ok"] is True
+    assert res["landed"] is False
+    assert res["status"] == "dry_run"
+    assert not on_remote(origin, sha), "a dry run must push nothing"
+
+
 def test_push_verify_true_keeps_the_pre_push_hook(repo, home):
     """Opt back in: [push].verify = true runs the repo's pre-push hook on the
     daemon's push, so a failing hook blocks the land.
