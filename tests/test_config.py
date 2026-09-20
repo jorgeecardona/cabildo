@@ -140,3 +140,17 @@ def test_remote_peers_accepts_a_bare_string(homes):
     _, repo, write_repo = homes
     write_repo('[remote]\npeers = "100.64.0.2:48653"\n')
     assert config.remote_peers(repo, project_name="proj") == ["100.64.0.2:48653"]
+
+
+def test_push_verify_and_timeout_defaults(homes):
+    _, repo, _ = homes
+    # Default: the daemon push skips the pre-push hook (issue #14) and waits 300s.
+    assert config.push_verify(repo, "proj") is False
+    assert config.push_timeout(repo, "proj") == 300.0
+
+
+def test_push_verify_and_timeout_from_config(homes):
+    _, repo, write_repo = homes
+    write_repo("[push]\nverify = true\ntimeout_s = 45\n")
+    assert config.push_verify(repo, "proj") is True
+    assert config.push_timeout(repo, "proj") == 45.0

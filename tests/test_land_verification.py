@@ -112,6 +112,37 @@ def test_clean_land_is_reported_landed(repo):
     assert sha.startswith(res["head"])
 
 
+def _add_prepush(work, script="#!/bin/bash\nexit 1\n"):
+    hook = work / ".git" / "hooks" / "pre-push"
+    hook.write_text(script)
+    hook.chmod(0o755)
+
+
+def test_daemon_push_skips_the_repos_pre_push_hook(repo, home):
+    """Issue #14: the daemon already ran the gate, so its push must not re-run the
+    repo's pre-push hook (which duplicates the gate and, if slow, times the push
+    out). A failing pre-push must NOT stop the land under the default.
+    """
+    origin, work, sha = repo
+    _add_prepush(work)  # a pre-push that fails outright
+    res = land(work)
+    assert on_remote(origin, sha), "the default push skips the failing pre-push hook"
+    assert res["ok"] and res["landed"] is True
+
+
+def test_push_verify_true_keeps_the_pre_push_hook(repo, home):
+    """Opt back in: [push].verify = true runs the repo's pre-push hook on the
+    daemon's push, so a failing hook blocks the land.
+    """
+    origin, work, sha = repo
+    (work / ".cabildo").mkdir()
+    (work / ".cabildo" / "config.toml").write_text("[push]\nverify = true\n")
+    _add_prepush(work)
+    res = land(work)
+    assert not on_remote(origin, sha), "verify=true runs the failing hook, so nothing lands"
+    assert res["ok"] is False and not res["landed"]
+
+
 def test_land_is_not_reported_when_push_is_rejected(repo):
     """The other direction: nothing on the remote must never read as landed."""
     origin, work, sha = repo

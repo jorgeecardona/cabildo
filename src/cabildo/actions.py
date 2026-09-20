@@ -326,8 +326,34 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
             "gate": gate_state,
             "steps": steps,
         }
-    push_rc, push_out = git(["push", remote, f"HEAD:{target}"], root)
+    # The daemon already ran the gate immediately above, so re-running the repo's
+    # pre-push hook inside the push is redundant and, with a slow pre-push, times
+    # the push out — nothing ever lands (issue #14). Skip it by default; a repo can
+    # keep it with [push].verify = true. The timeout is configurable for the same
+    # reason: git's plain 120s guillotines a slow network / large push.
+    push_timeout = int(config.push_timeout(cwd))
+    push_cmd = ["push", remote, f"HEAD:{target}"]
+    if not config.push_verify(cwd):
+        push_cmd.insert(1, "--no-verify")
+    push_rc, push_out = git(push_cmd, root, timeout=push_timeout)
     steps.append({"step": "push", "rc": push_rc, "out": push_out[-4000:]})
+    if push_rc == 124:
+        # A bare timeout reads like a network fault; name the usual cause instead.
+        verify_note = (
+            ""
+            if not config.push_verify(cwd)
+            else (
+                " The repo's pre-push hook runs inside this push ([push].verify is on) "
+                "and the daemon already ran gate.sh — set [push].verify = false to skip it."
+            )
+        )
+        return _fail(
+            f"git push exceeded {push_timeout}s (rc=124) — nothing landed.{verify_note} "
+            f"Raise [push].timeout_s if the push is merely slow, or check the push "
+            f"transport (an SSH write that hangs while reads are fast is a network "
+            f"black-hole, not a cabildo bug).",
+            steps,
+        )
 
     # 6. Verify against the REMOTE, not against push's exit code.
     #

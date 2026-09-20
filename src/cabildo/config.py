@@ -139,6 +139,29 @@ def push_mode(cwd: str | None = None, project_name: str | None = None) -> str:
     return mode if mode in ("land", "manual") else "land"
 
 
+def push_verify(cwd: str | None = None, project_name: str | None = None) -> bool:
+    """``[push].verify``: whether the daemon's land push re-runs the repo's
+    pre-push hook. Default False -- the daemon already ran ``.cabildo/gate.sh``
+    immediately before, so re-verifying inside the push duplicates that work and,
+    with a slow pre-push, times the push out (issue #14). Set true to keep the
+    hook running on the daemon's push.
+    """
+    val = get(cwd, "push", "verify", project_name=project_name, default=False)
+    return val is True or str(val).strip().lower() in ("1", "true", "yes", "on")
+
+
+def push_timeout(cwd: str | None = None, project_name: str | None = None) -> float:
+    """``[push].timeout_s``: seconds the land push may take before the daemon
+    gives up. Default 300 -- git's plain 120 guillotines a slow network or a
+    legitimately large push (issue #14).
+    """
+    val = get(cwd, "push", "timeout_s", project_name=project_name, default=300.0)
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return 300.0
+
+
 def destructive_mode(cwd: str | None = None, project_name: str | None = None) -> str:
     """``[destructive].mode`` for this project: "off" or the default "guard".
 
