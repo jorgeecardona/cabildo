@@ -262,3 +262,25 @@ def test_cli_doctor_runs_and_returns_int(env, monkeypatch, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "hooks" in out and "mcp.bus" in out and "db" in out
+
+
+def test_daemon_push_check_reports_dry_run_posture(tmp_path, monkeypatch):
+    from cabildo import doctor, service
+
+    unit_path = tmp_path / "cabildo-daemon.unit"
+
+    class _U:
+        path = unit_path
+
+    monkeypatch.setattr(service, "daemon_unit", _U)
+
+    # No service installed: not applicable, not an error.
+    assert doctor.check_daemon_push().status == doctor.NA
+
+    # Installed without --allow-push: a dry-run daemon that looks like it lands.
+    unit_path.write_text("ExecStart=/x -m cabildo.daemon --allow-spawn\n")
+    assert doctor.check_daemon_push().status == doctor.WARN
+
+    # Installed with --allow-push: it really pushes.
+    unit_path.write_text("ExecStart=/x -m cabildo.daemon --allow-push\n")
+    assert doctor.check_daemon_push().status == doctor.OK

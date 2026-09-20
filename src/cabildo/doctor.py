@@ -271,6 +271,33 @@ def check_daemon(conn=None) -> Check:
     )
 
 
+def check_daemon_push() -> Check:
+    """Whether the installed daemon service will actually push on a land, or is a
+    dry run. A fresh `cabildo service install` without --allow-push verifies lands
+    but pushes nothing, which reads exactly like it is landing when it isn't
+    (issue #15) — so name the posture rather than let it look silent.
+    """
+    p = service.daemon_unit().path
+    if not p.exists():
+        return Check(
+            "daemon.push",
+            NA,
+            "no daemon service installed (run manually, or `cabildo service install`)",
+        )
+    try:
+        text = p.read_text()
+    except OSError as e:
+        return Check("daemon.push", WARN, f"cannot read {p}: {e}", "")
+    if "--allow-push" in text:
+        return Check("daemon.push", OK, "daemon service pushes landed work (--allow-push)")
+    return Check(
+        "daemon.push",
+        WARN,
+        "daemon service is DRY-RUN — `request land` verifies but does NOT push",
+        "reinstall with push enabled: `cabildo service install --allow-push`",
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Platform support — the checks that would have surfaced the macOS gaps
 # --------------------------------------------------------------------------- #
@@ -333,6 +360,7 @@ def run(cwd: str | os.PathLike | None = None) -> list[Check]:
     cwd = cwd if cwd is not None else os.getcwd()
     checks = [check_hooks(), check_mcp_bus(cwd), check_mcp_issues(cwd), check_db()]
     checks.append(check_daemon())
+    checks.append(check_daemon_push())
     checks.extend(check_platform())
     return checks
 
