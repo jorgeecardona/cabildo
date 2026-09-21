@@ -195,3 +195,38 @@ def test_presence_state_derives_from_last_seen(conn):
 
     conn.execute("UPDATE sessions SET status='ended' WHERE session_id='a'")
     assert store.presence_state(store.get_session(conn, "a"), base + 5) == "ended"
+
+
+def test_set_role_sets_and_clears(conn):
+    make_session(conn, "a", handle="a")
+    store.set_role(conn, "a", "reviewer", "Review diffs before push")
+    row = store.get_session(conn, "a")
+    assert row is not None
+    assert row["role"] == "reviewer"
+    assert row["responsibilities"] == "Review diffs before push"
+    # Clearing the role drops the responsibilities with it.
+    store.set_role(conn, "a", None, "orphan text")
+    row = store.get_session(conn, "a")
+    assert row is not None
+    assert row["role"] is None
+    assert row["responsibilities"] is None
+
+
+def test_agents_with_role_matches_case_insensitively(conn):
+    make_session(conn, "a", handle="a", project="/repo/alpha", project_name="alpha")
+    make_session(conn, "b", handle="b", project="/repo/alpha", project_name="alpha")
+    make_session(conn, "c", handle="c", project="/repo/alpha", project_name="alpha")
+    store.set_role(conn, "a", "Reviewer")
+    store.set_role(conn, "b", "reviewer")
+    store.set_role(conn, "c", "architect")
+    found = store.agents_with_role(conn, "REVIEWER", project="/repo/alpha")
+    assert {r["session_id"] for r in found} == {"a", "b"}
+
+
+def test_agents_with_role_can_exclude_self(conn):
+    make_session(conn, "a", handle="a", project="/repo/alpha", project_name="alpha")
+    make_session(conn, "b", handle="b", project="/repo/alpha", project_name="alpha")
+    store.set_role(conn, "a", "reviewer")
+    store.set_role(conn, "b", "reviewer")
+    found = store.agents_with_role(conn, "reviewer", project="/repo/alpha", exclude="a")
+    assert {r["session_id"] for r in found} == {"b"}

@@ -34,6 +34,7 @@ today; the rest are read generically and wired one call site at a time):
     [land]    target = "main"               # actions.land
     [spawn]   model, max_agents, max_depth   # request spawn
     [record]  messages = true                # config.record_messages (daemon ingest)
+    [roles]   <name> = "responsibilities"    # config.roles (agent-card roster)
     [remote]  peers, token, bind, interval   # wan.py cross-machine sync
 """
 
@@ -173,6 +174,24 @@ def destructive_mode(cwd: str | None = None, project_name: str | None = None) ->
     """
     mode = str(get(cwd, "destructive", "mode", project_name=project_name, default="guard")).lower()
     return mode if mode in ("guard", "off") else "guard"
+
+
+def roles(cwd: str | None = None, project_name: str | None = None) -> dict[str, str]:
+    """``[roles]`` for this project: the configured roster, a mapping of role
+    name -> responsibilities text. Agents may ``set_role`` to a name in here (and
+    inherit its responsibilities) or to a freehand string not listed here. Empty
+    by default; a project defines its cabinet by adding the table.
+
+    Names are normalized to lowercase so lookups are case-insensitive; a
+    non-table ``[roles]`` value, or a non-string entry, is ignored rather than
+    raising into the caller.
+    """
+    node = get(cwd, "roles", project_name=project_name, default={})
+    if not isinstance(node, dict):
+        return {}
+    return {
+        str(name).strip().lower(): str(text) for name, text in node.items() if isinstance(text, str)
+    }
 
 
 def record_messages(cwd: str | None = None, project_name: str | None = None) -> bool:

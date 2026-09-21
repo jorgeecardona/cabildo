@@ -89,6 +89,16 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- (ask the stronger model to review). Filled from the transcript during
     -- `record` ingest; NULL until a model is observed or for clients not recorded.
     model         TEXT,
+    -- Agent-card capability label: the function this session is playing on the
+    -- bus (e.g. 'reviewer', 'architect'). Like `model`, peers read it via
+    -- list_agents to route by capability, but a role is *declared*, not observed:
+    -- the model tells you how strong an agent is, the role tells you what it is
+    -- for. May be one of the project's configured roster names (config `roles`)
+    -- or a freehand string; either way the responsibilities live alongside it.
+    role          TEXT,
+    -- Free text describing what this role is accountable for. Defaults to the
+    -- roster entry's text when `role` names a configured role and none is given.
+    responsibilities TEXT,
     status        TEXT NOT NULL DEFAULT 'active',   -- active | ended
     created_at    REAL NOT NULL,
     last_seen_at  REAL NOT NULL
@@ -373,6 +383,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE sessions ADD COLUMN client TEXT NOT NULL DEFAULT 'claude'")
     if "model" not in have:
         conn.execute("ALTER TABLE sessions ADD COLUMN model TEXT")
+    if "role" not in have:
+        conn.execute("ALTER TABLE sessions ADD COLUMN role TEXT")
+    if "responsibilities" not in have:
+        conn.execute("ALTER TABLE sessions ADD COLUMN responsibilities TEXT")
     if "owner_pid" not in have:
         conn.execute("ALTER TABLE sessions ADD COLUMN owner_pid INTEGER")
         # One-time backfill, right after the column appears: every pre-existing
@@ -542,6 +556,36 @@ def set_handle(conn: sqlite3.Connection, session_id: str, handle: str) -> None:
         (handle, _now(), session_id),
     )
     conn.commit()
+
+
+def set_role(
+    conn: sqlite3.Connection,
+    session_id: str,
+    role: str | None,
+    responsibilities: str | None = None,
+) -> None:
+    """Set (or clear) this session's role and its responsibilities. Passing
+    role=None clears both. Callers resolve the roster default for
+    `responsibilities` before calling; this writes exactly what it is given.
+    """
+    conn.execute(
+        "UPDATE sessions SET role=?, responsibilities=?, last_seen_at=? WHERE session_id=?",
+        (role, responsibilities if role else None, _now(), session_id),
+    )
+    conn.commit()
+
+
+def agents_with_role(
+    conn: sqlite3.Connection, role: str, project: str | None = None, exclude: str | None = None
+) -> list[sqlite3.Row]:
+    """Active sessions whose role matches `role` (case-insensitive), most
+    recently seen first. The routing primitive: 'who on the bus owns this?'.
+    """
+    return [
+        r
+        for r in active_sessions(conn, project=project, exclude=exclude)
+        if (r["role"] or "").strip().lower() == role.strip().lower()
+    ]
 
 
 def get_session(conn: sqlite3.Connection, session_id: str) -> sqlite3.Row | None:

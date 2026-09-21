@@ -19,7 +19,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from . import names, store
+from . import config, names, store
 from .actions import ACTIONS
 from .context import git_project, resolve_claude_pid
 
@@ -203,6 +203,8 @@ def whoami() -> dict[str, Any]:
             "handle": row["handle"] if row else None,
             "client": (row["client"] if row else None) or "claude",
             "model": row["model"] if row else None,
+            "role": row["role"] if row else None,
+            "responsibilities": row["responsibilities"] if row else None,
             "state": store.presence_state(row),
             "project": row["project_name"] if row else None,
             "subscriptions": store.subscriptions_of(conn, sid),
@@ -219,6 +221,37 @@ def set_handle(handle: str) -> dict[str, Any]:
         sid = _me(conn)
         store.set_handle(conn, sid, handle)
         return {"ok": True, "handle": handle, "session_id": sid}
+
+
+@mcp.tool()
+def set_role(role: str | None, responsibilities: str | None = None) -> dict[str, Any]:
+    """Declare what this session is *for* on the bus, so peers can route work by
+    function (via list_agents), not just by model. `role` is either one of the
+    project's configured roster names (see the `[roles]` config table) or any
+    freehand string. When `role` names a roster entry and you omit
+    `responsibilities`, the roster's text is used; pass your own to override.
+    Call set_role(None) to clear the role.
+    """
+    with store.connect() as conn:
+        sid = _me(conn)
+        row = store.get_session(conn, sid)
+        cwd = row["cwd"] if row else None
+        pname = row["project_name"] if row else None
+        if role is None:
+            store.set_role(conn, sid, None, None)
+            return {"ok": True, "role": None, "session_id": sid}
+        role = role.strip()
+        roster = config.roles(cwd, pname)
+        default = roster.get(role.lower())
+        resolved = responsibilities if responsibilities is not None else default
+        store.set_role(conn, sid, role, resolved)
+        return {
+            "ok": True,
+            "role": role,
+            "responsibilities": resolved,
+            "from_roster": role.lower() in roster,
+            "session_id": sid,
+        }
 
 
 @mcp.tool()
@@ -295,6 +328,10 @@ def list_agents(all_projects: bool = False) -> list[dict[str, Any]]:
                 # ingest for opted-in projects; NULL otherwise). Route by it, e.g.
                 # ask a stronger model to review.
                 "model": r["model"],
+                # Agent-card capability label + what it owns: route work by
+                # function, e.g. hand a review to whoever's role is 'reviewer'.
+                "role": r["role"],
+                "responsibilities": r["responsibilities"],
                 # Derived presence: working (just acted) / idle (quiet) — richer
                 # than online/offline, for deciding whom to hand work to.
                 "state": store.presence_state(r),

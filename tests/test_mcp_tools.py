@@ -97,6 +97,51 @@ def test_list_agents_scoped_to_project(two_agents):
     assert {p["session_id"] for p in peers} == {"B"}
 
 
+def test_set_role_inherits_roster_responsibilities(two_agents, monkeypatch):
+    two_agents(111)
+    monkeypatch.setattr(
+        srv.config, "roles", lambda *a, **k: {"reviewer": "Review diffs before push"}
+    )
+    out = srv.set_role("reviewer")
+    assert out["ok"] is True
+    assert out["from_roster"] is True
+    assert out["responsibilities"] == "Review diffs before push"
+    assert srv.whoami()["role"] == "reviewer"
+    assert srv.whoami()["responsibilities"] == "Review diffs before push"
+
+
+def test_set_role_freehand_and_override(two_agents, monkeypatch):
+    two_agents(111)
+    monkeypatch.setattr(srv.config, "roles", lambda *a, **k: {"reviewer": "roster text"})
+    # A freehand role not in the roster: no inherited text.
+    out = srv.set_role("firefighter")
+    assert out["from_roster"] is False
+    assert out["responsibilities"] is None
+    # An explicit responsibilities argument overrides the roster default.
+    out = srv.set_role("reviewer", "my own scope")
+    assert out["from_roster"] is True
+    assert out["responsibilities"] == "my own scope"
+
+
+def test_set_role_clear(two_agents):
+    two_agents(111)
+    srv.set_role("reviewer", "x")
+    out = srv.set_role(None)
+    assert out["role"] is None
+    assert srv.whoami()["role"] is None
+    assert srv.whoami()["responsibilities"] is None
+
+
+def test_list_agents_surfaces_role(two_agents):
+    # B declares a role; A sees it on the card.
+    two_agents(222)
+    srv.set_role("reviewer", "Review diffs before push")
+    two_agents(111)
+    card = {p["session_id"]: p for p in srv.list_agents()}["B"]
+    assert card["role"] == "reviewer"
+    assert card["responsibilities"] == "Review diffs before push"
+
+
 def test_inbox_previews_long_bodies_and_get_message_fetches_full(two_agents):
     two_agents(111)
     long_body = "A" * 2000

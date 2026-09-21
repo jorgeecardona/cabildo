@@ -154,3 +154,35 @@ def test_push_verify_and_timeout_from_config(homes):
     write_repo("[push]\nverify = true\ntimeout_s = 45\n")
     assert config.push_verify(repo, "proj") is True
     assert config.push_timeout(repo, "proj") == 45.0
+
+
+def test_roles_empty_by_default(homes):
+    _, repo, _ = homes
+    assert config.roles(repo, project_name="proj") == {}
+
+
+def test_roles_maps_name_to_responsibilities_lowercased(homes):
+    _, repo, write_repo = homes
+    write_repo(
+        '[roles]\nReviewer = "Review diffs before push"\narchitect = "Own module boundaries"\n'
+    )
+    got = config.roles(repo, project_name="proj")
+    assert got == {
+        "reviewer": "Review diffs before push",
+        "architect": "Own module boundaries",
+    }
+
+
+def test_roles_ignores_non_string_entries(homes):
+    # A [roles] entry that is not a string (a typo'd nested table) is dropped
+    # rather than raising into set_role's resolution.
+    _, repo, write_repo = homes
+    write_repo('[roles]\ngood = "ok"\n[roles.bad]\nx = 1\n')
+    assert config.roles(repo, project_name="proj") == {"good": "ok"}
+
+
+def test_roles_repo_overrides_global(homes):
+    write_global, repo, write_repo = homes
+    write_global('[roles]\nreviewer = "global text"\n')
+    write_repo('[roles]\nreviewer = "repo text"\n')
+    assert config.roles(repo, project_name="proj")["reviewer"] == "repo text"
