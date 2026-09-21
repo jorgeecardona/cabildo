@@ -132,6 +132,27 @@ def test_set_role_clear(two_agents):
     assert srv.whoami()["responsibilities"] is None
 
 
+def test_send_to_role_fans_out_to_holders_only(two_agents):
+    # B holds 'reviewer'; A routes work to the role without naming B.
+    two_agents(222)
+    srv.set_role("reviewer")
+    two_agents(111)
+    out = srv.send_to_role("reviewer", "please review #123")
+    assert out["delivered"] == 1
+    assert out["recipients"][0]["session_id"] == "B"
+    # B actually receives it as a DM.
+    two_agents(222)
+    box = srv.inbox()["messages"]
+    assert any(m["body"] == "please review #123" for m in box)
+
+
+def test_send_to_role_empty_when_no_holder(two_agents):
+    two_agents(111)
+    out = srv.send_to_role("nobody-has-this", "hello")
+    assert out["delivered"] == 0
+    assert out["recipients"] == []
+
+
 def test_list_agents_surfaces_role(two_agents):
     # B declares a role; A sees it on the card.
     two_agents(222)

@@ -462,6 +462,41 @@ def send(
         return {"ok": True, "message_id": mid, "to": dest}
 
 
+@mcp.tool()
+def send_to_role(role: str, body: str, urgent: bool = False) -> dict[str, Any]:
+    """Route a message by function: DM every active agent whose role is `role`,
+    instead of naming a handle. This is how you hand work to whoever owns a
+    domain (e.g. send_to_role("reviewer", "please review #123")) without knowing
+    who is on shift. Delivers one DM per matching agent; yourself is excluded,
+    and only agents on your project or a linked one are reached. Returns the
+    recipients it hit — an empty list means no one currently holds that role.
+    """
+    with store.connect() as conn:
+        sid = _me(conn)
+        me_handle = _handle(conn, sid)
+        project = _project(conn, sid)
+        visible = _visible_projects(conn, sid)
+        recipients: list[dict[str, Any]] = []
+        for r in store.agents_with_role(conn, role, exclude=sid):
+            tname = (r["project_name"] or "").strip().lower()
+            if visible is not None and tname and tname not in visible:
+                continue
+            mid = store.post_message(
+                conn,
+                from_session=sid,
+                from_handle=me_handle,
+                body=body,
+                topic=None,
+                to_session=r["session_id"],
+                project=project,
+                urgent=urgent,
+            )
+            recipients.append(
+                {"session_id": r["session_id"], "name": store.display_name(r), "message_id": mid}
+            )
+        return {"ok": True, "role": role, "delivered": len(recipients), "recipients": recipients}
+
+
 def _resolve_recipient(conn, to: str) -> str | None:
     """Resolve `to` to a session_id. Accepts an exact session id, a 'pid-...'
     id, a @handle / handle, or a short session-id prefix as shown by
