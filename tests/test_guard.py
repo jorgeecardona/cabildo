@@ -198,14 +198,23 @@ def test_multiedit_auto_claims_the_file(conn, clock):
 DESTRUCTIVE = [
     "git reset --hard",
     "git reset --hard HEAD~1",
+    "git reset --hard origin/main",
+    "git -C /repo reset --hard",  # git's own opt-with-value, then the subcommand
     "git checkout -- src/x.py",
+    "git checkout HEAD -- src/x.py",
     "git checkout .",
     "git restore .",  # whole-tree discard
+    "git restore :/",  # whole-tree pathspec
     "git clean -fd",
+    "git clean -f",
+    "git clean -xfd",
     "git stash",
     "git stash save wip",
-    "git stash push -m wip",  # no pathspec: tree-wide
-    "cd /repo && git reset --hard",
+    "git stash push",  # no pathspec: tree-wide
+    "git stash push -m wip",  # message, still no pathspec: tree-wide
+    "git stash drop",
+    "git stash clear",
+    "cd /repo && git reset --hard",  # destructive op is the second command
 ]
 
 # Branch switching moved OUT of SAFE on 2026-08-03: it is safe alone and in your own worktree,
@@ -215,14 +224,23 @@ SAFE = [
     "git stash list",
     "git stash pop",
     "git restore --staged src/x.py",
+    "git restore --staged .",  # unstaging the tree leaves the working tree alone
     'echo "git reset --hard" >> notes.txt',
     "git commit -m 'x'",
+    "git stash show",
+    "git stash apply",
+    "git stash branch topic",
+    "git diff",
     # issue #19: path-scoped discards cannot reach a peer's other files, and a
     # destructive word quoted inside a read-only command is not a git argv.
     "git restore src/x.py",
     "git restore -- src/x.py",
+    "git restore -- a b c",
     "git stash push -- src/x.py",
     r'grep -rn "foo\|git stash\|bar" ./src',
+    'git commit -m "reset --hard now"',  # destructive words are just the message
+    'git log --oneline | grep "git clean -f"',  # mention past a real pipe
+    'echo "git checkout ."',
 ]
 
 
