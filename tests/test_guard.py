@@ -200,10 +200,11 @@ DESTRUCTIVE = [
     "git reset --hard HEAD~1",
     "git checkout -- src/x.py",
     "git checkout .",
-    "git restore src/x.py",
+    "git restore .",  # whole-tree discard
     "git clean -fd",
     "git stash",
-    "git stash push -m wip",
+    "git stash save wip",
+    "git stash push -m wip",  # no pathspec: tree-wide
     "cd /repo && git reset --hard",
 ]
 
@@ -216,6 +217,12 @@ SAFE = [
     "git restore --staged src/x.py",
     'echo "git reset --hard" >> notes.txt',
     "git commit -m 'x'",
+    # issue #19: path-scoped discards cannot reach a peer's other files, and a
+    # destructive word quoted inside a read-only command is not a git argv.
+    "git restore src/x.py",
+    "git restore -- src/x.py",
+    "git stash push -- src/x.py",
+    r'grep -rn "foo\|git stash\|bar" ./src',
 ]
 
 

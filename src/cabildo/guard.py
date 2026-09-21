@@ -49,22 +49,12 @@ from typing import Any
 from . import config, store
 from .context import tree_root
 
-# Working-tree-destroying git ops. Each matches only as its own shell command
-# (start or after ;&|), so the same words inside a quoted string don't trip it.
-# These clobber *everyone's* uncommitted work in a shared checkout, which is the
-# concrete harm we saw ("the reset that dropped feaf332a").
-_DESTRUCTIVE_GIT = [
-    (re.compile(r"(?:^|[;&|]\s*)git\s+reset\s+(?:[^;&|]*\s)?--hard\b"), "git reset --hard"),
-    # checkout/restore that discards changes: `-- <path>`, `.`, or bare restore
-    # (restore discards by default unless it's --staged-only).
-    (
-        re.compile(r"(?:^|[;&|]\s*)git\s+checkout\s+(?:[^;&|]*\s)?(?:--\s|\.(?:\s|$))"),
-        "git checkout (discard)",
-    ),
-    (re.compile(r"(?:^|[;&|]\s*)git\s+restore\b(?![^;&|]*--staged)"), "git restore (discard)"),
-    (re.compile(r"(?:^|[;&|]\s*)git\s+clean\s+(?:[^;&|]*\s)?-[a-zA-Z]*f"), "git clean -f"),
-    (re.compile(r"(?:^|[;&|]\s*)git\s+stash\b(?!\s+(?:list|show|pop|apply))"), "git stash"),
-]
+# Pathspecs that name "the whole tree" rather than a specific file, so a discard
+# that carries one is not path-scoped. Mirrors the whole-tree markers in
+# _STAGE_ALL below.
+_WHOLE_TREE_PATHSPECS = {".", ":/", "*"}
+# stash subcommands that inspect or re-apply, never discarding the working tree.
+_STASH_SAFE = {"list", "show", "pop", "apply", "branch"}
 
 # Staging the whole tree rather than named paths. Matched on *tokens*, not on
 # the raw string: `git commit -m "add -A support"` must not read as `git add -A`,
@@ -167,6 +157,66 @@ def _stages_whole_tree(argv: list[str]) -> str | None:
                 tok.startswith("-") and not tok.startswith("--") and "a" in tok[1:]
             ):
                 return f"git commit {tok}"
+    return None
+
+
+def _paths_after_ddash(args: list[str]) -> list[str]:
+    """Everything after a lone ``--`` end-of-options marker; [] if there is none."""
+    return args[args.index("--") + 1 :] if "--" in args else []
+
+
+def _destroys_tree(argv: list[str]) -> str | None:
+    """Label for a git command that discards working-tree state, else None.
+
+    Classified on *tokens* (via _git_subcommand), not the raw string, for the
+    same reason as the sibling guards, and for two the raw-regex form got wrong
+    (issue #19):
+
+      * a destructive word inside a quoted argument (``grep "git stash"``) is
+        never a git argv, so it never matches — no false positive on a mention.
+      * a discard limited to named paths (``git restore <path>``,
+        ``git stash push -- <paths>``) is told apart from its tree-wide form; it
+        cannot reach a peer's other files, so it is allowed.
+
+    Deny is the safe default: an ambiguous or whole-tree discard is denied, and
+    only a discard clearly scoped to named paths is let through.
+    """
+    sub, args = _git_subcommand(argv)
+    if sub is None:
+        return None
+    if sub == "reset":
+        return "git reset --hard" if "--hard" in args else None
+    if sub == "checkout":
+        # A discard: `checkout .` or a path-restricted `checkout ... -- <path>`.
+        # A plain branch switch (no `--`, a ref positional) is _switches_branch's
+        # job and returns None here.
+        if "--" in args:
+            return "git checkout (discard)"
+        if any(a in _WHOLE_TREE_PATHSPECS for a in args if not a.startswith("-")):
+            return "git checkout (discard)"
+        return None
+    if sub == "restore":
+        # --staged only unstages; it leaves the working tree untouched.
+        if "--staged" in args and "--worktree" not in args:
+            return None
+        specs = _paths_after_ddash(args) or [a for a in args if not a.startswith("-")]
+        concrete = [s for s in specs if s not in _WHOLE_TREE_PATHSPECS]
+        return None if concrete else "git restore (discard)"
+    if sub == "clean":
+        forceful = any(
+            a == "--force" or (a.startswith("-") and not a.startswith("--") and "f" in a[1:])
+            for a in args
+        )
+        return "git clean -f" if forceful else None
+    if sub == "stash":
+        action = next((a for a in args if not a.startswith("-")), None)
+        if action in _STASH_SAFE:
+            return None
+        if action == "push" and any(
+            s not in _WHOLE_TREE_PATHSPECS for s in _paths_after_ddash(args)
+        ):
+            return None  # `git stash push -- <paths>`: path-scoped, safe
+        return "git stash"
     return None
 
 
@@ -364,7 +414,7 @@ def _deny_destructive_git(conn: sqlite3.Connection, me: sqlite3.Row, command: st
     own tree. A repo opts out with ``[destructive].mode = "off"``. When peers do
     share the tree the reason names them, because then it wipes *their* work too.
     """
-    label = next((lbl for rx, lbl in _DESTRUCTIVE_GIT if rx.search(command)), None)
+    label = next((lbl for argv in _argvs(command) if (lbl := _destroys_tree(argv))), None)
     if label is None:
         return None
     if config.destructive_mode(me["cwd"], me["project_name"]) == "off":
