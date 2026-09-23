@@ -18,7 +18,7 @@ def main() -> None:
         return
     cwd = data.get("cwd") or os.getcwd()
 
-    from cabildo import notify, store
+    from cabildo import config, notify, store
     from cabildo.context import git_project, resolve_claude_pid
 
     root, name = git_project(cwd)
@@ -42,6 +42,7 @@ def main() -> None:
         line = notify._join(
             notify.unread_line(conn, session_id),
             notify.condition_text(conn, session_id),
+            notify.timeline_text(conn, session_id, config.timeline_interval(cwd)),
         )
     finally:
         conn.close()

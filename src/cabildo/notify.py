@@ -4,6 +4,7 @@ these land in the model's context every turn, so brevity matters.
 
 from __future__ import annotations
 
+import datetime
 import pathlib
 import sqlite3
 
@@ -122,6 +123,25 @@ def condition_text(conn: sqlite3.Connection, session_id: str, *, mark: bool = Tr
     if mark:
         store.mark_conditions_delivered(conn, session_id, rows)
     return "\n".join(lines)
+
+
+def timeline_text(conn: sqlite3.Connection, session_id: str, interval: float) -> str | None:
+    """The current wall-clock time, injected at most once per ``interval`` seconds
+    (see store.timeline_due). None when it isn't due yet, so most tool calls stay
+    silent.
+
+    An agent has no clock of its own: nothing in a turn tells it whether a minute
+    or an hour passed since the last one. Dropping a timestamp in on a throttle
+    gives repeated turns a timeline to read elapsed time from — how stale a build
+    is, whether a lock has been held too long, how long a task has really run.
+    Local time with the zone name, since that is what the human beside it reads.
+    """
+    if not store.timeline_due(conn, session_id, interval):
+        return None
+    now = datetime.datetime.now().astimezone()
+    # e.g. "🕐 12:01 CEST · Wed 23 Sep 2026" — HH:MM first (the bit that moves),
+    # then the zone and full date so a turn read in isolation is unambiguous.
+    return f"🕐 {now:%H:%M} {now:%Z} · {now:%a %d %b %Y}"
 
 
 def _join(*parts: str | None) -> str | None:

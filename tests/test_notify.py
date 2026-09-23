@@ -32,3 +32,16 @@ def test_no_nudge_when_alone(conn):
     banner = notify.session_banner(conn, "solo")
     assert "Claim your task first" not in banner
     assert "No other agents" in banner
+
+
+def test_timeline_text_injects_once_then_throttles(conn):
+    make_session(conn, "me", handle="me", project=P, project_name="x")
+    first = notify.timeline_text(conn, "me", 600)
+    assert first is not None and first.startswith("🕐 ")
+    # Second call inside the interval is silent (store.timeline_due throttles it).
+    assert notify.timeline_text(conn, "me", 600) is None
+
+
+def test_timeline_text_off_when_interval_not_positive(conn):
+    make_session(conn, "me", handle="me", project=P, project_name="x")
+    assert notify.timeline_text(conn, "me", 0) is None

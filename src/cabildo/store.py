@@ -101,7 +101,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     responsibilities TEXT,
     status        TEXT NOT NULL DEFAULT 'active',   -- active | ended
     created_at    REAL NOT NULL,
-    last_seen_at  REAL NOT NULL
+    last_seen_at  REAL NOT NULL,
+    -- Last time the wall-clock timeline line was injected into this session (see
+    -- notify.timeline_text). A throttle, not presence: hooks have no timer, so
+    -- the line rides the next hook event and this stamp is what keeps it to one
+    -- per interval rather than one per tool call.
+    time_injected_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_pid ON sessions(claude_pid);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
@@ -387,6 +392,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE sessions ADD COLUMN role TEXT")
     if "responsibilities" not in have:
         conn.execute("ALTER TABLE sessions ADD COLUMN responsibilities TEXT")
+    if "time_injected_at" not in have:
+        conn.execute("ALTER TABLE sessions ADD COLUMN time_injected_at REAL")
     if "owner_pid" not in have:
         conn.execute("ALTER TABLE sessions ADD COLUMN owner_pid INTEGER")
         # One-time backfill, right after the column appears: every pre-existing
@@ -531,6 +538,31 @@ def touch(conn: sqlite3.Connection, session_id: str) -> None:
         (_now(), session_id),
     )
     conn.commit()
+
+
+def timeline_due(conn: sqlite3.Connection, session_id: str, interval: float) -> bool:
+    """True if at least ``interval`` seconds have passed since this session last
+    had the wall-clock line injected, stamping ``time_injected_at`` to now when it
+    is. A check-and-set: the caller injects the line iff this returns True, so the
+    stamp and the injection can't drift apart.
+
+    An unknown session, or ``interval`` <= 0, returns False without stamping —
+    the first is nothing to key on, the second is the "timeline off" setting.
+    """
+    if interval <= 0:
+        return False
+    row = conn.execute(
+        "SELECT time_injected_at FROM sessions WHERE session_id=?", (session_id,)
+    ).fetchone()
+    if row is None:
+        return False
+    now = _now()
+    last = row["time_injected_at"]
+    if last is not None and now - last < interval:
+        return False
+    conn.execute("UPDATE sessions SET time_injected_at=? WHERE session_id=?", (now, session_id))
+    conn.commit()
+    return True
 
 
 def end_session(conn: sqlite3.Connection, session_id: str) -> None:

@@ -206,6 +206,23 @@ def record_messages(cwd: str | None = None, project_name: str | None = None) -> 
     return val is True or str(val).strip().lower() in ("1", "true", "yes", "on")
 
 
+def timeline_interval(cwd: str | None = None, project_name: str | None = None) -> float:
+    """``[timeline].interval_s``: minimum seconds between wall-clock timeline
+    lines injected into a session (see notify.timeline_text). Default 600 (ten
+    minutes). ``0`` or a negative value turns the timeline off.
+
+    Hooks have no timer, so this is a floor, not a schedule: the line rides the
+    next hook event (a tool call mid-turn, the prompt on an idle session), and an
+    interval passing while a session sits idle just means the next event carries a
+    slightly older-than-``interval`` gap.
+    """
+    val = get(cwd, "timeline", "interval_s", project_name=project_name, default=600.0)
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return 600.0
+
+
 def watch_topic(cwd: str | None = None, project_name: str | None = None) -> str | None:
     """``[watch].topic`` for this project, resolving the ``"project"`` sentinel
     to this repo's own channel. ``None`` means "unset" -- the caller keeps its

@@ -25,7 +25,9 @@ def main() -> None:
     if not session_id:
         return
 
-    from cabildo import notify, store
+    cwd = data.get("cwd")
+
+    from cabildo import config, notify, store
 
     conn = store.connect()
     try:
@@ -33,6 +35,7 @@ def main() -> None:
         text = notify._join(
             notify.midturn_urgent_text(conn, session_id),
             notify.condition_text(conn, session_id),
+            notify.timeline_text(conn, session_id, config.timeline_interval(cwd)),
         )
     finally:
         conn.close()

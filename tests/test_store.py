@@ -197,6 +197,34 @@ def test_presence_state_derives_from_last_seen(conn):
     assert store.presence_state(store.get_session(conn, "a"), base + 5) == "ended"
 
 
+def test_timeline_due_throttles_and_stamps(conn, monkeypatch):
+    make_session(conn, "a", project_name="alpha")
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(store, "_now", lambda: clock["t"])
+
+    # First call is always due (no prior stamp) and records the time.
+    assert store.timeline_due(conn, "a", 600) is True
+    # A second call inside the interval is throttled.
+    clock["t"] = 1000.0 + 599
+    assert store.timeline_due(conn, "a", 600) is False
+    # Once the interval has passed it is due again, and re-stamps.
+    clock["t"] = 1000.0 + 600
+    assert store.timeline_due(conn, "a", 600) is True
+    clock["t"] = 1000.0 + 601
+    assert store.timeline_due(conn, "a", 600) is False
+
+
+def test_timeline_due_off_and_unknown_session(conn):
+    make_session(conn, "a", project_name="alpha")
+    # interval <= 0 is the "timeline off" setting: never due, never stamps.
+    assert store.timeline_due(conn, "a", 0) is False
+    row = store.get_session(conn, "a")
+    assert row is not None
+    assert row["time_injected_at"] is None
+    # An unknown session has nothing to key on.
+    assert store.timeline_due(conn, "ghost", 600) is False
+
+
 def test_set_role_sets_and_clears(conn):
     make_session(conn, "a", handle="a")
     store.set_role(conn, "a", "reviewer", "Review diffs before push")

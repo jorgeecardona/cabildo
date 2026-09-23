@@ -278,6 +278,12 @@ mode = "manual"    # opt this project out of the push guard above: a plain
 [watch]
 topic = "project"  # `cabildo watch` with no -t defaults to this repo's own
                    # channel instead of all channels.
+
+[timeline]
+interval_s = 600   # inject the wall-clock time into a session at most this often
+                   # (default 600 = 10 min), so repeated turns can read elapsed
+                   # time. Rides existing hook events, so it is silent on an idle
+                   # agent. 0 turns it off.
 ```
 
 ### What the daemon will and won't land

@@ -34,6 +34,15 @@ mode = "land"
 # Leave it unset to keep the current default of all channels.
 topic = "project"
 
+[timeline]
+# Inject the current wall-clock time into a session at most this often, so an
+# agent whose turns carry no clock can read elapsed time across them. It rides
+# the hook events that already fire (a tool call mid-turn, the prompt on an idle
+# session), so it costs no extra turn and stays silent while the agent is idle.
+#   600  (default) once per ten minutes
+#   0    off
+interval_s = 600
+
 # --- recognised, read but not yet wired ------------------------------------
 
 [uplink]
