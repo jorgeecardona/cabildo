@@ -225,6 +225,25 @@ def test_timeline_due_off_and_unknown_session(conn):
     assert store.timeline_due(conn, "ghost", 600) is False
 
 
+def test_heartbeat_due_is_independent_of_timeline(conn, monkeypatch):
+    make_session(conn, "a", project_name="alpha")
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(store, "_now", lambda: clock["t"])
+
+    # The two throttles key on separate columns, so consuming one leaves the other
+    # untouched: a mid-turn timeline injection must not eat the idle heartbeat.
+    assert store.timeline_due(conn, "a", 600) is True
+    assert store.heartbeat_due(conn, "a", 600) is True
+    # Each then throttles on its own clock.
+    clock["t"] = 1000.0 + 599
+    assert store.heartbeat_due(conn, "a", 600) is False
+    clock["t"] = 1000.0 + 600
+    assert store.heartbeat_due(conn, "a", 600) is True
+    # 0 is the "off" setting; unknown session has nothing to key on.
+    assert store.heartbeat_due(conn, "a", 0) is False
+    assert store.heartbeat_due(conn, "ghost", 600) is False
+
+
 def test_set_role_sets_and_clears(conn):
     make_session(conn, "a", handle="a")
     store.set_role(conn, "a", "reviewer", "Review diffs before push")

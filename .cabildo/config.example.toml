@@ -42,6 +42,14 @@ topic = "project"
 #   600  (default) once per ten minutes
 #   0    off
 interval_s = 600
+# Opt-in heartbeat: if > 0, the Stop hook defers an imminent idle by ONE turn once
+# this many seconds have passed since the last nudge, so a long-running agent
+# re-reads the clock and resumes standing work instead of parking. One-shot by
+# design (the Stop hook honours stop_hook_active, so never a runaway loop), and it
+# cannot wake a session that has already stopped — no hook can.
+#   0    (default) off
+#   600  nudge at most once per ten minutes
+heartbeat_s = 0
 
 # --- recognised, read but not yet wired ------------------------------------
 

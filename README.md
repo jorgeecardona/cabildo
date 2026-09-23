@@ -284,6 +284,10 @@ interval_s = 600   # inject the wall-clock time into a session at most this ofte
                    # (default 600 = 10 min), so repeated turns can read elapsed
                    # time. Rides existing hook events, so it is silent on an idle
                    # agent. 0 turns it off.
+heartbeat_s = 0    # if > 0, the Stop hook defers an imminent idle by one turn once
+                   # this many seconds have passed, so a long-running agent picks
+                   # its standing work back up. One-shot (never a runaway loop) and
+                   # off by default. It cannot wake an already-stopped session.
 ```
 
 ### What the daemon will and won't land

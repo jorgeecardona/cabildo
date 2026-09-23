@@ -223,6 +223,22 @@ def timeline_interval(cwd: str | None = None, project_name: str | None = None) -
         return 600.0
 
 
+def timeline_heartbeat(cwd: str | None = None, project_name: str | None = None) -> float:
+    """``[timeline].heartbeat_s``: if > 0, the Stop hook fires a one-shot heartbeat
+    nudge (see notify.heartbeat_reason) when this many seconds have passed since the
+    session's last one, forcing one more turn before it idles. Default 0 (off).
+
+    Bounded by design: the Stop hook honours ``stop_hook_active``, so the nudge can
+    only ever buy a single extra turn, never a runaway loop. It cannot wake a
+    session that has already stopped — no hook can — only defer an imminent idle.
+    """
+    val = get(cwd, "timeline", "heartbeat_s", project_name=project_name, default=0.0)
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def watch_topic(cwd: str | None = None, project_name: str | None = None) -> str | None:
     """``[watch].topic`` for this project, resolving the ``"project"`` sentinel
     to this repo's own channel. ``None`` means "unset" -- the caller keeps its

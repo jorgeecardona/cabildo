@@ -138,10 +138,36 @@ def timeline_text(conn: sqlite3.Connection, session_id: str, interval: float) ->
     """
     if not store.timeline_due(conn, session_id, interval):
         return None
+    return _clock_line()
+
+
+def _clock_line() -> str:
+    """The current local time as one line, e.g. "🕐 12:01 CEST · Wed 23 Sep 2026"
+    — HH:MM first (the bit that moves), then the zone and full date so a turn read
+    in isolation is unambiguous. Local time, since that is what the human reads.
+    """
     now = datetime.datetime.now().astimezone()
-    # e.g. "🕐 12:01 CEST · Wed 23 Sep 2026" — HH:MM first (the bit that moves),
-    # then the zone and full date so a turn read in isolation is unambiguous.
     return f"🕐 {now:%H:%M} {now:%Z} · {now:%a %d %b %Y}"
+
+
+def heartbeat_reason(conn: sqlite3.Connection, session_id: str, interval: float) -> str | None:
+    """A Stop-hook block reason when the one-shot heartbeat nudge is due for this
+    session (see store.heartbeat_due), else None. Off when ``interval`` <= 0.
+
+    Fired at the moment a session would go idle, once per ``interval``: it defers
+    that idle by one turn so a long-running agent re-reads the clock and picks its
+    standing work back up instead of silently parking. The Stop hook honours
+    ``stop_hook_active``, so this can only ever buy one turn — an agent that is
+    genuinely done just says so and stops on the next, unblocked, attempt.
+    """
+    if not store.heartbeat_due(conn, session_id, interval):
+        return None
+    return (
+        f"{_clock_line()}\n"
+        "⏱ cabildo heartbeat: this session was about to go idle. If you have "
+        "standing or claimed work, pick it back up; otherwise say you're done and "
+        "stop (this nudge won't fire again this turn)."
+    )
 
 
 def _join(*parts: str | None) -> str | None:

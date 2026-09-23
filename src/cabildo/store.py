@@ -106,7 +106,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- notify.timeline_text). A throttle, not presence: hooks have no timer, so
     -- the line rides the next hook event and this stamp is what keeps it to one
     -- per interval rather than one per tool call.
-    time_injected_at REAL
+    time_injected_at REAL,
+    -- Last time the Stop hook fired the one-shot heartbeat nudge for this session
+    -- (see notify.heartbeat_reason). Separate from time_injected_at so the
+    -- mid-turn timeline line and the at-idle nudge keep independent cadences.
+    heartbeat_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_pid ON sessions(claude_pid);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
@@ -394,6 +398,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE sessions ADD COLUMN responsibilities TEXT")
     if "time_injected_at" not in have:
         conn.execute("ALTER TABLE sessions ADD COLUMN time_injected_at REAL")
+    if "heartbeat_at" not in have:
+        conn.execute("ALTER TABLE sessions ADD COLUMN heartbeat_at REAL")
     if "owner_pid" not in have:
         conn.execute("ALTER TABLE sessions ADD COLUMN owner_pid INTEGER")
         # One-time backfill, right after the column appears: every pre-existing
@@ -540,29 +546,44 @@ def touch(conn: sqlite3.Connection, session_id: str) -> None:
     conn.commit()
 
 
-def timeline_due(conn: sqlite3.Connection, session_id: str, interval: float) -> bool:
-    """True if at least ``interval`` seconds have passed since this session last
-    had the wall-clock line injected, stamping ``time_injected_at`` to now when it
-    is. A check-and-set: the caller injects the line iff this returns True, so the
-    stamp and the injection can't drift apart.
+def _throttle_due(conn: sqlite3.Connection, session_id: str, column: str, interval: float) -> bool:
+    """Shared check-and-set behind the per-session time throttles. True if at least
+    ``interval`` seconds have passed since ``column`` was last stamped for this
+    session, writing ``now`` into it when so. The caller acts iff this returns True,
+    so the stamp and the action can't drift apart.
 
-    An unknown session, or ``interval`` <= 0, returns False without stamping —
-    the first is nothing to key on, the second is the "timeline off" setting.
+    An unknown session, or ``interval`` <= 0, returns False without stamping — the
+    first is nothing to key on, the second is the feature's "off" setting. ``column``
+    is a fixed internal identifier, never caller input, so it is safe to interpolate.
     """
     if interval <= 0:
         return False
     row = conn.execute(
-        "SELECT time_injected_at FROM sessions WHERE session_id=?", (session_id,)
+        f"SELECT {column} FROM sessions WHERE session_id=?", (session_id,)
     ).fetchone()
     if row is None:
         return False
     now = _now()
-    last = row["time_injected_at"]
+    last = row[column]
     if last is not None and now - last < interval:
         return False
-    conn.execute("UPDATE sessions SET time_injected_at=? WHERE session_id=?", (now, session_id))
+    conn.execute(f"UPDATE sessions SET {column}=? WHERE session_id=?", (now, session_id))
     conn.commit()
     return True
+
+
+def timeline_due(conn: sqlite3.Connection, session_id: str, interval: float) -> bool:
+    """True (once per ``interval``) when the mid-turn wall-clock timeline line is
+    due for this session; see notify.timeline_text. Stamps ``time_injected_at``.
+    """
+    return _throttle_due(conn, session_id, "time_injected_at", interval)
+
+
+def heartbeat_due(conn: sqlite3.Connection, session_id: str, interval: float) -> bool:
+    """True (once per ``interval``) when the at-idle Stop-hook heartbeat nudge is
+    due for this session; see notify.heartbeat_reason. Stamps ``heartbeat_at``.
+    """
+    return _throttle_due(conn, session_id, "heartbeat_at", interval)
 
 
 def end_session(conn: sqlite3.Connection, session_id: str) -> None:

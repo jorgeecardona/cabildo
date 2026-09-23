@@ -45,3 +45,18 @@ def test_timeline_text_injects_once_then_throttles(conn):
 def test_timeline_text_off_when_interval_not_positive(conn):
     make_session(conn, "me", handle="me", project=P, project_name="x")
     assert notify.timeline_text(conn, "me", 0) is None
+
+
+def test_heartbeat_reason_fires_once_then_throttles(conn):
+    make_session(conn, "me", handle="me", project=P, project_name="x")
+    reason = notify.heartbeat_reason(conn, "me", 600)
+    assert reason is not None
+    assert "cabildo heartbeat" in reason and reason.startswith("🕐 ")
+    # One-shot within the interval: a second stop attempt is not re-blocked here.
+    assert notify.heartbeat_reason(conn, "me", 600) is None
+
+
+def test_heartbeat_reason_off_by_default_interval(conn):
+    make_session(conn, "me", handle="me", project=P, project_name="x")
+    # heartbeat_s defaults to 0 (off): no nudge, session idles normally.
+    assert notify.heartbeat_reason(conn, "me", 0) is None
