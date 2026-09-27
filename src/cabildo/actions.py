@@ -441,6 +441,14 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
             steps,
         )
 
+    # 7. Sync the lander's LOCAL target branch to the just-landed remote tip.
+    #    The push advanced origin/target; local `target` (a lane land never has it
+    #    checked out) would otherwise drift one commit further behind on every
+    #    land (issue #20). Non-destructive by default and NEVER fails the land: a
+    #    push that reached the remote has already succeeded, and a checkout we
+    #    can't fast-forward is a warning, not a failure.
+    local_sync = _local_sync(root, remote, target, branch, config.land_local_sync(cwd), steps, ctx)
+
     return {
         "ok": True,
         "landed": True,
@@ -449,8 +457,71 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         "target": f"{remote}/{target}",
         "gate": gate_state,
         "verified": f"{remote}/{target} contains {sha[:12]} per ls-remote ({detail})",
+        "local_sync": local_sync,
         "steps": steps,
     }
+
+
+def _local_sync(
+    root: str,
+    remote: str,
+    target: str,
+    branch: str,
+    mode: str,
+    steps: list[dict[str, Any]],
+    ctx: Ctx,
+) -> str:
+    """Update local ``target`` to the just-landed ``remote/target`` per ``mode``
+    ("off" | "ff-only" | "reset"), append a ``local-sync`` step, and return a
+    one-line summary. Never raises and never fails the land (issue #20).
+
+    ``ff-only`` fast-forwards ``target`` and refuses (warns) on divergence or
+    when ``target`` is checked out in a worktree; ``reset`` force-updates it;
+    ``off`` does nothing. When ``target`` is this checkout's own branch the push
+    already advanced it, so there is nothing to do.
+    """
+
+    def record(rc: int, out: str, summary: str) -> str:
+        steps.append({"step": "local-sync", "rc": rc, "out": out[-2000:]})
+        ctx.log(f"  local-sync ({mode}): {summary}")
+        return summary
+
+    if mode == "off":
+        return record(0, "local_sync = off", "off — local branch untouched")
+
+    if branch == target:
+        # The lander is ON target; the push we just made advanced this very
+        # checkout's HEAD, so local target already holds the landed commit.
+        return record(
+            0, f"landed from {target} itself", f"local {target} already at the landed commit"
+        )
+
+    if mode == "reset":
+        # Force-update the local target ref to the remote tip. `fetch` still
+        # refuses when target is checked out in a worktree; we warn, never touch
+        # a tree we did not create.
+        rc, out = git(["fetch", remote, f"+{target}:{target}"], root)
+        if rc == 0:
+            return record(0, out, f"local {target} hard-synced to {remote}/{target}")
+        return record(
+            0,  # a refusal is not a land failure
+            out,
+            f"local {target} NOT synced (reset refused) — likely checked out in a "
+            f"worktree; sync it there by hand:\n{out[-400:]}",
+        )
+
+    # ff-only (the default): a plain fetch into the branch is a fast-forward or
+    # nothing; it refuses a non-ff and a checked-out target, which is exactly the
+    # safe behavior — advance when clean, warn otherwise.
+    rc, out = git(["fetch", remote, f"{target}:{target}"], root)
+    if rc == 0:
+        return record(0, out, f"local {target} fast-forwarded to {remote}/{target}")
+    return record(
+        0,  # never fail the land on a sync refusal
+        out,
+        f"local {target} diverged or is checked out — NOT synced (no work lost). "
+        f"Fast-forward it yourself when clean:\n{out[-400:]}",
+    )
 
 
 def _fail(reason: str, steps: list[dict[str, Any]]) -> dict[str, Any]:

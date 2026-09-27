@@ -65,7 +65,7 @@ wheels = [
 
 [[package]]
 name = "cabildo"
-version = "0.1.77"
+version = "0.1.78"
 source = { editable = "." }
 dependencies = [
     { name = "mcp" },

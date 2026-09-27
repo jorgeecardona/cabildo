@@ -307,6 +307,121 @@ def test_claude_own_settings_gets_a_pointed_hint(repo):
     assert "Claude Code's own settings file" not in res["reason"]
 
 
+# --------------------------------------------------------------------------- #
+# Post-land local sync (issue #20): local `main` must not drift behind origin.
+# --------------------------------------------------------------------------- #
+
+
+def _land_cwd(cwd):
+    ctx = actions.Ctx(worker="test", allow_push=True, log=lambda _m: None)
+    return actions.land({"cwd": str(cwd), "target": "main"}, ctx)
+
+
+def _set_local_sync(work, mode):
+    d = work / ".cabildo"
+    d.mkdir(exist_ok=True)
+    (d / "config.toml").write_text(f'[land]\nlocal_sync = "{mode}"\n')
+
+
+def _lane(work):
+    """Put ``work`` on a lane branch holding the unpushed commit, with local
+    ``main`` moved back to the remote base so a land has something to fast-forward.
+    Returns the lane's committed sha.
+    """
+    sha = sh(["git", "rev-parse", "HEAD"], work)
+    sh(["git", "checkout", "-b", "lane"], work)
+    sh(["git", "branch", "-f", "main", "origin/main"], work)  # local main back to base
+    return sha
+
+
+def test_ff_only_advances_pristine_local_main(repo, home):
+    """The default: after a lane land, local `main` fast-forwards to the landed
+    commit instead of drifting a commit behind (issue #20).
+    """
+    origin, work, _ = repo
+    landed = _lane(work)
+    before = sh(["git", "rev-parse", "main"], work)
+    assert before != landed, "precondition: local main is behind the lane commit"
+
+    res = _land_cwd(work)
+    assert res["ok"] and res["landed"] is True
+    assert sh(["git", "rev-parse", "main"], work) == landed, "local main did not advance"
+    assert "fast-forward" in res["local_sync"].lower()
+
+
+def test_ff_only_refuses_on_diverged_local_main_without_data_loss(repo, home):
+    """A local `main` that has diverged is never clobbered under ff-only: the land
+    still succeeds, but local `main` is left exactly as it was.
+    """
+    origin, work, _ = repo
+    _lane(work)
+    # Give local main a commit of its own that origin will never have.
+    sh(["git", "checkout", "main"], work)
+    (work / "local-only.txt").write_text("do not lose me\n")
+    sh(["git", "add", "local-only.txt"], work)
+    sh(["git", "commit", "-m", "local only"], work)
+    diverged = sh(["git", "rev-parse", "main"], work)
+    sh(["git", "checkout", "lane"], work)
+
+    res = _land_cwd(work)
+    assert res["ok"] and res["landed"] is True, "a sync refusal must not fail the land"
+    assert sh(["git", "rev-parse", "main"], work) == diverged, "diverged main was clobbered"
+    assert "not synced" in res["local_sync"].lower()
+
+
+def test_ff_only_warns_when_main_is_checked_out_elsewhere(repo, home):
+    """Landing from a linked lane worktree while `main` is checked out in the
+    primary: fetch refuses to touch the checked-out branch, so the land warns and
+    leaves it for the human — it never reaches into that tree (issue #20).
+    """
+    origin, work, _ = repo
+    sh(["git", "push", str(origin), "main"], work)  # primary main == origin, clean
+    base = sh(["git", "rev-parse", "main"], work)
+    lane_wt = work.parent / "lane_wt"
+    sh(["git", "worktree", "add", "-b", "lane", str(lane_wt)], work)
+    (lane_wt / "lane.txt").write_text("lane work\n")
+    sh(["git", "add", "lane.txt"], lane_wt)
+    sh(["git", "commit", "-m", "lane work"], lane_wt)
+
+    res = _land_cwd(lane_wt)
+    assert res["ok"] and res["landed"] is True
+    assert sh(["git", "rev-parse", "main"], work) == base, "primary's main was touched"
+    assert "not synced" in res["local_sync"].lower()
+
+
+def test_reset_fires_only_when_configured(repo, home):
+    """`reset` force-syncs a diverged local `main`; without it the default refuses.
+    Same divergent setup, opposite outcome, gated purely by config.
+    """
+    origin, work, _ = repo
+    _lane(work)
+    sh(["git", "checkout", "main"], work)
+    (work / "local-only.txt").write_text("clobber me\n")
+    sh(["git", "add", "local-only.txt"], work)
+    sh(["git", "commit", "-m", "local only"], work)
+    sh(["git", "checkout", "lane"], work)
+    _set_local_sync(work, "reset")
+
+    res = _land_cwd(work)
+    assert res["ok"] and res["landed"] is True
+    landed = sh(["git", "rev-parse", "HEAD"], work)
+    assert sh(["git", "rev-parse", "main"], work) == landed, "reset did not hard-sync main"
+    assert "hard-synced" in res["local_sync"].lower()
+
+
+def test_off_leaves_local_main_untouched(repo, home):
+    """`off` is a no-op: local `main` stays behind, today's behavior preserved."""
+    origin, work, _ = repo
+    landed = _lane(work)
+    _set_local_sync(work, "off")
+    before = sh(["git", "rev-parse", "main"], work)
+
+    res = _land_cwd(work)
+    assert res["ok"] and res["landed"] is True
+    assert sh(["git", "rev-parse", "main"], work) == before != landed, "off must not sync"
+    assert "off" in res["local_sync"].lower()
+
+
 def test_manual_push_mode_rejects_the_land(repo):
     """A repo on push.mode = 'manual' has opted out of cabildo's push path. The
     daemon must refuse a land that reaches it anyway (stale queue entry, or a

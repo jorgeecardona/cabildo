@@ -6,6 +6,13 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
+- **Post-land local sync** (`[land].local_sync`): after a successful land the
+  daemon can advance the lander's local `main` to the just-landed `origin/main`,
+  so local `main` no longer drifts a commit behind on every land (issue #20).
+  `ff-only` (the default) fast-forwards and refuses (warns, never clobbers) on a
+  diverged local `main` or one checked out in a worktree; `reset` force-syncs;
+  `off` keeps the prior behaviour. A sync refusal never fails the land.
+
 - **Layered `config.toml`**: optional read-only TOML settings, with precedence
   repo-local `.cabildo/config.toml` over `~/.cabildo/config.toml` over built-in
   defaults, merged table by table. A `[project.<name>]` section in the global

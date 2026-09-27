@@ -65,6 +65,12 @@ quiet_hours = "22:00-08:00"
 
 [land]
 target = "main"    # default branch for `request land`
+# How a successful land updates the lander's LOCAL target branch (issue #20):
+# "ff-only" (default) fast-forward it, warn and never clobber if it diverged or
+#           is checked out in a worktree; a refusal never fails the land.
+# "reset"   force it to origin/<target> (destructive; opt-in).
+# "off"     leave it alone (prior behaviour; local main drifts behind).
+local_sync = "ff-only"
 
 [spawn]
 model = "sonnet"   # default model for helper agents

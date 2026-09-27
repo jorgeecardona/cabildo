@@ -31,7 +31,7 @@ today; the rest are read generically and wired one call site at a time):
     [watch]   topic, interval, tail         # cli.cmd_watch
     [uplink]  level = "none" | ...          # cloud
     [notify]  enabled, quiet_hours          # desktop / notify
-    [land]    target = "main"               # actions.land
+    [land]    target, local_sync           # actions.land (local_sync: issue #20)
     [spawn]   model, max_agents, max_depth   # request spawn
     [record]  messages = true                # config.record_messages (daemon ingest)
     [roles]   <name> = "responsibilities"    # config.roles (agent-card roster)
@@ -161,6 +161,29 @@ def push_timeout(cwd: str | None = None, project_name: str | None = None) -> flo
         return float(val)
     except (TypeError, ValueError):
         return 300.0
+
+
+def land_local_sync(cwd: str | None = None, project_name: str | None = None) -> str:
+    """``[land].local_sync`` for this project: how a successful land updates the
+    lander's LOCAL ``main`` (issue #20).
+
+    The daemon pushes to ``origin/main`` but deliberately never touches a working
+    checkout's branch mid-edit, so without this local ``main`` drifts further
+    behind ``origin/main`` after every land, and agents reach for
+    ``git reset --hard`` (which the guard denies).
+
+    - ``"off"`` -- no local git op; today's behavior.
+    - ``"ff-only"`` (the default) -- fast-forward local ``main`` to
+      ``origin/main`` after the push, and REFUSE (warn, never clobber) when it
+      cannot: a diverged local ``main``, or ``main`` checked out in a worktree.
+      A refusal never fails the land.
+    - ``"reset"`` -- hard-reset local ``main`` to ``origin/main``. Destructive;
+      strictly opt-in.
+
+    An unknown value falls back to "ff-only", the safe-by-construction policy.
+    """
+    mode = str(get(cwd, "land", "local_sync", project_name=project_name, default="ff-only")).lower()
+    return mode if mode in ("off", "ff-only", "reset") else "ff-only"
 
 
 def destructive_mode(cwd: str | None = None, project_name: str | None = None) -> str:
