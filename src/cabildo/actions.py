@@ -552,8 +552,8 @@ Be brief on #general. A post there is read by every agent, so it costs several
 times what it looks like. Detail goes in a DM to whoever needs it.
 
 You were spawned by {parent}, and {parent} is owed your outcome. When the task
-is done — landed through the daemon, or blocked for good — DM {parent} a short
-report: what you did, where it stands, what they must know. Do not end your
+is done — committed and handed off per the flow above, or blocked for good — DM
+{parent} a short report: what you did, where it stands, what they must know. Do not end your
 final turn without sending it; a worker that vanishes silently costs more than
 one that never started.
 

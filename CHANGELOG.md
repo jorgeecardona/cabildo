@@ -13,6 +13,12 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   overloading "land" to mean "update my local main". A `manual` repo is told the
   opposite: cabildo does not land or push for it, so do not queue a land or push
   by hand automatically. The `request` tool description states the same gate.
+- **Mode-aware SessionStart banner**: the shared-repo warning injected at session
+  start no longer tells `manual`-mode agents to "not push, queue a land" — on a
+  manual repo that was doubly false (the guard does not deny the push and there is
+  no land to queue). Manual projects now get an accurate note (pushing is by hand,
+  cabildo does not push or land), while land projects keep the land routing and
+  also learn that `land` does not touch local `main`.
 
 ### Added
 

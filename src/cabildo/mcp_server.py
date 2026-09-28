@@ -813,7 +813,8 @@ def request(action: str, params: dict[str, Any] | None = None) -> dict[str, Any]
     immediately with an intent id — this queues work, it does not run it.
 
     The daemon executes one intent at a time, so `land` cannot race another
-    agent's `land`. That serialisation is the point: don't push yourself.
+    agent's `land`. That serialisation is the point where cabildo manages pushes;
+    on a repo set to [push].mode = "manual" it does not, and you push by hand.
 
     Actions:
       land  — fetch, rebase onto the target, run the repo's gate, then push your
