@@ -4,6 +4,32 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+### Added
+
+- **`cabildo branches`** (and the `branches` MCP tool): a read-only inventory of a
+  repo's worktrees and bare branches — the zoo coding agents leave behind. Each
+  one is placed against the trunk (ahead/behind the local `origin/<target>`,
+  whether it is already contained in the trunk), shows its dirty count (tracked
+  changes only), and is attributed to the cabildo agent living there — a live
+  session if one is standing in it, otherwise the spawn ledger. It runs only
+  read-only git and never fetches, so it is instant and changes nothing.
+- **Post-land local sync** (`[land].local_sync`): after a successful land the
+  daemon can advance the lander's local `main` to the just-landed `origin/main`,
+  so local `main` no longer drifts a commit behind on every land (issue #20).
+  `ff-only` (the default) fast-forwards and refuses (warns, never clobbers) on a
+  diverged local `main` or one checked out in a worktree; `reset` force-syncs;
+  `off` keeps the prior behaviour. A sync refusal never fails the land.
+- **Layered `config.toml`**: optional read-only TOML settings, with precedence
+  repo-local `.cabildo/config.toml` over `~/.cabildo/config.toml` over built-in
+  defaults, merged table by table. A `[project.<name>]` section in the global
+  file scopes keys to one repo. cabildo only reads these files (the runtime is
+  stdlib-only and has no TOML writer), so `cloud.json` stays the writable
+  registry, and a malformed file is skipped rather than fatal. Two keys are
+  wired: `[push].mode = "manual"` opts a project out of the push guard, and
+  `[watch].topic = "project"` defaults `cabildo watch` to the repo's own
+  channel. `[uplink]`, `[notify]`, `[land]`, and `[spawn]` are recognised and
+  read generically; wiring follows. See `.cabildo/config.example.toml`.
+
 ### Changed
 
 - **Mode-aware spawn prompt**: the git-flow paragraph a spawned agent receives is
@@ -19,26 +45,6 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   no land to queue). Manual projects now get an accurate note (pushing is by hand,
   cabildo does not push or land), while land projects keep the land routing and
   also learn that `land` does not touch local `main`.
-
-### Added
-
-- **Post-land local sync** (`[land].local_sync`): after a successful land the
-  daemon can advance the lander's local `main` to the just-landed `origin/main`,
-  so local `main` no longer drifts a commit behind on every land (issue #20).
-  `ff-only` (the default) fast-forwards and refuses (warns, never clobbers) on a
-  diverged local `main` or one checked out in a worktree; `reset` force-syncs;
-  `off` keeps the prior behaviour. A sync refusal never fails the land.
-
-- **Layered `config.toml`**: optional read-only TOML settings, with precedence
-  repo-local `.cabildo/config.toml` over `~/.cabildo/config.toml` over built-in
-  defaults, merged table by table. A `[project.<name>]` section in the global
-  file scopes keys to one repo. cabildo only reads these files (the runtime is
-  stdlib-only and has no TOML writer), so `cloud.json` stays the writable
-  registry, and a malformed file is skipped rather than fatal. Two keys are
-  wired: `[push].mode = "manual"` opts a project out of the push guard, and
-  `[watch].topic = "project"` defaults `cabildo watch` to the repo's own
-  channel. `[uplink]`, `[notify]`, `[land]`, and `[spawn]` are recognised and
-  read generically; wiring follows. See `.cabildo/config.example.toml`.
 
 ## [0.1.15] - 2026-09-14
 

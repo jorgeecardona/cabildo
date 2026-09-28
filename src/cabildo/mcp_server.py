@@ -891,6 +891,27 @@ def intents(status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
         return out
 
 
+@mcp.tool()
+def branches(repo: str | None = None, target: str = "main") -> dict[str, Any]:
+    """Inventory this repo's worktrees and branches — the zoo coding agents leave
+    behind — and who each one belongs to. Read-only: it runs only read-only git
+    and never fetches, so ahead/behind is against the LOCAL origin/<target>.
+
+    Each worktree and each bare branch (one with no worktree) comes back with its
+    branch, HEAD, ahead/behind the trunk, whether it is already in the trunk,
+    dirty count (tracked changes only), and the cabildo agent living there when
+    one is known (live session, else the spawn ledger). `repo` defaults to your
+    own working directory.
+    """
+    from . import branches as _branches
+
+    with store.connect() as conn:
+        sid = _me(conn)
+        row = store.get_session(conn, sid)
+        cwd = repo or (row["cwd"] if row else None)
+    return _branches.inventory(cwd=cwd, target=target)
+
+
 @mcp.tool(structured_output=False)
 def standup(hours: float = 24.0) -> str:
     """Who touched what over the last `hours`: messages, tasks in flight (claim = flow),

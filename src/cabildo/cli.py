@@ -692,6 +692,88 @@ def cmd_fleet(args) -> int:
     return 0
 
 
+def _age(secs: float) -> str:
+    s = int(secs)
+    if s < 3600:
+        return f"{s // 60}m"
+    if s < 86400:
+        return f"{s // 3600}h{(s % 3600) // 60:02d}m"
+    return f"{s // 86400}d"
+
+
+def _branch_line_stats(e: dict) -> str:
+    """The shared middle columns for a worktree or a bare branch: ahead/behind and
+    whether it is already contained in the trunk.
+    """
+    ab = "?" if e["ahead"] is None else f"+{e['ahead']} -{e['behind']}"
+    trunk = f" {C.DIM}in-trunk{C.OFF}" if e.get("in_trunk") else ""
+    return f"{ab:>9}{trunk}"
+
+
+def _agent_label(agent: dict | None) -> str:
+    if not agent:
+        return f"{C.DIM}no agent{C.OFF}"
+    state = agent.get("presence") or agent.get("status") or ""
+    col = C.GREEN if state in ("working", "registered") else C.DIM
+    return f"{col}{agent['name']}{C.OFF} {C.DIM}({state}){C.OFF}"
+
+
+def cmd_branches(args) -> int:
+    """The zoo, read-only: every worktree and every bare branch, whose agent it
+    is, and where it stands versus the trunk. Changes nothing.
+    """
+    from . import branches as _branches
+
+    inv = _branches.inventory(cwd=args.repo, target=args.target, remote=args.remote)
+    if not inv["ok"]:
+        print(f"{C.RED}{inv['reason']}{C.OFF}", file=sys.stderr)
+        return 1
+
+    now = time.time()
+    proj = f" · project {inv['project']}" if inv["project"] else ""
+    print(f"{C.BOLD}{inv['repo']}{C.OFF}{C.DIM}{proj} · vs {inv['base']}{C.OFF}")
+    if not inv["base_present"]:
+        print(
+            f"{C.YELLOW}  {inv['base']} not present locally — ahead/behind unknown (no fetch){C.OFF}"
+        )
+
+    print(f"\n{C.BOLD}worktrees{C.OFF} ({len(inv['worktrees'])})")
+    for e in inv["worktrees"]:
+        live = bool(e["agent"] and (e["agent"].get("presence") in ("working", "idle")))
+        icon = f"{C.GREEN}●{C.OFF}" if live else f"{C.DIM}○{C.OFF}"
+        name = os.path.basename(e["path"].rstrip("/")) or e["path"]
+        branch = e["branch"] or f"{C.DIM}(detached){C.OFF}"
+        dirty = (
+            "?" if e["dirty"] is None else ("clean" if e["dirty"] == 0 else f"dirty:{e['dirty']}")
+        )
+        flags = "".join(
+            f" {C.YELLOW}{f}{C.OFF}"
+            for f, on in (("locked", e["locked"]), ("prunable", e["prunable"]))
+            if on
+        )
+        lc = e["last_commit"]
+        when = f"{_age(now - lc['at'])} ago" if lc else "—"
+        subj = lc["subject"][:60] if lc else ""
+        print(
+            f"  {icon} {C.BOLD}{name[:24]:<24}{C.OFF} {branch[:28]:<28} "
+            f"{_branch_line_stats(e)}  {dirty:<8} {_agent_label(e['agent'])}{flags}"
+        )
+        print(f"      {C.DIM}{when:>8}  {subj}{C.OFF}")
+
+    if inv["branches"]:
+        print(f"\n{C.BOLD}branches without a worktree{C.OFF} ({len(inv['branches'])})")
+        for e in inv["branches"]:
+            lc = e["last_commit"]
+            when = f"{_age(now - lc['at'])} ago" if lc else "—"
+            subj = lc["subject"][:60] if lc else ""
+            print(
+                f"  {C.DIM}·{C.OFF} {e['branch'][:28]:<28} {e['head']:<10} "
+                f"{_branch_line_stats(e)}  {_agent_label(e['agent'])}"
+            )
+            print(f"      {C.DIM}{when:>8}  {subj}{C.OFF}")
+    return 0
+
+
 def cmd_lan(args) -> int:
     """Share this project's bus with peers on the local network — no cloud.
 
@@ -1649,6 +1731,15 @@ def main(argv: list[str] | None = None) -> int:
     fl = sub.add_parser("fleet", help="spawn ledger: who begat whom, and their fate")
     fl.add_argument("-n", type=int, default=20)
     fl.set_defaults(fn=cmd_fleet)
+
+    br = sub.add_parser(
+        "branches",
+        help="the zoo: worktrees + bare branches, whose agent, and vs the trunk (read-only)",
+    )
+    br.add_argument("--repo", default=None, help="repo to inventory (default: cwd)")
+    br.add_argument("--target", default="main", help="trunk branch to compare against")
+    br.add_argument("--remote", default="origin", help="remote holding the trunk")
+    br.set_defaults(fn=cmd_branches)
 
     co = sub.add_parser(
         "cost", help="what running cabildo costs: injected context, hook latency, tool traffic"

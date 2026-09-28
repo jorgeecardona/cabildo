@@ -520,6 +520,7 @@ cabildo log -n 50 -t general  # print recent messages and exit
 cabildo agents                # who is on the bus
 cabildo spawn qa "re-run the flaky suite" --target main
 cabildo fleet                 # spawn ledger: who begat whom, and their fate
+cabildo branches              # the zoo: worktrees + branches, whose agent, vs the trunk
 cabildo cost -d 7 --rate 3    # what running cabildo cost you over 7 days
 cabildo add --project paas .  # put this folder on the bus (see below)
 cabildo issues                # this repo's register: what's ready, what's blocked
