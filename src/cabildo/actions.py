@@ -540,12 +540,7 @@ Your tree is yours. You are running in a dedicated git worktree on your own
 branch. Nobody else edits these files. Work here freely; never `cd` to another
 worktree or the main checkout to "just fix one thing".
 
-You do not push. When your work is committed and you want it on {target},
-call `request(action="land", params={{"cwd": "{worktree}"}})`. A single-threaded
-daemon serialises fetch/rebase/gate/push, so your land cannot race anyone's. It
-will DM you the result. If it fails, the failure is yours to fix, not to retry
-blindly. Landing requires a CLEAN tree — commit first; the daemon will not
-decide what to commit for you.
+{flow}
 
 Talk on the bus: `send` to report or ask, `inbox` to read (messages are never
 auto-read), `read` to mark. Use `urgent=True` ONLY when you are blocked and
@@ -605,6 +600,35 @@ Never reap a port you did not start: it is probably a shared stack someone else
 is driving right now.
 """,
 }
+
+
+# The git flow the spawn prompt describes is chosen per repo from [push].mode, so
+# an agent is never told to do the one thing the daemon will refuse. Two words,
+# two directions, never overloaded: `land` moves committed work to origin/{target}
+# (the write path); "catch up" moves origin/{target} down into the local {target}
+# (the read-back path, done for you after a land). "manual" repos are offered
+# neither — cabildo does not push for them at all.
+_FLOW_LAND = """\
+You do not push, and cabildo never pushes for you unless you ask it to land. When
+your work is committed and you want it on origin/{target}, call
+`request(action="land", params={{"cwd": "{worktree}"}})`. A single-threaded daemon
+serialises fetch/rebase/gate/push, so your land cannot race anyone's, and it DMs
+you the result. `land` moves your committed work to origin/{target}; it does NOT
+touch your local {target}. Keeping local {target} current is the opposite
+direction ("catch up"), and cabildo catches it up for you after a successful land,
+so you never reach for `git reset --hard`. Landing requires a CLEAN tree — commit
+first; the daemon will not decide what to commit for you. If a land fails, the
+failure is yours to fix, not to retry blindly.\
+"""
+
+_FLOW_MANUAL = """\
+This project pushes by hand. cabildo does NOT land or push for it — that path is
+turned off for this repo — so do not queue a land and do not run `git push` on
+your own. Commit your work in this worktree and DM your spawner when it is ready;
+a human decides when and how it reaches origin/{target}.\
+"""
+
+_FLOW = {"land": _FLOW_LAND, "manual": _FLOW_MANUAL}
 
 
 # Model aliases the spawner accepts. Not every string claude accepts: a spawn
@@ -681,7 +705,7 @@ def spawn(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     Isolation is not advice here. The only way to get an agent is to get one in
     its own tree, so there is nothing to remember and nothing to defect from.
     """
-    from . import store  # local: actions.py stays importable headless
+    from . import config, store  # local: actions.py stays importable headless
 
     role = params.get("role")
     task = params.get("task")
@@ -761,7 +785,15 @@ def spawn(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
             }
 
         parent_label = store.display_name(store.get_session(conn, parent), parent)
-        prompt = ROLES[role].format(target=target, worktree=wt, parent=parent_label)
+        # The git-flow paragraph is chosen from this repo's push.mode: a "manual"
+        # repo is never told to land (the daemon would refuse it anyway), a "land"
+        # repo gets the land + catch-up instructions.
+        flow = _FLOW["manual" if config.push_mode(root) == "manual" else "land"]
+        prompt = (
+            ROLES[role]
+            .replace("{flow}", flow)
+            .format(target=target, worktree=wt, parent=parent_label)
+        )
         log_path = os.path.join(wt, f".agent-{role}.log")
         cmd = [
             claude,

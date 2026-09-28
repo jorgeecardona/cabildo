@@ -248,3 +248,73 @@ def test_launch_records_lineage_and_model(home, tmp_path, monkeypatch):
     assert row["pid"] == 4242
     assert row["status"] == "launched"
     conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# The spawn prompt is mode-aware: an agent is only told to land where the repo's
+# push.mode allows it, so it is never instructed to do what the daemon refuses.
+# --------------------------------------------------------------------------- #
+
+
+def _spawn_prompt(repo, monkeypatch) -> str:
+    """Spawn a qa agent into `repo` with a faked claude binary and return the
+    system prompt it was launched with.
+    """
+    conn = store.connect()
+    store.register_session(conn, HUMAN_SESSION, cwd="/home/jorge")
+    store.set_handle(conn, HUMAN_SESSION, "jorge")
+    captured: dict = {}
+
+    class FakeProc:
+        pid = 4242
+
+        def poll(self):
+            return None
+
+    real_popen = subprocess.Popen
+
+    def fake_popen(cmd, **kw):
+        if cmd and cmd[0] == "/bin/true":
+            captured["cmd"] = cmd
+            return FakeProc()
+        return real_popen(cmd, **kw)
+
+    monkeypatch.setattr(actions.shutil, "which", lambda _: "/bin/true")
+    monkeypatch.setattr(actions.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        actions,
+        "_verify_spawn",
+        lambda proc, wt, ctx, *, tag, timeout=25: (True, "sess-child", "registered"),
+    )
+    out = actions.spawn(
+        {"role": "qa", "task": _task(), "repo": str(repo), "_from_session": HUMAN_SESSION},
+        _ctx(allow_spawn=True),
+    )
+    assert out["ok"] is True and out["spawned"] is True
+    conn.close()
+    cmd = captured["cmd"]
+    return cmd[cmd.index("--append-system-prompt") + 1]
+
+
+def test_land_mode_prompt_offers_land_and_names_catch_up(home, tmp_path, monkeypatch):
+    """The default (push.mode = land): the agent is told to land, and land is
+    defined against local main so the two directions never get conflated.
+    """
+    repo = _git_repo(tmp_path)
+    prompt = _spawn_prompt(repo, monkeypatch)
+    assert 'request(action="land"' in prompt
+    assert "does NOT" in prompt and "local main" in prompt  # land vs local main stated
+    assert "catch" in prompt.lower()  # the reverse direction is named
+
+
+def test_manual_mode_prompt_does_not_offer_land(home, tmp_path, monkeypatch):
+    """push.mode = manual: cabildo does not push for this repo, so the agent is
+    never told to land — the option is not offered at all.
+    """
+    repo = _git_repo(tmp_path)
+    (repo / ".cabildo").mkdir()
+    (repo / ".cabildo" / "config.toml").write_text('[push]\nmode = "manual"\n')
+    prompt = _spawn_prompt(repo, monkeypatch)
+    assert 'request(action="land"' not in prompt
+    assert "pushes by hand" in prompt
+    assert "do not run `git push`" in prompt

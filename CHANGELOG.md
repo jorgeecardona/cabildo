@@ -4,6 +4,16 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+### Changed
+
+- **Mode-aware spawn prompt**: the git-flow paragraph a spawned agent receives is
+  now chosen from the repo's `[push].mode`. A `land` repo is told to `land` and,
+  crucially, that `land` moves work to `origin/<target>` and does NOT touch its
+  local `<target>` (cabildo catches that up after a land) — so agents stop
+  overloading "land" to mean "update my local main". A `manual` repo is told the
+  opposite: cabildo does not land or push for it, so do not queue a land or push
+  by hand automatically. The `request` tool description states the same gate.
+
 ### Added
 
 - **Post-land local sync** (`[land].local_sync`): after a successful land the

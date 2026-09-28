@@ -816,10 +816,14 @@ def request(action: str, params: dict[str, Any] | None = None) -> dict[str, Any]
     agent's `land`. That serialisation is the point: don't push yourself.
 
     Actions:
-      land  — fetch, rebase onto the target, run the repo's gate, then push.
-              params: {"cwd": "<your worktree>", "target": "main", "remote": "origin"}
-              Requires a CLEAN tree: it lands your commits, it will not decide
-              what to commit for you. On conflict it aborts and hands it back.
+      land  — fetch, rebase onto the target, run the repo's gate, then push your
+              committed work to origin/<target>. It moves work to the REMOTE; it
+              does not change your local <target> (cabildo catches that up for you
+              after a successful land). params: {"cwd": "<your worktree>",
+              "target": "main", "remote": "origin"}. Requires a CLEAN tree: it
+              lands your commits, it will not decide what to commit for you. On
+              conflict it aborts and hands it back. Gated by [push].mode: a repo
+              set to "manual" pushes by hand, and a land there is refused.
       spawn — launch a headless helper agent in its own git worktree.
               params: {"role": "pm"|"qa"|"ux", "task": "<real instruction>",
                        "repo": "<path>", "target": "main",
