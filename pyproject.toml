@@ -22,6 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
     "Topic :: Communications :: Chat",
+    "Typing :: Typed",
 ]
 dependencies = [
     # Upper-bounded on purpose. Both servers import `mcp.server.fastmcp.FastMCP`, and mcp 2.0 moved
