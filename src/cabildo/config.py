@@ -8,7 +8,7 @@ repo.
 
 Precedence, highest first:
 
-    <tree_root>/.cabildo/config.toml   repo-local, beside the land gate
+    <tree_root>/.cabildo/config.toml   repo-local, beside the push gate
                                        (.cabildo/gate.sh); commit it to share a
                                        policy with everyone on the checkout
     ~/.cabildo/config.toml             this machine, all projects; a
@@ -26,12 +26,12 @@ rather than taking down the guard or the CLI that reads it.
 Recognised tables (``push``, ``destructive`` and ``watch`` are wired to behaviour
 today; the rest are read generically and wired one call site at a time):
 
-    [push]        mode = "land" | "manual"     # guard._deny_push
+    [push]        mode = "auto" | "manual"     # guard._deny_push
     [destructive] mode = "guard" | "off"        # guard._deny_destructive_git
     [watch]   topic, interval, tail         # cli.cmd_watch
     [uplink]  level = "none" | ...          # cloud
     [notify]  enabled, quiet_hours          # desktop / notify
-    [land]    target, local_sync           # actions.land (local_sync: issue #20)
+    [push]    target, local_sync           # actions.push (local_sync: issue #20)
     [spawn]   model, max_agents, max_depth   # request spawn
     [record]  messages = true                # config.record_messages (daemon ingest)
     [roles]   <name> = "responsibilities"    # config.roles (agent-card roster)
@@ -131,17 +131,17 @@ def get(
 
 
 def push_mode(cwd: str | None = None, project_name: str | None = None) -> str:
-    """``[push].mode`` for this project: "manual" or the default "land".
+    """``[push].mode`` for this project: "manual" or the default "auto".
 
-    An unknown value falls back to "land" -- the safe policy, since "manual"
+    An unknown value falls back to "auto" -- the safe policy, since "manual"
     turns the push guard off.
     """
-    mode = str(get(cwd, "push", "mode", project_name=project_name, default="land")).lower()
-    return mode if mode in ("land", "manual") else "land"
+    mode = str(get(cwd, "push", "mode", project_name=project_name, default="auto")).lower()
+    return mode if mode in ("auto", "manual") else "auto"
 
 
 def push_verify(cwd: str | None = None, project_name: str | None = None) -> bool:
-    """``[push].verify``: whether the daemon's land push re-runs the repo's
+    """``[push].verify``: whether the daemon's push push re-runs the repo's
     pre-push hook. Default False -- the daemon already ran ``.cabildo/gate.sh``
     immediately before, so re-verifying inside the push duplicates that work and,
     with a slow pre-push, times the push out (issue #14). Set true to keep the
@@ -152,7 +152,7 @@ def push_verify(cwd: str | None = None, project_name: str | None = None) -> bool
 
 
 def push_timeout(cwd: str | None = None, project_name: str | None = None) -> float:
-    """``[push].timeout_s``: seconds the land push may take before the daemon
+    """``[push].timeout_s``: seconds the push push may take before the daemon
     gives up. Default 300 -- git's plain 120 guillotines a slow network or a
     legitimately large push (issue #14).
     """
@@ -163,26 +163,26 @@ def push_timeout(cwd: str | None = None, project_name: str | None = None) -> flo
         return 300.0
 
 
-def land_local_sync(cwd: str | None = None, project_name: str | None = None) -> str:
-    """``[land].local_sync`` for this project: how a successful land updates the
-    lander's LOCAL ``main`` (issue #20).
+def push_local_sync(cwd: str | None = None, project_name: str | None = None) -> str:
+    """``[push].local_sync`` for this project: how a successful push updates the
+    pusher's LOCAL ``main`` (issue #20).
 
     The daemon pushes to ``origin/main`` but deliberately never touches a working
     checkout's branch mid-edit, so without this local ``main`` drifts further
-    behind ``origin/main`` after every land, and agents reach for
+    behind ``origin/main`` after every push, and agents reach for
     ``git reset --hard`` (which the guard denies).
 
     - ``"off"`` -- no local git op; today's behavior.
     - ``"ff-only"`` (the default) -- fast-forward local ``main`` to
       ``origin/main`` after the push, and REFUSE (warn, never clobber) when it
       cannot: a diverged local ``main``, or ``main`` checked out in a worktree.
-      A refusal never fails the land.
+      A refusal never fails the push.
     - ``"reset"`` -- hard-reset local ``main`` to ``origin/main``. Destructive;
       strictly opt-in.
 
     An unknown value falls back to "ff-only", the safe-by-construction policy.
     """
-    mode = str(get(cwd, "land", "local_sync", project_name=project_name, default="ff-only")).lower()
+    mode = str(get(cwd, "push", "local_sync", project_name=project_name, default="ff-only")).lower()
     return mode if mode in ("off", "ff-only", "reset") else "ff-only"
 
 

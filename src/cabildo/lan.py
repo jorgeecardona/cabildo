@@ -14,7 +14,7 @@ cross-machine transport that keeps the traffic on the LAN:
                   to another peer's bus directly.
   * dedup       — messages carry a global `guid` (see store.post_message). A
                   pulled row is inserted only if its guid is new, stamped
-                  origin='lan', keeping the original guid + created_at so a
+                  provenance='lan', keeping the original guid + created_at so a
                   message that hops A->B->C keeps one identity and merges once.
 
 Scope of this first increment: MESSAGES for one project. Presence and claim
@@ -146,9 +146,9 @@ def select_outbound(
     return out, max_id
 
 
-def merge_incoming(conn, rows: list[dict[str, Any]], *, origin: str = "lan") -> int:
+def merge_incoming(conn, rows: list[dict[str, Any]], *, provenance: str = "lan") -> int:
     """Insert peer rows not already present (dedup by guid), stamped with
-    ``origin`` (``'lan'`` for the local wire, ``'wan'`` for a tunnelled peer),
+    ``provenance`` (``'lan'`` for the local wire, ``'wan'`` for a tunnelled peer),
     keeping their original guid + created_at so identity and ordering survive the
     hop. Returns the count newly inserted.
     """
@@ -171,14 +171,14 @@ def merge_incoming(conn, rows: list[dict[str, Any]], *, origin: str = "lan") -> 
             continue  # exactly one of topic / to_session must be set; skip malformed
         store.post_message(
             conn,
-            from_session=r.get("from_session") or f"{origin}:unknown",
+            from_session=r.get("from_session") or f"{provenance}:unknown",
             from_handle=r.get("from_handle"),
             body=r.get("body") or "",
             topic=topic,
             to_session=to_session,
             project=r.get("project"),
             urgent=bool(r.get("urgent")),
-            origin=origin,
+            provenance=provenance,
             guid=g,
             created_at=r.get("created_at"),
         )

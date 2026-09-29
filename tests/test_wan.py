@@ -1,7 +1,7 @@
-"""WAN sync: the explicit-peer variant of lan.py, stamping origin='wan'.
+"""WAN sync: the explicit-peer variant of lan.py, stamping provenance='wan'.
 
 Phase 4 of the broker refactor (docs/design/broker-service.md). wan.py reuses
-lan.py's pull/dedup, so these tests pin the new glue: the origin stamp, the
+lan.py's pull/dedup, so these tests pin the new glue: the provenance stamp, the
 per-peer cursor, and the token-gated socket round trip. Additive -- nothing in
 the live daemon runs this yet.
 """
@@ -27,7 +27,7 @@ def _msg(guid: str, body: str) -> dict:
     }
 
 
-def test_merge_incoming_stamps_wan_origin(home):
+def test_merge_incoming_stamps_wan_provenance(home):
     conn = store.connect()
     rows = [
         {
@@ -42,12 +42,12 @@ def test_merge_incoming_stamps_wan_origin(home):
             "urgent": 0,
         }
     ]
-    assert lan.merge_incoming(conn, rows, origin=wan.ORIGIN) == 1
-    row = conn.execute("SELECT origin, body FROM messages WHERE guid='g1'").fetchone()
-    assert row["origin"] == "wan"
+    assert lan.merge_incoming(conn, rows, provenance=wan.ORIGIN) == 1
+    row = conn.execute("SELECT provenance, body FROM messages WHERE guid='g1'").fetchone()
+    assert row["provenance"] == "wan"
     assert row["body"] == "hi from A"
     # Re-merging the same guid is a no-op (dedup across the hop).
-    assert lan.merge_incoming(conn, rows, origin=wan.ORIGIN) == 0
+    assert lan.merge_incoming(conn, rows, provenance=wan.ORIGIN) == 0
     conn.close()
 
 
@@ -76,7 +76,10 @@ def test_sync_round_merges_and_advances_cursor(home, monkeypatch):
     assert res["merged"] == 1
 
     conn = store.connect()
-    assert conn.execute("SELECT origin FROM messages WHERE guid='g9'").fetchone()["origin"] == "wan"
+    assert (
+        conn.execute("SELECT provenance FROM messages WHERE guid='g9'").fetchone()["provenance"]
+        == "wan"
+    )
     conn.close()
 
     # Cursor advanced to 42, so a second round pulls nothing new.
@@ -105,10 +108,12 @@ def test_sync_round_repulls_when_the_peer_node_changes(home, monkeypatch):
     assert wan.sync_round(peers, "proj", None)["merged"] == 1  # noticed reset, re-pulled
 
     conn = store.connect()
-    origins = {r["guid"]: r["origin"] for r in conn.execute("SELECT guid, origin FROM messages")}
+    provenances = {
+        r["guid"]: r["provenance"] for r in conn.execute("SELECT guid, provenance FROM messages")
+    }
     conn.close()
-    assert origins.get("a1") == "wan"
-    assert origins.get("b1") == "wan"
+    assert provenances.get("a1") == "wan"
+    assert provenances.get("b1") == "wan"
 
 
 def test_serve_and_pull_over_socket_with_token(home):
@@ -161,7 +166,10 @@ def test_run_single_round_pull_only_merges(home, monkeypatch):
     )
     assert rc == 0
     conn = store.connect()
-    assert conn.execute("SELECT origin FROM messages WHERE guid='g5'").fetchone()["origin"] == "wan"
+    assert (
+        conn.execute("SELECT provenance FROM messages WHERE guid='g5'").fetchone()["provenance"]
+        == "wan"
+    )
     conn.close()
 
 

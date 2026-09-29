@@ -146,7 +146,7 @@ CREATE TABLE IF NOT EXISTS messages (
     -- 'local'  => born on this machine.
     -- 'lan'    => pulled from a peer over the LAN (see lan.py).
     -- 'wan'    => pulled from an explicit remote peer over a tunnel (see wan.py).
-    origin        TEXT NOT NULL DEFAULT 'local',
+    provenance    TEXT NOT NULL DEFAULT 'local',
     -- A globally-unique id minted at the row's birth, stable across machines.
     -- The autoincrement `id` is only meaningful on the machine that generated
     -- it; `guid` is what lets two peers dedup the same message instead of
@@ -335,10 +335,10 @@ CREATE TABLE IF NOT EXISTS ingest_cursors (
 -- Durable decisions, separate from chat. Chat scrolls away and dies with a
 -- session's context; a decision (why we chose X, what we rejected, a constraint,
 -- a warning) is the coordination memory that must outlive any one agent's
--- window, so a peer coming in cold can `catch_up` instead of re-deriving it. Kept
+-- window, so a peer coming in cold can `read_decisions` instead of re-deriving it. Kept
 -- deliberately apart from `messages` so the log of what-was-decided is not buried
 -- in the log of what-was-said.
-CREATE TABLE IF NOT EXISTS facts (
+CREATE TABLE IF NOT EXISTS decisions (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at    REAL NOT NULL,
     session_id    TEXT,
@@ -351,7 +351,7 @@ CREATE TABLE IF NOT EXISTS facts (
     refs          TEXT,                              -- files/commit the decision touches
     tags          TEXT                               -- freeform, for filtering
 );
-CREATE INDEX IF NOT EXISTS idx_facts_project ON facts(project_name, created_at);
+CREATE INDEX IF NOT EXISTS idx_decisions_project ON decisions(project_name, created_at);
 """
 
 
@@ -376,12 +376,12 @@ def connect(*, check_same_thread: bool = True) -> sqlite3.Connection:
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    """Add columns to tables that already exist.
+    """Add columns to tables that already exist, and perform guarded renames.
 
     CREATE TABLE IF NOT EXISTS is a no-op against a live database, so a new
     column in SCHEMA silently never appears on anyone's actual bus — the schema
-    would claim a shape the file doesn't have. Additive only; nothing here drops
-    or rewrites data.
+    would claim a shape the file doesn't have. Mostly additive; one guarded
+    rename (facts→decisions, messages.origin→provenance) is included.
     """
     have = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
     if "tag" not in have:
@@ -414,8 +414,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_owner_pid ON sessions(owner_pid)")
 
     have = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
-    if "origin" not in have:
-        conn.execute("ALTER TABLE messages ADD COLUMN origin TEXT NOT NULL DEFAULT 'local'")
+    if "origin" in have and "provenance" not in have:
+        conn.execute("ALTER TABLE messages RENAME COLUMN origin TO provenance")
+    elif "provenance" not in have:
+        conn.execute("ALTER TABLE messages ADD COLUMN provenance TEXT NOT NULL DEFAULT 'local'")
+    # Re-fetch after potential rename so guid check sees the current columns.
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
     if "guid" not in have:
         conn.execute("ALTER TABLE messages ADD COLUMN guid TEXT")
         # Backfill every pre-existing row with a stable guid so cross-machine
@@ -427,6 +431,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # place to index the column. UNIQUE is what makes post_message idempotent by
     # guid; SQLite treats NULLs as distinct, so it tolerates any un-backfilled row.
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_guid ON messages(guid)")
+
+    # Rename the facts table to decisions (one-time, guarded).
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "facts" in tables and "decisions" not in tables:
+        conn.execute("ALTER TABLE facts RENAME TO decisions")
+
     conn.commit()
 
 
@@ -710,7 +720,7 @@ def active_sessions(
 
 def presence_state(row: sqlite3.Row | None, now: float | None = None) -> str:
     """Derived presence for a session from status + last_seen_at: working (a tool
-    call landed very recently), idle (active but quiet), stale (past the active
+    call pushed very recently), idle (active but quiet), stale (past the active
     window, a reaper will retire it), or ended. Richer than online/offline, and
     free: last_seen_at is refreshed by every hook, so no new state machine.
     """
@@ -730,7 +740,7 @@ def presence_state(row: sqlite3.Row | None, now: float | None = None) -> str:
 def sessions_since(conn: sqlite3.Connection, since: float) -> list[sqlite3.Row]:
     """Every session seen at or after `since`, active or ended. The transcript
     ingest walks these: an ended session still has a tail to capture (its last
-    turns land after Stop), so this is not limited to active ones.
+    turns push after Stop), so this is not limited to active ones.
     """
     return conn.execute(
         "SELECT * FROM sessions WHERE last_seen_at>=? ORDER BY last_seen_at DESC",
@@ -749,7 +759,7 @@ def set_session_model(conn: sqlite3.Connection, session_id: str, model: str) -> 
     conn.commit()
 
 
-def add_fact(
+def add_decision(
     conn: sqlite3.Connection,
     *,
     title: str,
@@ -762,9 +772,9 @@ def add_fact(
     project: str | None = None,
     project_name: str | None = None,
 ) -> int:
-    """Record a durable decision/fact and return its id."""
+    """Record a durable decision and return its id."""
     cur = conn.execute(
-        "INSERT INTO facts (created_at, session_id, handle, project, project_name, "
+        "INSERT INTO decisions (created_at, session_id, handle, project, project_name, "
         "kind, title, body, refs, tags) VALUES (?,?,?,?,?,?,?,?,?,?)",
         [_now(), session_id, handle, project, project_name, kind, title, body, refs, tags],
     )
@@ -772,7 +782,7 @@ def add_fact(
     return int(cur.lastrowid or 0)
 
 
-def list_facts(
+def list_decisions(
     conn: sqlite3.Connection,
     *,
     project_name: str | None = None,
@@ -781,9 +791,9 @@ def list_facts(
     limit: int = 20,
 ) -> list[dict[str, Any]]:
     """Durable decisions, newest first. `query` matches a substring in the title,
-    body, refs or tags, so `catch_up("auth")` returns what was decided about auth.
+    body, refs or tags, so `read_decisions("auth")` returns what was decided about auth.
     """
-    q = "SELECT * FROM facts WHERE 1=1"
+    q = "SELECT * FROM decisions WHERE 1=1"
     args: list[Any] = []
     if project_name:
         q += " AND project_name=?"
@@ -827,7 +837,7 @@ def record_transcript_messages(
 ) -> int:
     """Persist conversation turns. Each row is {uuid, role, text, ts, model}.
     INSERT OR IGNORE keyed on (session_id, uuid), so re-ingesting a transcript
-    never double-writes. Returns how many new rows landed.
+    never double-writes. Returns how many new rows pushed.
     """
     if not rows:
         return 0
@@ -953,7 +963,7 @@ def post_message(
     to_session: str | None = None,
     project: str | None = None,
     urgent: bool = False,
-    origin: str = "local",
+    provenance: str = "local",
     guid: str | None = None,
     created_at: float | None = None,
 ) -> int:
@@ -972,7 +982,7 @@ def post_message(
     ts = _now() if created_at is None else created_at
     cur = conn.execute(
         "INSERT INTO messages(created_at, from_session, from_handle, topic, to_session, "
-        "project, body, urgent, origin, guid) VALUES (?,?,?,?,?,?,?,?,?,?) "
+        "project, body, urgent, provenance, guid) VALUES (?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(guid) DO NOTHING",
         (
             ts,
@@ -983,7 +993,7 @@ def post_message(
             project,
             body,
             1 if urgent else 0,
-            origin,
+            provenance,
             guid,
         ),
     )
@@ -1381,7 +1391,7 @@ def take_next_intent(conn: sqlite3.Connection, worker: str) -> dict[str, Any] | 
 
     One UPDATE..RETURNING rather than SELECT-then-UPDATE: the read and the write
     are a single statement, so two daemons can never hand the same row to two
-    workers. Landing being serialised is the entire point of this table.
+    workers. Pushing being serialised is the entire point of this table.
     """
     row = conn.execute(
         "UPDATE intents SET status='running', worker=?, started_at=?, attempts=attempts+1 "
@@ -1404,7 +1414,7 @@ def finish_intent(
     # attempted, so nothing failed, and a retry-on-failure reader must be able to
     # tell those apart. 'dry_run' (the daemon isn't pushing) and 'unverified' (the
     # remote couldn't be checked) are likewise distinct from a real 'done' so
-    # `done` always means "landed on the remote" (issue #15).
+    # `done` always means "pushed on the remote" (issue #15).
     if status not in ("done", "failed", "rejected", "expired", "dry_run", "unverified"):
         raise ValueError(f"bad terminal status {status!r}")
     conn.execute(
@@ -1593,7 +1603,7 @@ def list_claims(conn: sqlite3.Connection, *, project: str | None = None) -> list
 def file_pattern_matches(pattern: str, candidates: list[str]) -> bool:
     """Does a file:<pattern> claim cover any of these paths? A pattern ending in
     "/" is a directory-prefix claim covering the whole subtree; anything else is
-    an fnmatch glob or an exact path. Shared by the edit guard and the lander so
+    an fnmatch glob or an exact path. Shared by the edit guard and the pusher so
     both agree on what a claim locks.
     """
     from fnmatch import fnmatch
@@ -1612,7 +1622,7 @@ def file_claim_holders(
     exclude_session: str | None = None,
 ) -> list[dict[str, Any]]:
     """Active file claims (held by anyone but exclude_session) that overlap any of
-    `files` (repo-relative paths). Used to tell a lander whose in-flight work its
+    `files` (repo-relative paths). Used to tell a pusher whose in-flight work its
     rebase conflict collides with, so it knows whom to coordinate with.
     """
     now = _now()

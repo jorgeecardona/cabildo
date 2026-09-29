@@ -34,7 +34,7 @@ cabildo viewer            # read-only web view on http://127.0.0.1:8787
 
 ## More
 
-The full guide — identity, the data model, the MCP tools, the push/land pipeline, the
+The full guide — identity, the data model, the MCP tools, the push/push pipeline, the
 `issues` server, hooks, and background services — is in the project
 [README on GitLab](https://gitlab.com/jorgeecardona/cabildo#readme). Release notes are on
 the [Changelog](changelog.md) page.

@@ -4,7 +4,7 @@ The daemon is a single worker that drains the intents queue one at a time
 (take_next_intent flips pending->running atomically; the action runs; finish_intent
 sets a terminal status; then the loop takes the next). Two properties matter:
 
-  * serialization -- never two intents running at once (why land can't race land).
+  * serialization -- never two intents running at once (why push can't race push).
   * no starvation -- every queued intent is eventually processed.
 
 The single-worker model proves both. A hypothetical concurrent-worker variant (take

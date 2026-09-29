@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-# The daemon's land gate runs the suite from a git worktree using a shared venv
+# The daemon's push gate runs the suite from a git worktree using a shared venv
 # whose editable install is pinned to the MAIN checkout — a module added only in
 # this worktree is not importable there, and erroring collection would fail the
 # gate on code that is in fact present. Skip in that environment; the worktree
@@ -277,7 +277,7 @@ def test_daemon_push_check_reports_dry_run_posture(tmp_path, monkeypatch):
     # No service installed: not applicable, not an error.
     assert doctor.check_daemon_push().status == doctor.NA
 
-    # Installed without --allow-push: a dry-run daemon that looks like it lands.
+    # Installed without --allow-push: a dry-run daemon that looks like it pushes.
     unit_path.write_text("ExecStart=/x -m cabildo.daemon --allow-spawn\n")
     assert doctor.check_daemon_push().status == doctor.WARN
 

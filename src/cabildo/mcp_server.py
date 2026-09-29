@@ -255,7 +255,7 @@ def set_role(role: str | None, responsibilities: str | None = None) -> dict[str,
 
 
 @mcp.tool()
-def set_fact(
+def record_decision(
     title: str,
     body: str | None = None,
     kind: str = "decision",
@@ -267,12 +267,12 @@ def set_fact(
     cold must know: a decision and why, a rejected alternative, a constraint, a
     warning. `refs` names the files/commit it touches; `tags` are freeform for
     filtering. `kind` is decision | fact | constraint | warning. Read them back
-    with `catch_up`.
+    with `read_decisions`.
     """
     kind = kind if kind in ("decision", "fact", "constraint", "warning") else "decision"
     with store.connect() as conn:
         sid = _me(conn)
-        fid = store.add_fact(
+        fid = store.add_decision(
             conn,
             title=title,
             body=body,
@@ -288,17 +288,17 @@ def set_fact(
 
 
 @mcp.tool()
-def catch_up(
+def read_decisions(
     query: str | None = None, kind: str | None = None, limit: int = 20
 ) -> list[dict[str, Any]]:
     """The durable decisions for this project, newest first: the coordination
     memory to read before touching unfamiliar work, instead of re-deriving it.
-    `query` matches a substring in the title/body/refs/tags (e.g. catch_up("auth")),
-    `kind` narrows to decision|fact|constraint|warning. Recorded via `set_fact`.
+    `query` matches a substring in the title/body/refs/tags (e.g. read_decisions("auth")),
+    `kind` narrows to decision|fact|constraint|warning. Recorded via `record_decision`.
     """
     with store.connect() as conn:
         sid = _me(conn)
-        return store.list_facts(
+        return store.list_decisions(
             conn, project_name=_project_name(conn, sid), query=query, kind=kind, limit=limit
         )
 
@@ -812,19 +812,19 @@ def request(action: str, params: dict[str, Any] | None = None) -> dict[str, Any]
     """Ask the daemon to do something deterministic on your behalf. Returns
     immediately with an intent id — this queues work, it does not run it.
 
-    The daemon executes one intent at a time, so `land` cannot race another
-    agent's `land`. That serialisation is the point where cabildo manages pushes;
+    The daemon executes one intent at a time, so `push` cannot race another
+    agent's `push`. That serialisation is the point where cabildo manages pushes;
     on a repo set to [push].mode = "manual" it does not, and you push by hand.
 
     Actions:
-      land  — fetch, rebase onto the target, run the repo's gate, then push your
+      push  — fetch, rebase onto the target, run the repo's gate, then push your
               committed work to origin/<target>. It moves work to the REMOTE; it
               does not change your local <target> (cabildo catches that up for you
-              after a successful land). params: {"cwd": "<your worktree>",
+              after a successful push). params: {"cwd": "<your worktree>",
               "target": "main", "remote": "origin"}. Requires a CLEAN tree: it
-              lands your commits, it will not decide what to commit for you. On
+              pushes your commits, it will not decide what to commit for you. On
               conflict it aborts and hands it back. Gated by [push].mode: a repo
-              set to "manual" pushes by hand, and a land there is refused.
+              set to "manual" pushes by hand, and a push there is refused.
       spawn — launch a headless helper agent in its own git worktree.
               params: {"role": "pm"|"qa"|"ux", "task": "<real instruction>",
                        "repo": "<path>", "target": "main",
@@ -884,7 +884,7 @@ def intents(status: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
                     "by": i["from_handle"] or names.robot_name(i["from_session"]),
                     "params": i["params"],
                     "reason": r.get("reason"),
-                    "landed": r.get("landed"),
+                    "pushed": r.get("pushed"),
                     "gate": r.get("gate"),
                 }
             )

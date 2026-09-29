@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-# New module: guard so the land daemon's gate (stale main import) skips this
+# New module: guard so the push daemon's gate (stale main import) skips this
 # file rather than erroring; CI on the branch is authoritative.
 codex_hooks = pytest.importorskip("cabildo.codex_hooks")
 

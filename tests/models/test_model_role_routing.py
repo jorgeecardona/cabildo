@@ -36,7 +36,7 @@ class Routing:
     """One router (agent a) fanning out to role TARGET, and one peer (agent b)
     whose role can change. ``b_role`` is b's current role; ``snapshot`` is the
     recipient set the naive router captured; ``phase`` tracks the route; and
-    ``bad_delivery`` records a message that landed on a non-holder.
+    ``bad_delivery`` records a message that pushed on a non-holder.
     """
 
     b_role: str = TARGET
@@ -46,7 +46,7 @@ class Routing:
 
 
 NO_MISROUTE = {
-    # The property that matters: role-targeted work never lands on an agent that
+    # The property that matters: role-targeted work never pushes on an agent that
     # does not hold the role when the message is posted.
     "no-misroute": lambda s: not s.bad_delivery,
 }

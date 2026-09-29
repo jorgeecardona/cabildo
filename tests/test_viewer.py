@@ -49,11 +49,11 @@ def test_claims_are_listed(conn):
         holder_handle="alice",
         project=None,
         ttl_seconds=300,
-        note="landing",
+        note="pushing",
     )
     s = viewer._state()
     assert len(s["claims"]) == 1
     c = s["claims"][0]
     assert c["resource"] == "push:repo"
     assert c["holder"] == "@alice"
-    assert c["note"] == "landing"
+    assert c["note"] == "pushing"

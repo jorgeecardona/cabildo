@@ -6,7 +6,7 @@ import pytest
 
 from cabildo import context as _ctx
 
-# The land daemon's gate imports the main checkout's editable install, which lacks
+# The push daemon's gate imports the main checkout's editable install, which lacks
 # this worktree's new darwin ppid/argv backend, so the darwin tests below would error
 # there. Skip the module in that case; under `uv run` and GitLab CI (a fresh branch
 # install) the backend is present and the whole suite runs.

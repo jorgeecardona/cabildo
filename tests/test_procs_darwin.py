@@ -14,7 +14,7 @@ import pytest
 
 from cabildo import procs
 
-# The land daemon's gate imports the main checkout's editable install, which lacks
+# The push daemon's gate imports the main checkout's editable install, which lacks
 # this worktree's new darwin memory backends, so these tests would error there. Skip
 # the module in that case; under `uv run` and GitLab CI (a fresh branch install) the
 # backends are present and the whole suite runs.

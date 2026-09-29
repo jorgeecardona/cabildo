@@ -13,12 +13,12 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   changes only), and is attributed to the cabildo agent living there — a live
   session if one is standing in it, otherwise the spawn ledger. It runs only
   read-only git and never fetches, so it is instant and changes nothing.
-- **Post-land local sync** (`[land].local_sync`): after a successful land the
-  daemon can advance the lander's local `main` to the just-landed `origin/main`,
-  so local `main` no longer drifts a commit behind on every land (issue #20).
+- **Post-push local sync** (`[push].local_sync`): after a successful push the
+  daemon can advance the pusher's local `main` to the just-pushed `origin/main`,
+  so local `main` no longer drifts a commit behind on every push (issue #20).
   `ff-only` (the default) fast-forwards and refuses (warns, never clobbers) on a
   diverged local `main` or one checked out in a worktree; `reset` force-syncs;
-  `off` keeps the prior behaviour. A sync refusal never fails the land.
+  `off` keeps the prior behaviour. A sync refusal never fails the push.
 - **Layered `config.toml`**: optional read-only TOML settings, with precedence
   repo-local `.cabildo/config.toml` over `~/.cabildo/config.toml` over built-in
   defaults, merged table by table. A `[project.<name>]` section in the global
@@ -27,24 +27,24 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   registry, and a malformed file is skipped rather than fatal. Two keys are
   wired: `[push].mode = "manual"` opts a project out of the push guard, and
   `[watch].topic = "project"` defaults `cabildo watch` to the repo's own
-  channel. `[uplink]`, `[notify]`, `[land]`, and `[spawn]` are recognised and
+  channel. `[uplink]`, `[notify]`, `[push]`, and `[spawn]` are recognised and
   read generically; wiring follows. See `.cabildo/config.example.toml`.
 
 ### Changed
 
 - **Mode-aware spawn prompt**: the git-flow paragraph a spawned agent receives is
-  now chosen from the repo's `[push].mode`. A `land` repo is told to `land` and,
-  crucially, that `land` moves work to `origin/<target>` and does NOT touch its
-  local `<target>` (cabildo catches that up after a land) — so agents stop
-  overloading "land" to mean "update my local main". A `manual` repo is told the
-  opposite: cabildo does not land or push for it, so do not queue a land or push
+  now chosen from the repo's `[push].mode`. A `push` repo is told to `push` and,
+  crucially, that `push` moves work to `origin/<target>` and does NOT touch its
+  local `<target>` (cabildo catches that up after a push) — so agents stop
+  overloading "push" to mean "update my local main". A `manual` repo is told the
+  opposite: cabildo does not push or push for it, so do not queue a push or push
   by hand automatically. The `request` tool description states the same gate.
 - **Mode-aware SessionStart banner**: the shared-repo warning injected at session
-  start no longer tells `manual`-mode agents to "not push, queue a land" — on a
+  start no longer tells `manual`-mode agents to "not push, queue a push" — on a
   manual repo that was doubly false (the guard does not deny the push and there is
-  no land to queue). Manual projects now get an accurate note (pushing is by hand,
-  cabildo does not push or land), while land projects keep the land routing and
-  also learn that `land` does not touch local `main`.
+  no push to queue). Manual projects now get an accurate note (pushing is by hand,
+  cabildo does not push or push), while push projects keep the push routing and
+  also learn that `push` does not touch local `main`.
 
 ## [0.1.15] - 2026-09-14
 
@@ -66,8 +66,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   UDP-broadcasts a beacon (`255.255.255.255`, so it never routes off-LAN) and
   serves its rows over TCP; peers discover each other and PULL, so the sync is
   bidirectional by both sides pulling and the serving side only ever reads. New
-  messages are deduped by `guid`, stamped `origin='lan'`, and — crucially — the
-  App Engine uplink now excludes `origin='lan'`, so a LAN peer's messages never
+  messages are deduped by `guid`, stamped `provenance='lan'`, and — crucially — the
+  App Engine uplink now excludes `provenance='lan'`, so a LAN peer's messages never
   silently escape to the hosted mirror. Single-machine SQLite stays the default;
   this is opt-in. Flags: `-l/--loop`, `--interval`, `--port`, `--project`,
   `--secret` (an optional shared secret both peers must present). Stdlib only —

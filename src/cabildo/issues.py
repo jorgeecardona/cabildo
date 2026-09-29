@@ -36,7 +36,7 @@ not recognise is worse than one that refuses to run.
 
     open → in-progress → done,  with blocked off to the side
 
-`done` keeps the file and requires `fixed_in` — the sha that landed on the mainline, so the folder
+`done` keeps the file and requires `fixed_in` — the sha that pushed on the mainline, so the folder
 carries a greppable record of what was fixed by what. (Note for the paas repo: its README says to
 close by deleting the file. That is a deliberate reversal, not an oversight; that line needs
 updating if paas adopts this.)
@@ -184,7 +184,7 @@ class Config:
     #: recognise is the safer failure. On, when a folder wants its schema closed.
     strict_fields: bool = False
     #: `fixed_in` must name a commit reachable from this branch. The sha that matters is the one
-    #: that LANDED — a worktree sha resolves until that worktree is pruned, and then the register
+    #: that PUSHED — a worktree sha resolves until that worktree is pruned, and then the register
     #: points at nothing.
     fixed_in_on_branch: str = ""
     #: Headings (regexes, matched at the start of a `## ` heading) every issue body must carry.
@@ -209,7 +209,7 @@ class Config:
     #: field of that name declares values, which is what these folders already called it.
     rank_by: str = ""
     #: Require `fixed_in` on a `done` issue. On by default: a code register closes an issue by
-    #: naming the sha that landed it. A register that is not tracking code (a personal agenda, say)
+    #: naming the sha that pushed it. A register that is not tracking code (a personal agenda, say)
     #: turns this off, so `done` is just done with no sha to cite.
     closed_needs_fixed_in: bool = True
     #: Fields of which at most one issue in the register may carry a value — an exclusive flag such
@@ -740,7 +740,7 @@ def check(folder: pathlib.Path, config: Config | None = None) -> list[Problem]:
             problems.append(
                 Problem(
                     p,
-                    "status is `done` with no `fixed_in` — name the sha that landed on the "
+                    "status is `done` with no `fixed_in` — name the sha that pushed on the "
                     "mainline, or the folder stops being evidence of anything",
                 )
             )
@@ -749,7 +749,7 @@ def check(folder: pathlib.Path, config: Config | None = None) -> list[Problem]:
                 Problem(
                     p,
                     f"`fixed_in: {issue.fixed_in}` on an issue that is `{issue.status}` — "
-                    f"either it landed and this is done, or the sha does not belong here",
+                    f"either it pushed and this is done, or the sha does not belong here",
                 )
             )
         problems.extend(_fixed_in_problems(issue, config, git))
@@ -889,8 +889,8 @@ def _fixed_in_problems(issue: Issue, config: Config, git: _Git) -> list[Problem]
         return [
             Problem(
                 issue.path,
-                f"fixed_in {sha} is not on {branch} — record the sha that LANDED, not the worktree "
-                f"one; the land path re-commits, and a worktree sha resolves only until it is pruned",
+                f"fixed_in {sha} is not on {branch} — record the sha that PUSHED, not the worktree "
+                f"one; the push path re-commits, and a worktree sha resolves only until it is pruned",
             )
         ]
     return []
@@ -1228,12 +1228,12 @@ def release(folder: pathlib.Path, name: str, config: Config | None = None) -> Is
 
 def close(folder: pathlib.Path, name: str, *, fixed_in: str, config: Config | None = None) -> Issue:
     """Mark it done. `fixed_in` is required because closing without naming what fixed it is how a
-    register stops being evidence — and it must be the sha that landed on the mainline, not the one
+    register stops being evidence — and it must be the sha that pushed on the mainline, not the one
     from a worktree that will be pruned.
     """
     config = load_config(folder) if config is None else config
     if not fixed_in.strip():
-        raise IssueFormatError("fixed_in is required — name the commit that landed the fix")
+        raise IssueFormatError("fixed_in is required — name the commit that pushed the fix")
     issue = load(resolve(folder, name), config)
     updated = dataclasses.replace(issue, status=Status.DONE, fixed_in=fixed_in.strip())
     save(updated, config)
@@ -1248,7 +1248,7 @@ STARTER_README = """\
 # docs/issues — follow-ups with an owner-shaped edge
 
 One file per follow-up, self-contained, with YAML front matter. This folder is for work that is
-**known, scoped, and not being done right now** — the residue a session leaves behind when it lands
+**known, scoped, and not being done right now** — the residue a session leaves behind when it pushes
 its main change. Without a home, that residue lives in a chat log nobody re-reads, and "we should
 fix X" decays into nobody having ever owned X.
 
@@ -1270,7 +1270,7 @@ create it.
    `inspect` (the artifact itself is the evidence).
 4. **Name what you deliberately did NOT do,** with the reason. Silence reads as an oversight and
    gets re-litigated.
-5. **Close by marking it done,** with `fixed_in:` naming the sha that landed the fix. A register
+5. **Close by marking it done,** with `fixed_in:` naming the sha that pushed the fix. A register
    that cannot say what fixed something has stopped being evidence.
 
 ## The format

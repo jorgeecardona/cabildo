@@ -14,7 +14,7 @@ import pytest
 
 from cabildo import desktop
 
-# The land daemon's gate imports the main checkout's editable install, which lacks
+# The push daemon's gate imports the main checkout's editable install, which lacks
 # this worktree's new darwin backend, so `_DARWIN` is absent there and every darwin
 # test would error. Skip the module in that case; under `uv run` and GitLab CI (a
 # fresh branch install) `_DARWIN` is present and the whole suite runs.

@@ -3,7 +3,7 @@
 lan.py finds peers by UDP broadcast on the local subnet. wan.py is the same
 pull-and-dedup machinery pointed at explicit peer addresses from config, for
 peers reached over a tunnel -- a WireGuard/Tailscale mesh IP, or an SSH
-port-forward landing on loopback -- rather than the local wire. It reuses lan.py
+port-forward pushing on loopback -- rather than the local wire. It reuses lan.py
 wholesale: ``pull_from_peer`` (client), ``run_server`` + ``handle_pull``
 (server), ``select_outbound`` and ``merge_incoming`` (the sync core). The only
 differences are:
@@ -11,7 +11,7 @@ differences are:
   * explicit addresses instead of a beacon (broadcast does not cross subnets),
   * a shared bus token on the pull handshake (lan's ``secret`` slot), which is
     authorization on top of the already-encrypted tunnel,
-  * rows stamped ``origin='wan'`` so they are dedup-merged and, like ``'lan'``,
+  * rows stamped ``provenance='wan'`` so they are dedup-merged and, like ``'lan'``,
     kept off the cloud uplink,
   * a per-peer cursor keyed by address but verified against the peer's node id, so
     a peer that restarts its DB resets the cursor instead of stalling above the
@@ -112,7 +112,7 @@ def serve(
 
 
 # --------------------------------------------------------------------------- #
-# Client: pull each configured peer and merge as origin='wan'
+# Client: pull each configured peer and merge as provenance='wan'
 # --------------------------------------------------------------------------- #
 def sync_round(
     peers: list[Peer],
@@ -123,7 +123,7 @@ def sync_round(
     node: str | None = None,
 ) -> dict[str, int]:
     """Pull each peer's project rows newer than our cursor, merge them stamped
-    ``origin='wan'``, and advance each peer's cursor. Best-effort per peer: a
+    ``provenance='wan'``, and advance each peer's cursor. Best-effort per peer: a
     peer that is down leaves its cursor untouched and is retried next round.
     """
     node = node or lan.node_id()
@@ -148,7 +148,7 @@ def sync_round(
                     p.host, p.port, project, 0, token, node
                 )
             if rows:
-                merged += lan.merge_incoming(conn, rows, origin=ORIGIN)
+                merged += lan.merge_incoming(conn, rows, provenance=ORIGIN)
             pc[p.key] = {"cursor": max_id, "node": peer_node or entry.get("node")}
             pulled += len(rows)
     finally:

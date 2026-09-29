@@ -16,7 +16,7 @@ from __future__ import annotations
 from . import config, store, transcript
 
 # How far back to look for sessions worth ingesting. A session ended within this
-# window still has a tail (its final turns land after the last hook), so the
+# window still has a tail (its final turns push after the last hook), so the
 # ingest is not limited to active sessions. Older sessions are done and their
 # cursor already sits at end-of-file, so revisiting them buys nothing.
 INGEST_WINDOW = 6 * 3600.0

@@ -35,13 +35,13 @@ def homes(tmp_path, monkeypatch):
 def test_missing_files_read_as_empty(homes):
     _, repo, _ = homes
     assert config.load(repo, project_name="proj") == {}
-    assert config.push_mode(repo, "proj") == "land"  # safe default
+    assert config.push_mode(repo, "proj") == "auto"  # safe default
     assert config.watch_topic(repo, "proj") is None
 
 
 def test_repo_overrides_global(homes):
     write_global, repo, write_repo = homes
-    write_global('[push]\nmode = "land"\n')
+    write_global('[push]\nmode = "auto"\n')
     write_repo('[push]\nmode = "manual"\n')
     assert config.push_mode(repo, "proj") == "manual"
 
@@ -58,9 +58,9 @@ def test_tables_merge_across_files(homes):
 
 def test_global_project_section_overrides_top(homes):
     write_global, repo, _ = homes
-    write_global('[push]\nmode = "land"\n\n[project.proj]\npush = { mode = "manual" }\n')
+    write_global('[push]\nmode = "auto"\n\n[project.proj]\npush = { mode = "manual" }\n')
     assert config.push_mode(repo, "proj") == "manual"
-    assert config.push_mode(repo, "other") == "land"  # a different project keeps the default
+    assert config.push_mode(repo, "other") == "auto"  # a different project keeps the default
 
 
 def test_project_section_match_is_case_insensitive(homes):
@@ -85,10 +85,10 @@ def test_malformed_file_is_skipped_not_raised(homes):
     assert config.push_mode(repo, "proj") == "manual"
 
 
-def test_unknown_push_mode_falls_back_to_land(homes):
+def test_unknown_push_mode_falls_back_to_auto(homes):
     _, repo, write_repo = homes
     write_repo('[push]\nmode = "yolo"\n')
-    assert config.push_mode(repo, "proj") == "land"
+    assert config.push_mode(repo, "proj") == "auto"
 
 
 def test_watch_topic_literal_passes_through(homes):
@@ -106,7 +106,7 @@ def test_watch_topic_project_sentinel_resolves_to_channel(homes):
 def test_get_returns_default_when_hop_missing(homes):
     _, repo, write_repo = homes
     write_repo('[watch]\ntopic = "general"\n')
-    assert config.get(repo, "push", "mode", project_name="proj", default="land") == "land"
+    assert config.get(repo, "push", "mode", project_name="proj", default="auto") == "auto"
     assert config.get(repo, "watch", "nope", project_name="proj", default=7) == 7
 
 

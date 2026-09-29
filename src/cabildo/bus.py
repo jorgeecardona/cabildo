@@ -280,9 +280,9 @@ def _get_message(conn: sqlite3.Connection, ident: Identity, params: Mapping[str,
     return store.get_message(conn, ident.session, int(params["message_id"]))
 
 
-@op("list_facts")
-def _list_facts(conn: sqlite3.Connection, ident: Identity, params: Mapping[str, Any]) -> Any:
-    return store.list_facts(
+@op("list_decisions")
+def _list_decisions(conn: sqlite3.Connection, ident: Identity, params: Mapping[str, Any]) -> Any:
+    return store.list_decisions(
         conn,
         project_name=params.get("project_name") or ident.project_name,
         kind=params.get("kind"),

@@ -1,6 +1,6 @@
 # Broker service and remote agents
 
-Status: draft (proposed). This document is the plan; the code lands phase by
+Status: draft (proposed). This document is the plan; the code pushes phase by
 phase and each phase updates the checklist at the end.
 
 ## Motivation
@@ -43,7 +43,7 @@ symmetric: both are just clients of a service.
   `hooks/*` and `codex_hooks.py` (short-lived), `cli.py`, `actions.py`, `tui.py`,
   `lan.py`, `daemon.py`.
 - `daemon.py` is a single-threaded worker that drains the intents queue
-  (land / spawn / ask), one action at a time, plus periodic sweeps (reap dead
+  (push / spawn / ask), one action at a time, plus periodic sweeps (reap dead
   sessions, ingest opted-in transcripts, sample machine conditions). Started with
   `cabildo service`. It is the natural home for the broker.
 - `lan.py` already syncs messages between machines on one subnet: UDP-broadcast
@@ -201,7 +201,7 @@ reimplement them.
 
 ## Phased plan
 
-Each phase keeps `make check` green and lands as its own commit. No push. The
+Each phase keeps `make check` green and pushes as its own commit. No push. The
 foundation (phases 0-3a) is additive: nothing in the live hooks/MCP has changed.
 Two later steps are sensitive and gated on an explicit go-ahead: **3b** touches
 the tooling running the current session, and **5** is the remote-code-execution
@@ -244,7 +244,7 @@ surface. Current order: 4 next, then 3b and 5 once reviewed.
 - Whether phase 3b should make the service auto-start on first client use, or stay
   explicit (`cabildo service`). Auto-start is convenient but reintroduces a
   daemon the user did not ask for; explicit is the safer default.
-- Whether the ed25519 signing (WAN auth "later") should land before opening
+- Whether the ed25519 signing (WAN auth "later") should push before opening
   remote spawn to peers outside a fully trusted mesh.
 
 ## Why stdlib, not a message-queue library

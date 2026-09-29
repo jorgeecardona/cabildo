@@ -93,7 +93,7 @@ def _ahead_behind(root: str, ref: str, base: str) -> tuple[int | None, int | Non
 
 def _contained_in(root: str, ref: str, base: str) -> bool:
     """True if every commit of ``ref`` is already in ``base`` (ref is an ancestor
-    of base). Note: a branch cabildo landed by REBASE gets new commit shas on the
+    of base). Note: a branch cabildo pushed by REBASE gets new commit shas on the
     trunk, so its old tip is not an ancestor and this reads False even though the
     work is on main — ahead/behind tells that fuller story.
     """

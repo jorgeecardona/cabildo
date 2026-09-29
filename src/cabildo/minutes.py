@@ -1,6 +1,6 @@
 """Minutas: a daily conversation record per project — each session's title, its
 turns, and where it left off — written to `<cabildo home>/minutes/<project>/<date>.md`
-so a day's conversations across every session land in one file.
+so a day's conversations across every session push in one file.
 
 Two sources, DB first. When recording is on (`[record] messages` + the daemon's
 --save-messages), a day is rendered from the turns cabildo ingested into its own

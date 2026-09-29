@@ -129,7 +129,7 @@ def test_file_claim_holders_reports_overlap(conn, clock):
     holders = store.file_claim_holders(conn, ALPHA, ["src/x.py", "README.md"], exclude_session="b")
     assert len(holders) == 1
     assert holders[0]["holder"] == "@alice" and holders[0]["file"] == "src/x.py"
-    # the lander is excluded from its own conflict hint
+    # the pusher is excluded from its own conflict hint
     assert store.file_claim_holders(conn, ALPHA, ["src/x.py"], exclude_session="a") == []
 
 
@@ -299,7 +299,7 @@ def test_push_lock_still_enforced(conn, clock):
 
 
 # --------------------------------------------------------------------------- #
-# Unlocked push with live peers — routed to `land`
+# Unlocked push with live peers — routed to `push`
 # --------------------------------------------------------------------------- #
 def test_push_denied_when_peer_live_without_any_lock(conn, clock):
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
@@ -307,7 +307,7 @@ def test_push_denied_when_peer_live_without_any_lock(conn, clock):
     reason = _bash(conn, "a", "git push origin main")
     assert reason is not None
     assert "@bob" in reason
-    assert "land" in reason  # names the ordered path through
+    assert "push" in reason  # names the ordered path through
 
 
 def test_push_allowed_when_alone(conn, clock):
@@ -334,7 +334,7 @@ def test_holding_the_push_lock_is_the_escape_hatch(conn, clock):
 def test_push_manual_mode_bypasses_the_guard(conn, clock, home):
     # A project can opt out of the push guard via config: `[push].mode = manual`.
     # The guard then steps aside even with a live peer that would otherwise route
-    # the push to `land`.
+    # the push to `push`.
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
     make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
     assert _bash(conn, "a", "git push origin main") is not None  # baseline: denied
@@ -437,7 +437,7 @@ def test_blanket_stage_allowed_in_your_own_worktree(conn, clock, tmp_path):
 def test_branch_switch_denied_when_another_agent_shares_the_checkout(conn):
     """A checkout has one HEAD. Switching it moves everyone standing in that directory, silently,
     and the next of them commits onto a branch it never chose. Happened three times on 2026-08-03;
-    in crm an agent landed three commits of unrelated work onto somebody else's feature branch.
+    in crm an agent pushed three commits of unrelated work onto somebody else's feature branch.
     """
     make_session(conn, "a", handle="mine", project="/repo/x", project_name="x")
     make_session(conn, "b", handle="other", project="/repo/x", project_name="x")

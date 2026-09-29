@@ -77,7 +77,7 @@ HOOK_EVENTS = {
 
 # The daemon touches its session every poll (default 2s). Anything seen inside
 # this window is "running now"; a stale row is a daemon that died without
-# clearing its session. Generous enough to survive a slow `land` holding the loop.
+# clearing its session. Generous enough to survive a slow `push` holding the loop.
 DAEMON_LIVE_WINDOW = 120.0
 
 _HOOK_CMD = re.compile(r"cabildo-hook\s+([a-z_]+)")
@@ -258,7 +258,7 @@ def check_daemon(conn=None) -> Check:
         return Check(
             "daemon",
             NA,
-            "no daemon has run on this bus (optional — only land/spawn/notify need one)",
+            "no daemon has run on this bus (optional — only push/spawn/notify need one)",
         )
     ago = time.time() - row["last_seen_at"]
     if row["status"] == "active" and ago <= DAEMON_LIVE_WINDOW:
@@ -272,9 +272,9 @@ def check_daemon(conn=None) -> Check:
 
 
 def check_daemon_push() -> Check:
-    """Whether the installed daemon service will actually push on a land, or is a
-    dry run. A fresh `cabildo service install` without --allow-push verifies lands
-    but pushes nothing, which reads exactly like it is landing when it isn't
+    """Whether the installed daemon service will actually push on a push, or is a
+    dry run. A fresh `cabildo service install` without --allow-push verifies pushes
+    but pushes nothing, which reads exactly like it is pushing when it isn't
     (issue #15) — so name the posture rather than let it look silent.
     """
     p = service.daemon_unit().path
@@ -289,11 +289,11 @@ def check_daemon_push() -> Check:
     except OSError as e:
         return Check("daemon.push", WARN, f"cannot read {p}: {e}", "")
     if "--allow-push" in text:
-        return Check("daemon.push", OK, "daemon service pushes landed work (--allow-push)")
+        return Check("daemon.push", OK, "daemon service pushes pushed work (--allow-push)")
     return Check(
         "daemon.push",
         WARN,
-        "daemon service is DRY-RUN — `request land` verifies but does NOT push",
+        "daemon service is DRY-RUN — `request push` verifies but does NOT push",
         "reinstall with push enabled: `cabildo service install --allow-push`",
     )
 

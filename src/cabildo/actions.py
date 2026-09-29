@@ -7,7 +7,7 @@ Agents choose an action and supply typed params; the code here decides what
 actually runs.
 
 Handlers take (params, ctx) and return a result dict. They must not raise for
-ordinary failure — a failed land is data, not an exception. They may raise for
+ordinary failure — a failed push is data, not an exception. They may raise for
 programmer error; the daemon catches and records that too.
 """
 
@@ -27,7 +27,7 @@ from typing import Any
 GIT_TIMEOUT = 120
 # The gate is the referee: it can run a whole test suite, so it gets room.
 GATE_TIMEOUT = 1800
-# Repo-owned, not requester-supplied. The agent asking to land does not get to
+# Repo-owned, not requester-supplied. The agent asking to push does not get to
 # choose the thing that judges it.
 GATE_PATH = ".cabildo/gate.sh"
 # Optional repo-owned env setup, run after rebase and before the gate so a fresh
@@ -40,7 +40,7 @@ PROVISION_PATH = ".cabildo/provision.sh"
 WORKTREE_DIRNAME = ".agent-worktrees"
 
 # What a spawned agent may do on the bus. It needs a voice to be useful and
-# `request` to land its work; it does not need to spawn more agents.
+# `request` to push its work; it does not need to spawn more agents.
 BUS_TOOLS = [
     "mcp__cabildo__whoami",
     "mcp__cabildo__send",
@@ -80,7 +80,7 @@ class Ctx:
     budget_days: float = 7.0
     # Seconds a queued intent may wait before the daemon refuses it instead of
     # running it. A request is a snapshot of a moment: the branch it wanted to
-    # land on has moved, the agent that asked is gone, and nobody is watching the
+    # push on has moved, the agent that asked is gone, and nobody is watching the
     # result. Draining a week-old queue on startup is how a daemon does damage
     # while technically doing what it was told. 0 disables the ceiling.
     max_intent_age: float = 2 * 3600.0
@@ -119,7 +119,7 @@ def git(args: list[str], cwd: str, timeout: int = GIT_TIMEOUT) -> tuple[int, str
 
 # Files Claude Code rewrites by itself — accepting a permission prompt edits
 # settings.json mid-session. When they are the *only* thing standing between an
-# agent and a land, the agent didn't do it and won't think to look there.
+# agent and a push, the agent didn't do it and won't think to look there.
 _CLAUDE_OWN = (".claude/settings.json", ".claude/settings.local.json")
 
 
@@ -150,7 +150,7 @@ def _claude_settings_hint(dirty_lines: list[str]) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# land
+# push
 # --------------------------------------------------------------------------- #
 _CONFLICT_RE = re.compile(r"^CONFLICT \([^)]*\): Merge conflict in (.+)$", re.MULTILINE)
 
@@ -159,7 +159,7 @@ def _conflict_owners_hint(root: str, rebase_output: str, exclude_session: str | 
     """A one-line pointer to the peers whose active file claims overlap the
     conflicting files, so the requester knows whom to coordinate with rather than
     guessing. Empty when nothing overlaps. Best-effort: never raises, because a
-    land already failed and this only enriches the message.
+    push already failed and this only enriches the message.
     """
     try:
         files = _CONFLICT_RE.findall(rebase_output)
@@ -177,10 +177,10 @@ def _conflict_owners_hint(root: str, rebase_output: str, exclude_session: str | 
         return ""
 
 
-def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
+def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     """Serialised fetch → rebase → gate → push for one worktree.
 
-    Only commits are landed: the daemon never stages or commits for you. What is
+    Only commits are pushed: the daemon never stages or commits for you. What is
     in your tree but uncommitted is yours to resolve, and a robot guessing at it
     is how another agent's work gets destroyed.
     """
@@ -191,7 +191,7 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         raise Reject(f"cwd does not exist: {cwd}")
     # A project on push.mode = "manual" has opted out of cabildo's push path
     # entirely. The guard already stops routing its agents here (guard._deny_push
-    # returns None), but a land can still reach the daemon another way: a stale
+    # returns None), but a push can still reach the daemon another way: a stale
     # queue entry from before the opt-in, or a hand-filed request. Refuse it here
     # too, so "manual" means the daemon never pushes for this repo, not just that
     # the guard stops suggesting it.
@@ -200,9 +200,9 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     if config.push_mode(cwd) == "manual":
         raise Reject(
             f"push.mode is 'manual' for {cwd} — this project opted out of "
-            "cabildo's land path, so the daemon will not push for it. Push by "
+            "cabildo's push path, so the daemon will not push for it. Push by "
             "hand (take the push lock with `claim` first if peers are live). "
-            "Set [push].mode = 'land' in .cabildo/config.toml to re-enable it."
+            "Set [push].mode = 'auto' in .cabildo/config.toml to re-enable it."
         )
     target = params.get("target", "main")
     remote = params.get("remote", "origin")
@@ -229,7 +229,7 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     rc, branch = git(["rev-parse", "--abbrev-ref", "HEAD"], root)
     branch = branch.strip()
 
-    # 1. Refuse a dirty tree. Landing half-written work is exactly the failure
+    # 1. Refuse a dirty tree. Pushing half-written work is exactly the failure
     #    mode this whole system exists to prevent — but only *tracked* changes
     #    can end up in a commit, and therefore in the push. An untracked scratch
     #    file blocks nothing and blocking on it turns a correct refusal into
@@ -243,7 +243,7 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     if tracked:
         return _fail(
             "working tree has uncommitted tracked changes — commit or stash "
-            "first. The daemon lands commits, it does not decide what to "
+            "first. The daemon pushes commits, it does not decide what to "
             f"commit:\n{chr(10).join(tracked)[:2000]}" + _claude_settings_hint(tracked),
             steps,
         )
@@ -259,8 +259,8 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     if rc == 0 and ahead.strip() == "0":
         return {
             "ok": True,
-            "landed": False,
-            "reason": f"nothing to land — HEAD has no commits beyond {remote}/{target}",
+            "pushed": False,
+            "reason": f"nothing to push — HEAD has no commits beyond {remote}/{target}",
             "branch": branch,
             "steps": steps,
         }
@@ -278,7 +278,7 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
             steps,
         )
     # Verify the rebase did what it claims: rc=0 covers "rebased" and "did
-    # nothing" alike, and landing un-rebased work is how two heads reach main.
+    # nothing" alike, and pushing un-rebased work is how two heads reach main.
     anc_rc, _ = git(["merge-base", "--is-ancestor", f"{remote}/{target}", "HEAD"], root)
     steps.append(
         {
@@ -298,13 +298,13 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     #    gate, so a fresh worktree has its environment (deps, venv, node_modules)
     #    before it is judged. A failure here is reported as PROVISIONING, not a gate
     #    failure — a missing `.venv`/`node_modules` is an env problem, not a broken
-    #    change, and conflating them costs a whole land cycle chasing the wrong
-    #    thing (issue #18). Should be idempotent; it re-runs on every land, which is
+    #    change, and conflating them costs a whole push cycle chasing the wrong
+    #    thing (issue #18). Should be idempotent; it re-runs on every push, which is
     #    also how a rebase that pulled in a new package is picked up.
     provision = os.path.join(root, PROVISION_PATH)
     if os.path.exists(provision):
         if not os.access(provision, os.X_OK):
-            return _fail(f"{PROVISION_PATH} exists but is not executable — refusing to land", steps)
+            return _fail(f"{PROVISION_PATH} exists but is not executable — refusing to push", steps)
         ctx.log(f"  running provision {PROVISION_PATH} (timeout {GATE_TIMEOUT}s)")
         rc, out = run([provision], root, timeout=GATE_TIMEOUT)
         steps.append({"step": "provision", "rc": rc, "out": out[-4000:]})
@@ -321,7 +321,7 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     gate = os.path.join(root, GATE_PATH)
     if os.path.exists(gate):
         if not os.access(gate, os.X_OK):
-            return _fail(f"{GATE_PATH} exists but is not executable — refusing to land", steps)
+            return _fail(f"{GATE_PATH} exists but is not executable — refusing to push", steps)
         ctx.log(f"  running gate {GATE_PATH} (timeout {GATE_TIMEOUT}s)")
         rc, out = run([gate], root, timeout=GATE_TIMEOUT)
         steps.append({"step": "gate", "rc": rc, "out": out[-8000:]})
@@ -335,7 +335,7 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         steps.append(
             {"step": "gate", "rc": 0, "out": f"no {GATE_PATH} in {root} — NOTHING VERIFIED"}
         )
-        ctx.log(f"  ⚠ no gate at {GATE_PATH} — landing unverified")
+        ctx.log(f"  ⚠ no gate at {GATE_PATH} — pushing unverified")
 
     # 5. Push.
     rc, sha = git(["rev-parse", "HEAD"], root)
@@ -343,7 +343,7 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     if not ctx.allow_push:
         return {
             "ok": True,
-            "landed": False,
+            "pushed": False,
             "status": "dry_run",  # not "done": nothing reached the remote (issue #15)
             "reason": "dry run — everything up to push succeeded, but the daemon is "
             "NOT pushing (started without --allow-push). Nothing reached the remote. "
@@ -354,7 +354,7 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         }
     # The daemon already ran the gate immediately above, so re-running the repo's
     # pre-push hook inside the push is redundant and, with a slow pre-push, times
-    # the push out — nothing ever lands (issue #14). Skip it by default; a repo can
+    # the push out — nothing ever pushes (issue #14). Skip it by default; a repo can
     # keep it with [push].verify = true. The timeout is configurable for the same
     # reason: git's plain 120s guillotines a slow network / large push.
     push_timeout = int(config.push_timeout(cwd))
@@ -374,7 +374,7 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
             )
         )
         return _fail(
-            f"git push exceeded {push_timeout}s (rc=124) — nothing landed.{verify_note} "
+            f"git push exceeded {push_timeout}s (rc=124) — nothing pushed.{verify_note} "
             f"Raise [push].timeout_s if the push is merely slow, or check the push "
             f"transport (an SSH write that hangs while reads are fast is a network "
             f"black-hole, not a cabildo bug).",
@@ -390,22 +390,22 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     # ls-remote asks the remote what it actually has.
     ver_rc, ver_out = git(["ls-remote", remote, f"refs/heads/{target}"], root)
     if ver_rc != 0:
-        # "I could not check" is not "I did not do it". Claiming a failed land
+        # "I could not check" is not "I did not do it". Claiming a failed push
         # here is unearned certainty in the other direction, and it points the
         # requester at exactly the wrong recovery (re-push, re-rebase).
         steps.append(
             {
                 "step": "verify",
                 "rc": ver_rc,
-                "out": f"ls-remote failed — landed state UNVERIFIED:\n{ver_out[-1000:]}",
+                "out": f"ls-remote failed — pushed state UNVERIFIED:\n{ver_out[-1000:]}",
             }
         )
         return {
             "ok": True,
-            "landed": None,
+            "pushed": None,
             "status": "unverified",  # not "done": the remote could not be checked
             "reason": f"push reported rc={push_rc} but the remote could not be "
-            "reached to verify — the land is UNVERIFIED, not failed. Check the "
+            "reached to verify — the push is UNVERIFIED, not failed. Check the "
             "remote yourself before retrying anything.",
             "branch": branch,
             "head": sha[:12],
@@ -414,44 +414,44 @@ def land(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
             "steps": steps,
         }
     remote_sha = ver_out.split()[0] if ver_out.split() else ""
-    landed = remote_sha == sha
+    pushed = remote_sha == sha
     detail = "tip MATCH"
-    if not landed and remote_sha:
-        # The tip moved — another push may have landed on top between ours and
+    if not pushed and remote_sha:
+        # The tip moved — another push may have pushed on top between ours and
         # this look. Tip equality answers "am I the newest commit?", which is
         # not the question. The question is "is my work on the branch?" —
         # answer it by ancestry against the tip the remote just reported.
         f_rc, _ = git(["fetch", remote, target], root)
         if f_rc == 0 and git(["merge-base", "--is-ancestor", sha, remote_sha], root)[0] == 0:
-            landed = True
+            pushed = True
             detail = f"tip moved to {remote_sha[:12]}, our commit is an ancestor"
     steps.append(
         {
             "step": "verify",
-            "rc": 0 if landed else 1,
+            "rc": 0 if pushed else 1,
             "out": f"{remote}/{target} is at {remote_sha[:12] or '?'}; "
-            f"we pushed {sha[:12]}; {detail if landed else 'MISMATCH'}",
+            f"we pushed {sha[:12]}; {detail if pushed else 'MISMATCH'}",
         }
     )
-    if not landed:
+    if not pushed:
         return _fail(
             f"push reported rc={push_rc} but {remote}/{target} is at "
             f"{remote_sha[:12] or '<unknown>'} and does not contain {sha[:12]} — "
-            f"I did NOT land this. Do not trust the push output:\n{push_out[-1500:]}",
+            f"I did NOT push this. Do not trust the push output:\n{push_out[-1500:]}",
             steps,
         )
 
-    # 7. Sync the lander's LOCAL target branch to the just-landed remote tip.
-    #    The push advanced origin/target; local `target` (a lane land never has it
+    # 7. Sync the pusher's LOCAL target branch to the just-pushed remote tip.
+    #    The push advanced origin/target; local `target` (a lane push never has it
     #    checked out) would otherwise drift one commit further behind on every
-    #    land (issue #20). Non-destructive by default and NEVER fails the land: a
+    #    push (issue #20). Non-destructive by default and NEVER fails the push: a
     #    push that reached the remote has already succeeded, and a checkout we
     #    can't fast-forward is a warning, not a failure.
-    local_sync = _local_sync(root, remote, target, branch, config.land_local_sync(cwd), steps, ctx)
+    local_sync = _local_sync(root, remote, target, branch, config.push_local_sync(cwd), steps, ctx)
 
     return {
         "ok": True,
-        "landed": True,
+        "pushed": True,
         "branch": branch,
         "head": sha[:12],
         "target": f"{remote}/{target}",
@@ -471,9 +471,9 @@ def _local_sync(
     steps: list[dict[str, Any]],
     ctx: Ctx,
 ) -> str:
-    """Update local ``target`` to the just-landed ``remote/target`` per ``mode``
+    """Update local ``target`` to the just-pushed ``remote/target`` per ``mode``
     ("off" | "ff-only" | "reset"), append a ``local-sync`` step, and return a
-    one-line summary. Never raises and never fails the land (issue #20).
+    one-line summary. Never raises and never fails the push (issue #20).
 
     ``ff-only`` fast-forwards ``target`` and refuses (warns) on divergence or
     when ``target`` is checked out in a worktree; ``reset`` force-updates it;
@@ -490,10 +490,10 @@ def _local_sync(
         return record(0, "local_sync = off", "off — local branch untouched")
 
     if branch == target:
-        # The lander is ON target; the push we just made advanced this very
-        # checkout's HEAD, so local target already holds the landed commit.
+        # The pusher is ON target; the push we just made advanced this very
+        # checkout's HEAD, so local target already holds the pushed commit.
         return record(
-            0, f"landed from {target} itself", f"local {target} already at the landed commit"
+            0, f"pushed from {target} itself", f"local {target} already at the pushed commit"
         )
 
     if mode == "reset":
@@ -504,7 +504,7 @@ def _local_sync(
         if rc == 0:
             return record(0, out, f"local {target} hard-synced to {remote}/{target}")
         return record(
-            0,  # a refusal is not a land failure
+            0,  # a refusal is not a push failure
             out,
             f"local {target} NOT synced (reset refused) — likely checked out in a "
             f"worktree; sync it there by hand:\n{out[-400:]}",
@@ -517,7 +517,7 @@ def _local_sync(
     if rc == 0:
         return record(0, out, f"local {target} fast-forwarded to {remote}/{target}")
     return record(
-        0,  # never fail the land on a sync refusal
+        0,  # never fail the push on a sync refusal
         out,
         f"local {target} diverged or is checked out — NOT synced (no work lost). "
         f"Fast-forward it yourself when clean:\n{out[-400:]}",
@@ -525,7 +525,7 @@ def _local_sync(
 
 
 def _fail(reason: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
-    return {"ok": False, "landed": False, "reason": reason, "steps": steps}
+    return {"ok": False, "pushed": False, "reason": reason, "steps": steps}
 
 
 # --------------------------------------------------------------------------- #
@@ -604,31 +604,31 @@ is driving right now.
 
 # The git flow the spawn prompt describes is chosen per repo from [push].mode, so
 # an agent is never told to do the one thing the daemon will refuse. Two words,
-# two directions, never overloaded: `land` moves committed work to origin/{target}
+# two directions, never overloaded: `push` moves committed work to origin/{target}
 # (the write path); "catch up" moves origin/{target} down into the local {target}
-# (the read-back path, done for you after a land). "manual" repos are offered
+# (the read-back path, done for you after a push). "manual" repos are offered
 # neither — cabildo does not push for them at all.
-_FLOW_LAND = """\
-You do not push, and cabildo never pushes for you unless you ask it to land. When
+_FLOW_PUSH = """\
+You do not push, and cabildo never pushes for you unless you ask it to push. When
 your work is committed and you want it on origin/{target}, call
-`request(action="land", params={{"cwd": "{worktree}"}})`. A single-threaded daemon
-serialises fetch/rebase/gate/push, so your land cannot race anyone's, and it DMs
-you the result. `land` moves your committed work to origin/{target}; it does NOT
+`request(action="push", params={{"cwd": "{worktree}"}})`. A single-threaded daemon
+serialises fetch/rebase/gate/push, so your push cannot race anyone's, and it DMs
+you the result. `push` moves your committed work to origin/{target}; it does NOT
 touch your local {target}. Keeping local {target} current is the opposite
-direction ("catch up"), and cabildo catches it up for you after a successful land,
-so you never reach for `git reset --hard`. Landing requires a CLEAN tree — commit
-first; the daemon will not decide what to commit for you. If a land fails, the
+direction ("catch up"), and cabildo catches it up for you after a successful push,
+so you never reach for `git reset --hard`. Pushing requires a CLEAN tree — commit
+first; the daemon will not decide what to commit for you. If a push fails, the
 failure is yours to fix, not to retry blindly.\
 """
 
 _FLOW_MANUAL = """\
-This project pushes by hand. cabildo does NOT land or push for it — that path is
-turned off for this repo — so do not queue a land and do not run `git push` on
+This project pushes by hand. cabildo does NOT push or push for it — that path is
+turned off for this repo — so do not queue a push and do not run `git push` on
 your own. Commit your work in this worktree and DM your spawner when it is ready;
 a human decides when and how it reaches origin/{target}.\
 """
 
-_FLOW = {"land": _FLOW_LAND, "manual": _FLOW_MANUAL}
+_FLOW = {"auto": _FLOW_PUSH, "manual": _FLOW_MANUAL}
 
 
 # Model aliases the spawner accepts. Not every string claude accepts: a spawn
@@ -786,9 +786,9 @@ def spawn(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
 
         parent_label = store.display_name(store.get_session(conn, parent), parent)
         # The git-flow paragraph is chosen from this repo's push.mode: a "manual"
-        # repo is never told to land (the daemon would refuse it anyway), a "land"
-        # repo gets the land + catch-up instructions.
-        flow = _FLOW["manual" if config.push_mode(root) == "manual" else "land"]
+        # repo is never told to push (the daemon would refuse it anyway), a "push"
+        # repo gets the push + catch-up instructions.
+        flow = _FLOW["manual" if config.push_mode(root) == "manual" else "auto"]
         prompt = (
             ROLES[role]
             .replace("{flow}", flow)
@@ -1031,7 +1031,7 @@ def ask(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
 # Registry
 # --------------------------------------------------------------------------- #
 ACTIONS: dict[str, Callable[[dict[str, Any], Ctx], dict[str, Any]]] = {
-    "land": land,
+    "push": push,
     "spawn": spawn,
     "ask": ask,
 }

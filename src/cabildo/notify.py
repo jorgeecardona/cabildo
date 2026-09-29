@@ -1,5 +1,5 @@
 """Human-readable strings the hooks inject as additionalContext. Kept compact:
-these land in the model's context every turn, so brevity matters.
+these push in the model's context every turn, so brevity matters.
 """
 
 from __future__ import annotations
@@ -288,22 +288,22 @@ def session_banner(conn: sqlite3.Connection, session_id: str) -> str:
         from . import config  # local: notify stays importable headless
 
         if config.push_mode(me["cwd"] if me else None, project_name) == "manual":
-            # This project pushes by hand: cabildo does not land or push for it,
-            # so the land banner would be false here (the guard does not deny the
-            # push, and there is no land to queue). Say only what is true.
+            # This project pushes by hand: cabildo does not push or push for it,
+            # so the push banner would be false here (the guard does not deny the
+            # push, and there is no push to queue). Say only what is true.
             lines.append(
                 "⚠ Shared checkout. Stage explicit paths — `git add -A` here commits "
                 "another agent's unfinished work. Pushing is manual on this project: "
-                "cabildo does not push or land for it, so commit and let a human "
+                "cabildo does not push or push for it, so commit and let a human "
                 "push — do not `git push` on your own."
             )
         else:
             lines.append(
                 "⚠ Shared repo. Do NOT `git push` — it races them and the guard will "
                 "deny it. Commit, then queue "
-                '`request(action="land", params={"cwd": ..., "target": "main"})`: the '
+                '`request(action="push", params={"cwd": ..., "target": "main"})`: the '
                 "daemon rebases, gates, pushes and verifies one agent at a time. "
-                "`land` moves work to origin/main; it does not touch your local main. "
+                "`push` moves work to origin/main; it does not touch your local main. "
                 "Stage explicit paths — `git add -A` in a shared checkout commits "
                 "their unfinished work."
             )

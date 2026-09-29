@@ -227,7 +227,7 @@ believe they are fast-forwarding — and the loser's recovery (rebase, revert,
 force-push) is what actually eats commits. So commit, then queue it:
 
 ```
-request(action="land", params={"cwd": "<your tree>", "target": "main"})
+request(action="push", params={"cwd": "<your tree>", "target": "main"})
 ```
 
 The daemon runs one intent at a time: fetch → rebase → gate → push → verify
@@ -257,7 +257,7 @@ push is refused again, just as a race rather than as somebody's lock.
 
 Two optional, human-edited files tune behaviour, highest precedence first:
 
-- `<repo>/.cabildo/config.toml`: committed beside the land gate, so a policy
+- `<repo>/.cabildo/config.toml`: committed beside the push gate, so a policy
   travels with the checkout and applies to everyone working it.
 - `~/.cabildo/config.toml`: this machine, all projects. A `[project.<name>]`
   section scopes keys to one repo.
@@ -273,7 +273,7 @@ Two keys are wired today (see `.cabildo/config.example.toml` for the rest):
 ```
 [push]
 mode = "manual"    # opt this project out of the push guard above: a plain
-                   # `git push` is allowed even with peers live. Default "land".
+                   # `git push` is allowed even with peers live. Default "push".
 
 [watch]
 topic = "project"  # `cabildo watch` with no -t defaults to this repo's own
@@ -290,11 +290,11 @@ heartbeat_s = 0    # if > 0, the Stop hook defers an imminent idle by one turn o
                    # off by default. It cannot wake an already-stopped session.
 ```
 
-### What the daemon will and won't land
+### What the daemon will and won't push
 
-`land` is a request, and the daemon judges it before acting:
+`push` is a request, and the daemon judges it before acting:
 
-- **Uncommitted *tracked* changes block it.** The daemon lands commits; it never
+- **Uncommitted *tracked* changes block it.** The daemon pushes commits; it never
   stages or commits for you. Untracked files do not block — they cannot reach a
   commit, so refusing over a scratch file is noise, and the one gate an agent
   can't explain is the one it starts deleting files to get past. The step log
@@ -307,8 +307,8 @@ heartbeat_s = 0    # if > 0, the Stop hook defers an imminent idle by one turn o
   coming up at login and draining a week-old queue is not obedience. Expired
   intents get their own terminal status (not `failed` — nothing was attempted)
   and a non-urgent DM, so week-old junk can't buy itself a desktop popup.
-- **A push it can't verify is never reported as landed** — and a push it can't
-  *see* is never reported as failed either. See `tests/test_land_verification.py`.
+- **A push it can't verify is never reported as pushed** — and a push it can't
+  *see* is never reported as failed either. See `tests/test_push_verification.py`.
 
 ## The second server: `issues`
 
@@ -339,7 +339,7 @@ READY — nothing blocks these, nobody owns them
     The _free_port() race was fixed in one file; the pattern lives in two more
     ci
 YOURS
-  gap-ids-collide-with-no-guard [in-progress] — Two gaps both landed as G33
+  gap-ids-collide-with-no-guard [in-progress] — Two gaps both pushed as G33
 WAITING (4)
   attachments-are-console-only — blocked by No attachment has ever reached real R2
   ci-runner-memory-headroom — blocked on a decision — @jorge can unblock it
@@ -396,7 +396,7 @@ A folder that wants its shape closed says so, and then `check` grades it and
 field_order = ["title", "type", "priority", "area", "tags",
                "source", "status", "fixed_in", "owner", "blocked_by"]
 strict_fields = true               # anything not listed is an error
-fixed_in_on_branch = "main"        # the sha must be one that LANDED
+fixed_in_on_branch = "main"        # the sha must be one that PUSHED
 check_body_shas = true             # a cited sha on no branch dies at the next gc
 
 [fields.tags]
@@ -445,7 +445,7 @@ one machine. Concretely:
   `claim_issue`, which is best-effort and skippable.
 
 Statuses are `open → in-progress → done`, with `blocked` off to the side.
-**Closing keeps the file** and requires `fixed_in` — the sha that landed on the
+**Closing keeps the file** and requires `fixed_in` — the sha that pushed on the
 mainline, not one from a worktree that will be pruned — so the folder is a record
 of what was fixed by what.
 
@@ -489,7 +489,7 @@ reached until its next tool call or turn boundary. cabildo uses six events:
 | `SessionStart` | register on the bus, bind `session_id ⇄ claude_pid`, inject a banner (who you are, peers, locks, unread) |
 | `UserPromptSubmit` | refresh liveness, inject a one-line `📬 N unread …` notice (silent when nothing) |
 | `PostToolUse` (`*`) | **mid-turn delivery**: inject unread URGENT mail at the next tool-call boundary. Each message injects once (tracked in `deliveries`; delivery ≠ read). Ordinary mail never interrupts a turn. Also keeps `last_seen` fresh during long autonomous turns. |
-| `PreToolUse` (`Bash\|Edit\|Write\|NotebookEdit`) | **claims enforcement, with teeth**: (a) **auto-claim on edit** — an allowed Edit/Write silently takes a short lease (`file:<path>`, 10-min TTL, refreshed per edit) so the *next* agent to touch that file is denied, without anyone remembering to `claim`; (b) deny `git push` while another session holds `push:<project>` **or** while any other agent is simply live on the project, pointing at `request land` (a lease you hold yourself is the escape hatch); (c) deny blanket staging (`add -A`, `add .`, `commit -a`) when another agent shares the same *checkout* — worktrees have their own index and are exempt; (d) deny tree-destroying git (`reset --hard`, discarding `checkout`/`restore`, `clean -f`, `stash`) while any other agent is active on the project, since those wipe the whole shared tree's uncommitted work; (e) deny **branch switching** (`checkout`/`switch` to a ref, `-b`, `branch -f`) while another agent stands in the *same checkout* — a checkout has one HEAD, so switching it moves everyone in that directory without telling them, and the next one commits onto a branch it never chose. Worktrees have their own HEAD and are exempt, which is also the way out. Deny reasons name the holder/peers so the agent negotiates on the bus. Logic in `src/cabildo/guard.py`. |
+| `PreToolUse` (`Bash\|Edit\|Write\|NotebookEdit`) | **claims enforcement, with teeth**: (a) **auto-claim on edit** — an allowed Edit/Write silently takes a short lease (`file:<path>`, 10-min TTL, refreshed per edit) so the *next* agent to touch that file is denied, without anyone remembering to `claim`; (b) deny `git push` while another session holds `push:<project>` **or** while any other agent is simply live on the project, pointing at `request push` (a lease you hold yourself is the escape hatch); (c) deny blanket staging (`add -A`, `add .`, `commit -a`) when another agent shares the same *checkout* — worktrees have their own index and are exempt; (d) deny tree-destroying git (`reset --hard`, discarding `checkout`/`restore`, `clean -f`, `stash`) while any other agent is active on the project, since those wipe the whole shared tree's uncommitted work; (e) deny **branch switching** (`checkout`/`switch` to a ref, `-b`, `branch -f`) while another agent stands in the *same checkout* — a checkout has one HEAD, so switching it moves everyone in that directory without telling them, and the next one commits onto a branch it never chose. Worktrees have their own HEAD and are exempt, which is also the way out. Deny reasons name the holder/peers so the agent negotiates on the bus. Logic in `src/cabildo/guard.py`. |
 | `Stop` | refuse to go idle with unread URGENT mail — delivery is pull-based, so an idle agent is unreachable; the hook stops the stopping instead |
 | `SessionEnd` | deregister, drop the session's locks |
 
@@ -534,7 +534,7 @@ Only messages **addressed to you**. `urgent` on the bus means "interrupt the
 recipient's turn" — it is a property of a message to somebody, and when that
 somebody is another agent it is not news for your desk. Measured over 40 pops
 before this rule: none were addressed to the human. Twenty were the daemon
-telling an agent its land failed; twenty were five agents on one project channel
+telling an agent its push failed; twenty were five agents on one project channel
 working out which of them was writing `docs/issues/`.
 
 An agent that genuinely needs you says so through `request(action="ask")`, which
@@ -599,7 +599,7 @@ over TCP into its own `~/.cabildo/chat.db`. Both peers run both halves, so the
 sync is bidirectional; the serving side only ever reads its database — a peer
 never writes to another's bus directly. Messages carry a global `guid`, so a
 message that reaches you from two peers, or after a restart, merges once instead
-of duplicating. Pulled rows are stamped `origin='lan'`, marking them as arriving
+of duplicating. Pulled rows are stamped `provenance='lan'`, marking them as arriving
 from a LAN peer rather than born on this machine.
 
 Single-machine SQLite stays the default; this is opt-in and only for the

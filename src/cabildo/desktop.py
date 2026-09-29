@@ -254,7 +254,7 @@ def _headline(body: str) -> tuple[str, str]:
             lead.append(ln)
     head = " ".join(" ".join(lead).split())
     # The first sentence carries the verdict; the rest is usually the same fact restated for a
-    # machine. Cut at punctuation, not at a character count that lands mid-path.
+    # machine. Cut at punctuation, not at a character count that pushes mid-path.
     cut = re.split(r"(?<=[.!?:])\s", head, maxsplit=1)
     head = cut[0] if cut and len(cut[0]) >= 30 else head
     return head[:180], (f"{detail} file(s) listed" if detail else "")
@@ -266,7 +266,7 @@ def notify_message(m: dict) -> bool:
     Two things this deliberately does NOT do. It does not echo the body — see `_headline`. And it
     does not raise an intent result to critical urgency just because the message is flagged urgent:
     urgent on the bus means "interrupt the agent's turn", and GNOME's critical means "stay on this
-    human's screen until dismissed". Those are different claims, and conflating them is how a land
+    human's screen until dismissed". Those are different claims, and conflating them is how a push
     that failed because his own tree was dirty ended up as an undismissable alert.
     """
     who = m.get("from_display") or "agent"

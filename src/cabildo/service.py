@@ -10,7 +10,7 @@ launchd LaunchAgent, its macOS equivalent) already runs as him, in his session.
 
 One unit:
 
-  cabildo-daemon   drains the intents queue (land, spawn) and pops desktop
+  cabildo-daemon   drains the intents queue (push, spawn) and pops desktop
                    notifications for messages addressed to you
 
 On Linux it's written to ~/.config/systemd/user/ as a plain-text unit file;
@@ -101,7 +101,7 @@ def unit_dir() -> Path:
 
 
 def log_dir() -> Path:
-    """Where launchd agent logs land. Systemd doesn't need this — journal
+    """Where launchd agent logs push. Systemd doesn't need this — journal
     takes StandardOutput=journal for free — but launchd has no built-in log
     store, so StandardOutPath/StandardErrorPath must point somewhere real.
     """

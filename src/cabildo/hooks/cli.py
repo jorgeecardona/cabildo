@@ -35,7 +35,7 @@ EVENTS = (
 
 def _injected_len(output: str) -> int:
     """Chars of context this hook pushed into the model: additionalContext plus
-    any deny/stop reason (all land in the model's context). 0 if unparseable.
+    any deny/stop reason (all push in the model's context). 0 if unparseable.
     """
     try:
         obj = json.loads(output)

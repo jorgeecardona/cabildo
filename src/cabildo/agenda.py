@@ -328,7 +328,7 @@ def view(conn, folder: pathlib.Path, *, since: float | None = None) -> dict:
     """The structured agenda for a skill to render: Today, the tier Roadmap, and the
     session-derived signals (live_wip, drift, fragmentation, gaps, to_track). Tasks
     carry their matched sessions from the bus, each with the recent token/cost usage
-    of that session (claim = flow, so cost lands on the task). With no bus, the
+    of that session (claim = flow, so cost pushes on the task). With no bus, the
     structure still comes back with empty session lists. Any tracker key or other
     extra data a task carries is returned under its `extra`; cabildo does not fetch or
     interpret it — a caller that wants live tracker status composes it itself.

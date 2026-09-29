@@ -14,7 +14,7 @@
 # project, so a single machine-wide file can differ per repo:
 #
 #   [project.cabildo]
-#   push = { mode = "land" }
+#   push = { mode = "auto" }
 #
 # Below are the tables cabildo understands. [push] and [watch] change behaviour
 # today; the rest are read but not yet wired to a call site.
@@ -22,10 +22,17 @@
 # --- wired today -----------------------------------------------------------
 
 [push]
-# "land"   (default) keep the push guard: while a peer is live on the project a
-#          bare `git push` is denied and routed to `request land`.
+# "auto"   (default) keep the push guard: while a peer is live on the project a
+#          bare `git push` is denied and routed to `request push`.
 # "manual" opt out: a plain `git push` is allowed even with peers live.
-mode = "land"
+mode = "auto"
+target = "main"    # default branch for `request push`
+# How a successful push updates the pusher's LOCAL target branch (issue #20):
+# "ff-only" (default) fast-forward it, warn and never clobber if it diverged or
+#           is checked out in a worktree; a refusal never fails the push.
+# "reset"   force it to origin/<target> (destructive; opt-in).
+# "off"     leave it alone (prior behaviour; local main drifts behind).
+local_sync = "ff-only"
 
 [watch]
 # Default channel for `cabildo watch` when you pass no -t:
@@ -62,15 +69,6 @@ level = "none"
 [notify]
 enabled = true
 quiet_hours = "22:00-08:00"
-
-[land]
-target = "main"    # default branch for `request land`
-# How a successful land updates the lander's LOCAL target branch (issue #20):
-# "ff-only" (default) fast-forward it, warn and never clobber if it diverged or
-#           is checked out in a worktree; a refusal never fails the land.
-# "reset"   force it to origin/<target> (destructive; opt-in).
-# "off"     leave it alone (prior behaviour; local main drifts behind).
-local_sync = "ff-only"
 
 [spawn]
 model = "sonnet"   # default model for helper agents

@@ -17,7 +17,7 @@ mapfile -t staged < <(git diff --cached --name-only --diff-filter=ACM)
 [[ ${#staged[@]} -eq 0 ]] && exit 0
 
 # 1. auto-bump patch when the shipped Python source changed -- src/**/*.py only,
-#    so any notes/docs that ever land under src/ don't trigger a release.
+#    so any notes/docs that ever push under src/ don't trigger a release.
 #    (bump-version also refreshes uv.lock's pinned version, so stage both to keep
 #    the commit self-consistent.)
 if printf '%s\n' "${staged[@]}" | grep -qE '^src/.*\.py$'; then

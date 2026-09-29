@@ -564,7 +564,7 @@ def cmd_spawn(args) -> int:
     )
     print(
         f"{C.DIM}a daemon with --allow-spawn must be running to execute it; "
-        f"its result lands here as a DM (see `watch` / `fleet`).{C.OFF}"
+        f"its result pushes here as a DM (see `watch` / `fleet`).{C.OFF}"
     )
     return 0
 
@@ -778,7 +778,7 @@ def cmd_lan(args) -> int:
     """Share this project's bus with peers on the local network — no cloud.
 
     Beacons on the LAN, discovers peers sharing the same project, and pulls
-    their messages into the local bus (deduped by guid, stamped origin='lan' so
+    their messages into the local bus (deduped by guid, stamped provenance='lan' so
     they never leak up to the hosted mirror). One round by default; --loop keeps
     serving and syncing. Single-machine SQLite stays the default; this is opt-in.
     """
@@ -803,7 +803,7 @@ def cmd_wan(args) -> int:
 
     Peers, token, and bind address come from [remote] config unless overridden by
     flags. Pulls each peer's messages into the local bus (deduped by guid, stamped
-    origin='wan' so they never leak up to the hosted mirror). One round by default;
+    provenance='wan' so they never leak up to the hosted mirror). One round by default;
     --loop keeps serving + syncing. cabildo does not build the tunnel: point it at
     addresses you can already reach (a VPN/mesh IP, or an SSH-forwarded localhost).
     """
@@ -1264,8 +1264,8 @@ def cmd_messages(args) -> int:
     return 0
 
 
-def cmd_facts(args) -> int:
-    """Durable decisions for a project: what agents recorded via set_fact, the
+def cmd_decisions(args) -> int:
+    """Durable decisions for a project: what agents recorded via record_decision, the
     coordination memory that survives context resets. Newest last so a run reads
     top-to-bottom.
     """
@@ -1277,12 +1277,14 @@ def cmd_facts(args) -> int:
     _root, name = git_project(os.getcwd())
     project = None if args.all else (args.project or name)
     with store.connect() as conn:
-        rows = store.list_facts(
+        rows = store.list_decisions(
             conn, project_name=project, kind=args.kind, query=args.grep, limit=args.limit
         )
     if not rows:
         where = "" if args.all else f" for {project}"
-        print(f"{C.DIM}no decisions recorded{where} — agents record them with set_fact.{C.OFF}")
+        print(
+            f"{C.DIM}no decisions recorded{where} — agents record them with record_decision.{C.OFF}"
+        )
         return 0
     for r in reversed(rows):
         when = _dt.datetime.fromtimestamp(r["created_at"]).strftime("%m-%d %H:%M")
@@ -1690,7 +1692,7 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("role", help="pm | qa | ux")
     sp.add_argument("task", help="the instruction (quote it)")
     sp.add_argument("-r", "--repo", default=".", help="repo path (default: cwd)")
-    sp.add_argument("--target", default="main", help="branch the work lands on")
+    sp.add_argument("--target", default="main", help="branch the work pushes on")
     sp.add_argument(
         "-m",
         "--model",
@@ -1917,7 +1919,9 @@ def main(argv: list[str] | None = None) -> int:
     mg.add_argument("--limit", type=int, default=50, help="max rows (default 50)")
     mg.set_defaults(fn=cmd_messages)
 
-    ft = sub.add_parser("facts", help="durable decisions for a project (recorded via set_fact)")
+    ft = sub.add_parser(
+        "decisions", help="durable decisions for a project (recorded via record_decision)"
+    )
     ft.add_argument("-p", "--project", help="project name (default: this repo)")
     ft.add_argument("--all", action="store_true", help="all projects, not just this repo")
     ft.add_argument(
@@ -1925,7 +1929,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     ft.add_argument("--grep", help="substring to match in title/body/refs/tags")
     ft.add_argument("--limit", type=int, default=20, help="max rows (default 20)")
-    ft.set_defaults(fn=cmd_facts)
+    ft.set_defaults(fn=cmd_decisions)
 
     iss = sub.add_parser(
         "issues", help="this project's docs/issues register: what's ready, what's blocked"

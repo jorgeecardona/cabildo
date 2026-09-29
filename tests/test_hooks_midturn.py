@@ -122,7 +122,7 @@ def test_push_after_separator_is_caught(conn):
 def test_expired_lock_stops_being_the_reason(conn):
     """An expired lease no longer names its holder. The push is still refused
     while that holder is live on the project — but as a race with a peer, routed
-    to `land`, not as somebody's lock.
+    to `push`, not as somebody's lock.
     """
     make_session(conn, "a" * 8)
     make_session(conn, "b" * 8)
@@ -130,7 +130,7 @@ def test_expired_lock_stops_being_the_reason(conn):
     reason = guard.deny_reason(conn, "b" * 8, "Bash", {"command": "git push"})
     assert reason is not None
     assert "push:alpha" not in reason.split("must push by hand")[0]
-    assert "land" in reason
+    assert "push" in reason
 
 
 def test_expired_lock_does_not_block_a_lone_agent(conn):
@@ -174,7 +174,7 @@ def test_file_claim_from_another_project_does_not_block(conn):
 # --------------------------------------------------------------------------- #
 def test_only_messages_addressed_to_the_human_pop_a_notification(conn):
     """Measured, not assumed: of the last 40 desktop pops, ZERO were addressed to him. Twenty were
-    the daemon telling an agent its land failed; twenty were agents coordinating on a project
+    the daemon telling an agent its push failed; twenty were agents coordinating on a project
     channel. `urgent` means "interrupt the recipient" — and when the recipient is another agent,
     this desk is not the recipient.
     """
@@ -227,8 +227,8 @@ def test_a_notification_shows_the_verdict_not_the_git_status(monkeypatch):
             "from_display": "@daemon",
             "project_name": "crm",
             "urgent": True,
-            "body": "❌ intent #28 `land` → failed working tree has uncommitted tracked changes — "
-            "commit or stash first. The daemon lands commits, it does not decide what:\n"
+            "body": "❌ intent #28 `push` → failed working tree has uncommitted tracked changes — "
+            "commit or stash first. The daemon pushes commits, it does not decide what:\n"
             "M apps/api/src/crm/config.py\nM apps/web/vite.config.ts\nM docker-compose.yml",
         }
     )

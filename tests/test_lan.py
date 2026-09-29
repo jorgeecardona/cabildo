@@ -1,7 +1,7 @@
 """Peer-to-peer LAN sync (cabildo.lan): the guid foundation, project-scoped
 selection, guid dedup / merge, and a real localhost TCP pull round-trip.
 
-Guarded by importorskip: lan.py is a new module, and the land daemon's gate
+Guarded by importorskip: lan.py is a new module, and the push daemon's gate
 imports the stale main checkout (no lan module), so this whole file skips there.
 CI installs the branch and is the authoritative check.
 """
@@ -127,9 +127,9 @@ def test_merge_incoming_dedups_by_guid_and_preserves_identity(conn):
     assert lan.merge_incoming(conn, rows) == 2
     assert lan.merge_incoming(conn, rows) == 0  # idempotent second pass
 
-    got = conn.execute("SELECT guid, created_at, origin FROM messages ORDER BY guid").fetchall()
+    got = conn.execute("SELECT guid, created_at, provenance FROM messages ORDER BY guid").fetchall()
     assert [r["guid"] for r in got] == ["g1", "g2"]
-    assert all(r["origin"] == "lan" for r in got)
+    assert all(r["provenance"] == "lan" for r in got)
     assert got[0]["created_at"] == 111.0  # original timestamp kept across the hop
 
 
@@ -192,10 +192,10 @@ def test_tcp_pull_round_trip(home, tmp_path):
         conn_b = _connect(tmp_path / "peer_b.db")
         try:
             assert lan.merge_incoming(conn_b, rows) == 1
-            got = conn_b.execute("SELECT body, guid, origin FROM messages").fetchone()
+            got = conn_b.execute("SELECT body, guid, provenance FROM messages").fetchone()
             assert got["body"] == "from A"
             assert got["guid"] == rows[0]["guid"]
-            assert got["origin"] == "lan"
+            assert got["provenance"] == "lan"
         finally:
             conn_b.close()
     finally:

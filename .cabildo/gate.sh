@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The referee. The daemon runs this from the repo root before it pushes, and a
-# non-zero exit means nothing lands.
+# non-zero exit means nothing pushes.
 #
-# Repo-owned on purpose: the agent asking to land does not get to choose the
+# Repo-owned on purpose: the agent asking to push does not get to choose the
 # thing that judges it. Keep it fast and keep it honest — a gate nobody waits
 # for gets deleted, and a gate that exits 0 on a broken suite is worse than no
 # gate at all, because it hands out confidence nobody earned.

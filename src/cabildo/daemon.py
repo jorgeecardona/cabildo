@@ -1,6 +1,6 @@
 """The deterministic entity: drains the intents queue, one action at a time.
 
-Why this is single-threaded and unapologetic about it: landing is a serial
+Why this is single-threaded and unapologetic about it: pushing is a serial
 operation, and the strongest lock is not needing one. A single worker draining a
 queue cannot race itself, so there is no lease to expire, no lock to leak, and
 no rebase-under-you. Concurrency here would buy nothing and cost correctness.
@@ -10,7 +10,7 @@ no rebase-under-you. Concurrency here would buy nothing and cost correctness.
     python -m cabildo.daemon --once          # drain what's queued, then exit
 
 Results go back three ways: the intent row (authoritative), a line on stdout,
-and a message on the bus to the requester (so an agent learns its land failed
+and a message on the bus to the requester (so an agent learns its push failed
 without polling).
 """
 
@@ -51,7 +51,7 @@ def _pending_for_human(conn, after_id: int, *, everything: bool = False) -> list
     problem. `urgent` on the bus means "interrupt the recipient's turn" — it is a property of a
     message to *somebody*, and when that somebody is another agent it is not news for this desk.
     Measured over the last 40 desktop pops: **none** were addressed to him. Twenty were the daemon
-    telling an agent its land failed; twenty were five agents on #proj:paas working out which of
+    telling an agent its push failed; twenty were five agents on #proj:paas working out which of
     them was writing docs/issues/. All of it was the bus doing its job, and all of it arrived as a
     popup he could not act on.
 
@@ -89,17 +89,17 @@ def _report(conn, intent: dict, status: str, result: dict) -> None:
     head = (
         "⌛"
         if result.get("expired")
-        else ("✅" if (ok and result.get("landed")) else ("⚠️" if ok else "❌"))
+        else ("✅" if (ok and result.get("pushed")) else ("⚠️" if ok else "❌"))
     )
     body = [
         f"{head} intent #{intent['id']} `{intent['action']}` → {status}",
         result.get("reason") or "",
     ]
-    if result.get("landed"):
+    if result.get("pushed"):
         body.append(
-            f"landed {result.get('head')} on {result.get('target')} (gate: {result.get('gate')})"
+            f"pushed {result.get('head')} on {result.get('target')} (gate: {result.get('gate')})"
         )
-    if result.get("landed") and result.get("gate") == "ABSENT":
+    if result.get("pushed") and result.get("gate") == "ABSENT":
         # Only for a real push: on a dry run nothing was pushed, so "pushed on
         # your word alone" would be doubly wrong (issue #15).
         body.append(
@@ -114,7 +114,7 @@ def _report(conn, intent: dict, status: str, result: dict) -> None:
             body="\n".join(b for b in body if b),
             to_session=intent["from_session"],
             project=intent.get("project"),
-            # A failed land blocks that agent from idling until it looks. An
+            # A failed push blocks that agent from idling until it looks. An
             # EXPIRED one does not: urgent mail also pops a desktop notification
             # for the human, and a week-old request nobody is waiting on must not
             # buy itself a popup.
@@ -163,8 +163,8 @@ def handle(conn, intent: dict, ctx: actions.Ctx) -> None:
     )
     try:
         result = fn(intent["params"], ctx)
-        # An action may name its own terminal status (e.g. land distinguishes a
-        # dry run from a real landing, so `done` always means "on the remote").
+        # An action may name its own terminal status (e.g. push distinguishes a
+        # dry run from a real pushing, so `done` always means "on the remote").
         status = result.get("status") or ("done" if result.get("ok") else "failed")
     except actions.Reject as e:
         result, status = {"ok": False, "reason": str(e)}, "rejected"
@@ -189,7 +189,7 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
     p.add_argument(
         "--allow-push",
         action="store_true",
-        help="actually push. Without it, land stops before the push and reports.",
+        help="actually push. Without it, push stops before the push and reports.",
     )
     p.add_argument(
         "--allow-spawn",

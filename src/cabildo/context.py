@@ -104,7 +104,7 @@ def _argv_darwin(pid: int) -> list[str]:
     itself contains a space is indistinguishable from two arguments. That is
     an inherent limit of `ps` (no psutil here), and it does not matter for our
     one consumer -- `_exe_id` only ever looks at argv[0], or (for interpreters)
-    the first non-flag token in argv[1:], both of which land correctly
+    the first non-flag token in argv[1:], both of which push correctly
     regardless of how anything *after* them got split.
     """
     text = _ps("-ww", "-o", "command=", "-p", str(pid))
@@ -232,7 +232,7 @@ def _worktree_main_root(git_file: Path) -> Path | None:
     A linked worktree's .git file points at <main>/.git/worktrees/<name>. That
     dir's `commondir` resolves to the main <main>/.git, whose parent is the repo
     root. Without this, every worktree looks like its own project and agents on
-    the same repo land in separate channels (proj:mcp-oauth instead of
+    the same repo push in separate channels (proj:mcp-oauth instead of
     proj:paas), unable to see each other.
     """
     try:

@@ -14,7 +14,7 @@ Four conventions are enforced, all scoped to the session's own project:
     claim — the first agent to touch a file owns it briefly; the next is denied.
   * ``git push`` — denied while ``push:<project_name>`` is held by someone else,
     and *also* denied while any other agent is simply live on the project, with
-    the reason pointing at ``request land``. A lease you hold yourself is the
+    the reason pointing at ``request push``. A lease you hold yourself is the
     deliberate escape hatch.
   * blanket staging in a shared working tree — ``git add -A``, ``git add .``,
     ``git commit -a`` — is denied while another agent shares the same checkout,
@@ -28,7 +28,7 @@ Four conventions are enforced, all scoped to the session's own project:
 The last three are one story: concurrent agents on one repo collide at commit
 and push, and every recovery from that collision (reset, revert, force-push)
 destroys more than the collision did. So the guard stops the collision instead
-of the recovery, and every deny names the ordered path through — ``land``, which
+of the recovery, and every deny names the ordered path through — ``push``, which
 the daemon runs one at a time.
 
 Deny only ever fires against a live peer or a claim held by *someone else*;
@@ -274,9 +274,9 @@ def _deny_push(conn: sqlite3.Connection, me: sqlite3.Row, command: str) -> str |
         "a direct push races them. Queue it instead; the daemon fetches, rebases "
         "onto the target, runs the repo's gate, pushes, and verifies against the "
         "remote, one intent at a time:\n"
-        f'    request(action="land", params={{"cwd": "{me["cwd"] or me["project"]}", '
-        '"target": "<branch you are landing on, e.g. main>"})\n'
-        "It lands commits and never decides what to commit, so commit first and "
+        f'    request(action="push", params={{"cwd": "{me["cwd"] or me["project"]}", '
+        '"target": "<branch you are pushing on, e.g. main>"})\n'
+        "It pushes commits and never decides what to commit, so commit first and "
         "leave no tracked changes behind. It DMs you the result. If you really "
         f"must push by hand, take `{resource}` with `claim` first — that denies "
         "the others and makes the rebase yours to own."
@@ -352,7 +352,7 @@ def _deny_branch_switch(conn: sqlite3.Connection, me: sqlite3.Row, command: str)
     A checkout has ONE HEAD. Switching it moves every agent standing in that directory, and none of
     them are told — so the next one commits onto a branch it never chose, believing it is still on
     the one it started from. That is not hypothetical: it happened three times in this repo's own
-    fleet on 2026-08-03, and in one case an agent landed three commits of unrelated work onto
+    fleet on 2026-08-03, and in one case an agent pushed three commits of unrelated work onto
     somebody else's feature branch before anyone noticed.
 
     Worktrees have their own HEAD and are never affected, which is also the escape hatch: the answer
@@ -463,7 +463,7 @@ def _under_project(path: str, project: str | None) -> bool:
 def _split_pipeline(tokens: list[str]) -> list[list[str]]:
     """The word tokens grouped into one argv per simple command, splitting on
     every operator token (`|`, `;`, `&&`, a redirect, …). Redirect *targets*
-    land in their own single-word group, which no writer-command check matches,
+    push in their own single-word group, which no writer-command check matches,
     so they are harmless here — redirects are handled separately by path.
     """
     out: list[list[str]] = []

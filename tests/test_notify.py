@@ -34,20 +34,20 @@ def test_no_nudge_when_alone(conn):
     assert "No other agents" in banner
 
 
-def test_shared_repo_banner_offers_land_by_default(conn):
-    """A land-mode project (the default): with peers, the banner routes pushes to
-    a land and states land does not touch local main.
+def test_shared_repo_banner_offers_push_by_default(conn):
+    """A push-mode project (the default): with peers, the banner routes pushes to
+    a push and states push does not touch local main.
     """
     make_session(conn, "me", handle="me", project=P, project_name="x")
     _peers(conn, 1)
     banner = notify.session_banner(conn, "me")
-    assert 'request(action="land"' in banner
+    assert 'request(action="push"' in banner
     assert "does not touch your local main" in banner
 
 
-def test_shared_repo_banner_drops_land_in_manual_mode(conn, monkeypatch):
+def test_shared_repo_banner_drops_push_in_manual_mode(conn, monkeypatch):
     """A manual-mode project pushes by hand: the banner must NOT tell agents to
-    queue a land — that path is off, and the guard does not deny the push.
+    queue a push — that path is off, and the guard does not deny the push.
     """
     from cabildo import config
 
@@ -55,7 +55,7 @@ def test_shared_repo_banner_drops_land_in_manual_mode(conn, monkeypatch):
     make_session(conn, "me", handle="me", project=P, project_name="x")
     _peers(conn, 1)
     banner = notify.session_banner(conn, "me")
-    assert 'request(action="land"' not in banner
+    assert 'request(action="push"' not in banner
     assert "Pushing is manual" in banner
     assert "do not `git push`" in banner
 

@@ -27,7 +27,7 @@ def _load_install():
 
 install = _load_install()
 
-# The stale main checkout's install.py predates --client selection. The land
+# The stale main checkout's install.py predates --client selection. The push
 # gate runs this file against that checkout, so skip there; CI on the branch,
 # where install.py has the new API, is authoritative.
 if not all(hasattr(install, n) for n in ("install_codex", "preview", "_resolve_clients")):

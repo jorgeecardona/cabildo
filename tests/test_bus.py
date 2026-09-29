@@ -103,7 +103,7 @@ def test_localbus_set_handle_and_request(home):
         "handle": "ace",
     }
 
-    ok = bus.call("request", {"action": "land", "params": {"cwd": "/repo/alpha"}}, identity=alice)
+    ok = bus.call("request", {"action": "push", "params": {"cwd": "/repo/alpha"}}, identity=alice)
     assert ok["ok"] is True
     assert ok["intent_id"] > 0
 
@@ -121,4 +121,4 @@ def test_localbus_reads_return_json_safe_shapes(home):
     ident = Identity(session="x")
     assert isinstance(bus.call("list_topics", {}, identity=ident), list)
     assert isinstance(bus.call("claims", {}, identity=ident), list)
-    assert isinstance(bus.call("list_facts", {}, identity=ident), list)
+    assert isinstance(bus.call("list_decisions", {}, identity=ident), list)

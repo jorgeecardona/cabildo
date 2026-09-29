@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "issues": {
+      "command": "/home/jcardona/.venv/bin/cabildo-issues-mcp",
+      "args": []
+    }
+  }
+}

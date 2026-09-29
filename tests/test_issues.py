@@ -590,7 +590,7 @@ def test_fixed_in_must_be_a_real_commit_on_the_named_branch(tmp_path):
     run("git", "config", "user.name", "t")
     run("git", "add", "-A")
     run("git", "commit", "-qm", "one")
-    landed = subprocess.run(
+    pushed = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], cwd=repo, capture_output=True, text=True
     ).stdout.strip()
 
@@ -610,7 +610,7 @@ def test_fixed_in_must_be_a_real_commit_on_the_named_branch(tmp_path):
     write(d, "03-08-2026-a.md", "title: A\nstatus: done\narea: ci\nfixed_in: 0000000")
     assert any("is not a commit" in p.message for p in issues.check(d))
 
-    write(d, "03-08-2026-a.md", f"title: A\nstatus: done\narea: ci\nfixed_in: {landed}")
+    write(d, "03-08-2026-a.md", f"title: A\nstatus: done\narea: ci\nfixed_in: {pushed}")
     assert issues.check(d) == []
 
 
@@ -887,7 +887,7 @@ def test_the_session_cue_is_silent_without_a_register(tmp_path):
 def test_the_session_cue_names_the_top_ranked_item(tmp_path):
     """A count is an invitation; a title is a fact. `board` was described as "start here" and was
     still the least-used tool, because a tool description is read once you are already choosing a
-    tool. This lands before that.
+    tool. This pushes before that.
     """
     from cabildo import notify
 
@@ -950,7 +950,7 @@ def test_closed_needs_fixed_in_false_allows_done_without_a_sha(agenda):
 
 
 def test_closed_needs_fixed_in_true_still_demands_a_sha(folder):
-    # The default (a code register) is unchanged: done must cite the sha that landed it.
+    # The default (a code register) is unchanged: done must cite the sha that pushed it.
     write(folder, "03-08-2026-done.md", "title: D\nstatus: done\narea: ci\nscope: S")
     assert any("fixed_in" in p.message for p in issues.check(folder))
 

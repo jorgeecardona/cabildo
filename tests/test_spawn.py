@@ -251,7 +251,7 @@ def test_launch_records_lineage_and_model(home, tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# The spawn prompt is mode-aware: an agent is only told to land where the repo's
+# The spawn prompt is mode-aware: an agent is only told to push where the repo's
 # push.mode allows it, so it is never instructed to do what the daemon refuses.
 # --------------------------------------------------------------------------- #
 
@@ -296,25 +296,25 @@ def _spawn_prompt(repo, monkeypatch) -> str:
     return cmd[cmd.index("--append-system-prompt") + 1]
 
 
-def test_land_mode_prompt_offers_land_and_names_catch_up(home, tmp_path, monkeypatch):
-    """The default (push.mode = land): the agent is told to land, and land is
+def test_push_mode_prompt_offers_push_and_names_read_decisions(home, tmp_path, monkeypatch):
+    """The default (push.mode = auto): the agent is told to push, and push is
     defined against local main so the two directions never get conflated.
     """
     repo = _git_repo(tmp_path)
     prompt = _spawn_prompt(repo, monkeypatch)
-    assert 'request(action="land"' in prompt
-    assert "does NOT" in prompt and "local main" in prompt  # land vs local main stated
+    assert 'request(action="push"' in prompt
+    assert "does NOT" in prompt and "local main" in prompt  # push vs local main stated
     assert "catch" in prompt.lower()  # the reverse direction is named
 
 
-def test_manual_mode_prompt_does_not_offer_land(home, tmp_path, monkeypatch):
+def test_manual_mode_prompt_does_not_offer_push(home, tmp_path, monkeypatch):
     """push.mode = manual: cabildo does not push for this repo, so the agent is
-    never told to land — the option is not offered at all.
+    never told to push — the option is not offered at all.
     """
     repo = _git_repo(tmp_path)
     (repo / ".cabildo").mkdir()
     (repo / ".cabildo" / "config.toml").write_text('[push]\nmode = "manual"\n')
     prompt = _spawn_prompt(repo, monkeypatch)
-    assert 'request(action="land"' not in prompt
+    assert 'request(action="push"' not in prompt
     assert "pushes by hand" in prompt
     assert "do not run `git push`" in prompt

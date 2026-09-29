@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-# New module: guard so the land daemon's gate (which imports the stale main
+# New module: guard so the push daemon's gate (which imports the stale main
 # checkout) skips this file instead of erroring. CI on the branch is authoritative.
 codex_config = pytest.importorskip("cabildo.codex_config")
 

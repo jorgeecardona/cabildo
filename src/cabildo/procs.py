@@ -6,7 +6,7 @@ it is the only thing on the machine that knows the map from processes to agents:
 
   * **ancestry** — every tool call an agent makes is a descendant of its own
     `claude`, and `sessions.claude_pid` binds that pid to a session. So an 8 GB
-    pytest resolves to "neon-claptrap is holding 8 GB", and the nudge that lands
+    pytest resolves to "neon-claptrap is holding 8 GB", and the nudge that pushes
     in neon-claptrap's context can say *you*, while everyone else is told to
     carry on.
 

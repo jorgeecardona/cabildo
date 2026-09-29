@@ -282,7 +282,7 @@ def test_view_attaches_cost_from_usage_to_the_claimed_task(conn, tmp_path, monke
     )
     v = agenda.view(conn, folder)
     do = next(t for t in v["today"] if t["slug"] == "costly-task")
-    assert do["cost_weighted"] == 12.5  # the session's cost lands on its task
+    assert do["cost_weighted"] == 12.5  # the session's cost pushes on its task
     assert do["sessions"][0]["tokens_in"] == 100
     assert v["counts"]["cost_weighted_today"] == 12.5
 

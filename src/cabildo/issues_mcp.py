@@ -298,7 +298,7 @@ def claim_issue(name: str, release: bool = False, force: bool = False) -> str:
 @mcp.tool(structured_output=False)
 def close_issue(name: str, fixed_in: str) -> str:
     """Mark a follow-up done. The file stays, carrying `fixed_in`, so the folder records what was
-    fixed by what. Use the sha on the MAINLINE — the land path re-commits, and a worktree sha
+    fixed by what. Use the sha on the MAINLINE — the push path re-commits, and a worktree sha
     resolves only until that worktree is pruned.
     """
     folder = _folder()
