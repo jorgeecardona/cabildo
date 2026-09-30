@@ -577,7 +577,7 @@ def _slim(schema: dict) -> dict:
 try:
     for _t in mcp._tool_manager._tools.values():
         _slim(_t.parameters)
-except Exception:  # private attribute: if a FastMCP bump moves it we just ship fatter schemas
+except Exception:  # private attribute: if a FastMCP bump moves it we just emit fatter schemas
     pass
 
 # No `main()`: these tools are not a standalone server. `cabildo.mcp_server`

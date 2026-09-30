@@ -141,7 +141,7 @@ def apply(project: str | None = None, home: str | None = None) -> tuple[Path, st
         servers[SERVER_NAME] = want
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(data, indent=2) + "\n")
-    install_commands()  # always refresh the shipped commands
+    install_commands()  # always refresh the bundled commands
     return p, ("unchanged" if unchanged else ("updated" if had else "added"))
 
 
