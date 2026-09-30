@@ -28,6 +28,7 @@ today; the rest are read generically and wired one call site at a time):
 
     [push]        mode = "auto" | "manual"     # guard._deny_push
     [destructive] mode = "guard" | "off"        # guard._deny_destructive_git
+    [trunk]   mode = "guard" | "off", names   # guard._deny_commit_on_trunk
     [watch]   topic, interval, tail         # cli.cmd_watch
     [uplink]  level = "none" | ...          # cloud
     [notify]  enabled, quiet_hours          # desktop / notify
@@ -197,6 +198,37 @@ def destructive_mode(cwd: str | None = None, project_name: str | None = None) ->
     """
     mode = str(get(cwd, "destructive", "mode", project_name=project_name, default="guard")).lower()
     return mode if mode in ("guard", "off") else "guard"
+
+
+def trunk_mode(cwd: str | None = None, project_name: str | None = None) -> str:
+    """``[trunk].mode`` for this project: "guard" (the default) or "off".
+
+    "guard" denies an agent committing directly on a protected trunk branch
+    (``main``/``master``, or ``[trunk].names``). The daemon advances
+    ``origin/main`` from lanes and cannot fast-forward a checkout that carries
+    its own commits, so a commit made straight on local ``main`` diverges it
+    from origin and drifts one commit further per push to origin until ff can no
+    longer reconcile it. Work belongs on a lane pushed to origin via
+    ``request push``; ``main`` stays a ref the daemon keeps current. "off" turns
+    the guard off for a repo
+    that commits on its trunk on purpose. An unknown value falls back to "guard".
+    """
+    mode = str(get(cwd, "trunk", "mode", project_name=project_name, default="guard")).lower()
+    return mode if mode in ("guard", "off") else "guard"
+
+
+def trunk_names(cwd: str | None = None, project_name: str | None = None) -> set[str]:
+    """``[trunk].names``: the branch names treated as protected trunk by
+    ``trunk_mode``. Default ``{"main", "master"}``; a repo whose trunk has
+    another name overrides it (e.g. ``names = ["trunk"]``). A non-list value, or
+    one that is empty after cleaning, falls back to the default.
+    """
+    node = get(cwd, "trunk", "names", project_name=project_name, default=None)
+    if isinstance(node, (list, tuple)):
+        names = {str(n).strip() for n in node if str(n).strip()}
+        if names:
+            return names
+    return {"main", "master"}
 
 
 def roles(cwd: str | None = None, project_name: str | None = None) -> dict[str, str]:

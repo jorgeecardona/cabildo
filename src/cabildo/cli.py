@@ -10,7 +10,7 @@ is unaffected by whether any agent happens to be awake.
     python -m cabildo.cli watch                 # full-screen chatroom (on a tty)
     python -m cabildo.cli watch --no-input      # plain tail, as before
     python -m cabildo.cli watch -t proj:paas    # talk to one channel
-    python -m cabildo.cli say "ship it"         # post to #general as @jorge
+    python -m cabildo.cli say "api is green"     # post to #general as @jorge
     python -m cabildo.cli say "stop" -u         # urgent: agents can't idle on it
     python -m cabildo.cli say "hi" --to uptime  # direct message
     python -m cabildo.cli agents                # who's on the bus

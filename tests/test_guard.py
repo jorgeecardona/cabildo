@@ -4,10 +4,24 @@ shell writes alike), and denial of tree-destroying git ops by default.
 
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
 from cabildo import guard, store
 from tests.conftest import make_session
+
+
+def _git_repo(path, branch="main"):
+    """A real git repo at ``path`` whose HEAD is an (unborn) ``branch`` — enough
+    for ``git symbolic-ref --short HEAD`` to report the branch, no commit needed.
+    """
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(path), "symbolic-ref", "HEAD", f"refs/heads/{branch}"], check=True
+    )
+    return path
 
 
 @pytest.fixture
@@ -296,6 +310,86 @@ def test_push_lock_still_enforced(conn, clock):
     )
     reason = _bash(conn, "a", "git push origin main")
     assert reason is not None and "push:alpha" in reason
+
+
+# --------------------------------------------------------------------------- #
+# Committing on a protected trunk — diverges local main from origin
+# --------------------------------------------------------------------------- #
+def test_commit_on_main_is_denied(conn, tmp_path):
+    repo = _git_repo(tmp_path / "repo", branch="main")
+    store.register_session(
+        conn, "a", cwd=str(repo), project=str(repo), project_name="alpha", claude_pid=1000
+    )
+    reason = _bash(conn, "a", 'git commit -m "fix: whatever"')
+    assert reason is not None
+    assert "`main`" in reason
+    assert "request(action=" in reason  # names the way out: land from a lane
+    assert "git switch -c" in reason or "worktree add" in reason
+
+
+def test_commit_on_master_is_denied(conn, tmp_path):
+    repo = _git_repo(tmp_path / "repo", branch="master")
+    store.register_session(
+        conn, "a", cwd=str(repo), project=str(repo), project_name="alpha", claude_pid=1000
+    )
+    assert _bash(conn, "a", "git commit -m x") is not None
+
+
+def test_commit_on_a_lane_is_allowed(conn, tmp_path):
+    repo = _git_repo(tmp_path / "repo", branch="feature-x")
+    store.register_session(
+        conn, "a", cwd=str(repo), project=str(repo), project_name="alpha", claude_pid=1000
+    )
+    assert _bash(conn, "a", "git commit -m x") is None
+    assert _bash(conn, "a", "git commit -am x") is None
+    assert _bash(conn, "a", "git commit --amend --no-edit") is None
+
+
+def test_dry_run_commit_on_main_is_allowed(conn, tmp_path):
+    # --dry-run writes nothing, so it does not strand the branch.
+    repo = _git_repo(tmp_path / "repo", branch="main")
+    store.register_session(
+        conn, "a", cwd=str(repo), project=str(repo), project_name="alpha", claude_pid=1000
+    )
+    assert _bash(conn, "a", "git commit --dry-run") is None
+
+
+def test_amend_on_main_is_denied(conn, tmp_path):
+    # --amend still rewrites the trunk tip, so it diverges just the same.
+    repo = _git_repo(tmp_path / "repo", branch="main")
+    store.register_session(
+        conn, "a", cwd=str(repo), project=str(repo), project_name="alpha", claude_pid=1000
+    )
+    assert _bash(conn, "a", "git commit --amend --no-edit") is not None
+
+
+def test_trunk_off_mode_bypasses_the_guard(conn, tmp_path, home):
+    repo = _git_repo(tmp_path / "repo", branch="main")
+    store.register_session(
+        conn, "a", cwd=str(repo), project=str(repo), project_name="alpha", claude_pid=1000
+    )
+    assert _bash(conn, "a", "git commit -m x") is not None  # baseline: denied
+    (home / "config.toml").write_text('[project.alpha]\ntrunk = { mode = "off" }\n')
+    assert _bash(conn, "a", "git commit -m x") is None  # opted out
+
+
+def test_trunk_names_override(conn, tmp_path, home):
+    # A repo whose trunk is called `trunk` protects it, and stops protecting main.
+    repo = _git_repo(tmp_path / "repo", branch="trunk")
+    store.register_session(
+        conn, "a", cwd=str(repo), project=str(repo), project_name="alpha", claude_pid=1000
+    )
+    (home / "config.toml").write_text('[project.alpha]\ntrunk = { names = ["trunk"] }\n')
+    assert _bash(conn, "a", "git commit -m x") is not None  # `trunk` protected
+    subprocess.run(["git", "-C", str(repo), "symbolic-ref", "HEAD", "refs/heads/main"], check=True)
+    assert _bash(conn, "a", "git commit -m x") is None  # main no longer in the set
+
+
+def test_commit_off_a_repo_falls_through(conn):
+    # No real repo at the cwd: the branch can't be read, so the guard must not
+    # block every commit — it falls through.
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    assert _bash(conn, "a", "git commit -m x") is None
 
 
 # --------------------------------------------------------------------------- #

@@ -1,7 +1,7 @@
 """Decision logic for the PreToolUse guard hook: turn advisory claims into
 enforced ones at the tool-call boundary.
 
-Four conventions are enforced, all scoped to the session's own project:
+Six conventions are enforced, all scoped to the session's own project:
 
   * ``file:<path>`` — a write to a matching path is denied, whether it arrives
     as Edit/MultiEdit/Write/NotebookEdit, a Codex ``apply_patch``, or a shell
@@ -24,12 +24,22 @@ Four conventions are enforced, all scoped to the session's own project:
     another agent is active, because it wipes the tree's uncommitted work, not
     just one claimed file, and an autonomous agent should not throw away changes
     it cannot bring back. A repo opts out with ``[destructive].mode = "off"``.
+  * switching the branch in a shared checkout — ``git checkout``/``switch``/
+    ``branch -f`` — is denied while another agent stands in the same tree,
+    because a checkout has one HEAD and moving it commits the next agent onto a
+    branch it never chose. A worktree has its own HEAD and is the way out.
+  * committing on a protected trunk — ``git commit`` while ``main``/``master``
+    (or ``[trunk].names``) is checked out — is denied by default, because the
+    daemon can only fast-forward a local trunk and a commit made straight on it
+    diverges it from origin, drifting further behind every push to origin until
+    ff can no longer reconcile it. Branch and push from there instead; opt out
+    with ``[trunk].mode = "off"``.
 
-The last three are one story: concurrent agents on one repo collide at commit
+The last four are one story: concurrent agents on one repo collide at commit
 and push, and every recovery from that collision (reset, revert, force-push)
 destroys more than the collision did. So the guard stops the collision instead
-of the recovery, and every deny names the ordered path through — ``push``, which
-the daemon runs one at a time.
+of the recovery, and every deny names the ordered path through — a lane that
+lands via ``push``, which the daemon runs one at a time.
 
 Deny only ever fires against a live peer or a claim held by *someone else*;
 everything else falls through to Claude Code's normal permission flow. The reason
@@ -43,6 +53,7 @@ import os
 import re
 import shlex
 import sqlite3
+import subprocess
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -436,6 +447,78 @@ def _deny_destructive_git(conn: sqlite3.Connection, me: sqlite3.Row, command: st
     )
 
 
+def _commits(argv: list[str]) -> bool:
+    """True if this git argv *writes* a commit (``git commit`` that is not a
+    ``--dry-run`` or a help invocation). ``--amend`` still rewrites the branch
+    tip, so it counts. Classified on tokens, like its siblings: ``git commit``
+    inside a quoted message (``git log --grep "git commit"``) is never a git
+    commit argv, so it never matches.
+    """
+    sub, args = _git_subcommand(argv)
+    if sub != "commit":
+        return False
+    return not any(a in ("--dry-run", "-h", "--help") for a in args)
+
+
+def _current_branch(root: str) -> str | None:
+    """The branch checked out at ``root``, or None on a detached HEAD, a
+    non-repo, or any git error. Best-effort and never raises — a guard that
+    cannot read the branch must fall through, not block every commit.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", root, "symbolic-ref", "--quiet", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    name = proc.stdout.strip()
+    return name or None
+
+
+def _deny_commit_on_trunk(me: sqlite3.Row, command: str) -> str | None:
+    """Deny an agent committing directly on a protected trunk branch
+    (``main``/``master``, or ``[trunk].names``).
+
+    The daemon advances ``origin/main`` from lanes and deliberately never
+    force-updates a checked-out branch, so it can only *fast-forward* a local
+    trunk — which is impossible the moment that trunk carries its own commits.
+    A commit made straight on local ``main`` therefore diverges it from origin
+    and drifts one commit further per push to origin, until ff can no longer
+    reconcile it and the only way back is a history rewrite. Stopping the commit
+    is the one cheap point in that sequence; every later fix (reset, rebase,
+    force-push) destroys more than the divergence did.
+
+    The escape hatch is the intended workflow: branch, commit on the lane, push
+    it to origin from there. A repo that commits on its trunk on purpose opts out
+    with ``[trunk].mode = "off"``.
+    """
+    if not any(_commits(argv) for argv in _argvs(command)):
+        return None
+    if not me["cwd"] or config.trunk_mode(me["cwd"], me["project_name"]) == "off":
+        return None
+    root = tree_root(me["cwd"])
+    if not root:
+        return None
+    branch = _current_branch(root)
+    if branch is None or branch not in config.trunk_names(me["cwd"], me["project_name"]):
+        return None
+    return (
+        f"cabildo: committing directly on `{branch}` diverges your local trunk from "
+        f"origin. The daemon advances origin/{branch} from lanes and can only "
+        f"fast-forward a local trunk, never rewrite one that carries its own "
+        f"commits — so this commit strands {branch} and it drifts further behind "
+        f"every push to origin until ff can no longer reconcile it. Work on a lane "
+        f"and push it to origin, leaving {branch} a ref the daemon keeps current:\n"
+        f"    git switch -c <lane>   # or an isolated tree: git worktree add ../wt-<lane> -b <lane>\n"
+        f"    …commit on <lane>, then queue the push to origin:\n"
+        f'    request(action="push", params={{"cwd": "{me["cwd"]}", "target": "{branch}"}})\n'
+        f'Opt out per-repo with `[trunk].mode = "off"` in .cabildo/config.toml.'
+    )
+
+
 def _shell_tokens(command: str) -> list[str]:
     """A shell command tokenised with redirects/pipes as their own tokens and
     quotes respected, so a `>` inside ``"print(1 > 0)"`` is not read as a
@@ -604,6 +687,7 @@ def deny_reason(
             or _deny_blanket_stage(conn, me, command)
             or _deny_branch_switch(conn, me, command)
             or _deny_destructive_git(conn, me, command)
+            or _deny_commit_on_trunk(me, command)
             or _deny_shell_write(conn, me, command)
         )
     key = _FILE_TOOLS.get(tool_name)
