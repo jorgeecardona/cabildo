@@ -345,6 +345,31 @@ def test_commit_on_a_lane_is_allowed(conn, tmp_path):
     assert _bash(conn, "a", "git commit --amend --no-edit") is None
 
 
+def test_commit_into_a_lane_from_a_main_rooted_session_is_allowed(conn, tmp_path):
+    # The bug: the guard judged by where the SESSION was launched (the main
+    # checkout, on main), so a commit targeting a lane worktree was blocked. It
+    # must judge by where the commit actually runs (its -C / a lone cd).
+    main = _git_repo(tmp_path / "main", branch="main")
+    lane = _git_repo(tmp_path / "lane", branch="feature-x")
+    store.register_session(
+        conn, "a", cwd=str(main), project=str(main), project_name="alpha", claude_pid=1000
+    )
+    assert _bash(conn, "a", f"git -C {lane} commit -m x") is None  # -C targets the lane
+    assert _bash(conn, "a", f"cd {lane} && git commit -m x") is None  # cd targets the lane
+    assert _bash(conn, "a", "git commit -m x") is not None  # plain commit runs in main → denied
+
+
+def test_commit_dash_c_onto_another_main_checkout_is_denied(conn, tmp_path):
+    # -C must not be a loophole: targeting another checkout that is itself on main
+    # is still committing on trunk.
+    main = _git_repo(tmp_path / "main", branch="main")
+    other = _git_repo(tmp_path / "other", branch="main")
+    store.register_session(
+        conn, "a", cwd=str(main), project=str(main), project_name="alpha", claude_pid=1000
+    )
+    assert _bash(conn, "a", f"git -C {other} commit -m x") is not None
+
+
 def test_dry_run_commit_on_main_is_allowed(conn, tmp_path):
     # --dry-run writes nothing, so it does not strand the branch.
     repo = _git_repo(tmp_path / "repo", branch="main")

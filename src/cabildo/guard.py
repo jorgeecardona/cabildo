@@ -478,6 +478,44 @@ def _current_branch(root: str) -> str | None:
     return name or None
 
 
+def _dash_c_dir(argv: list[str]) -> str | None:
+    """The directory a ``git -C <path>`` argv operates in, or None. Git applies
+    multiple ``-C`` cumulatively; the common case is one and the last wins.
+    """
+    path: str | None = None
+    i = 1
+    while i < len(argv) - 1:
+        if argv[i] == "-C":
+            path = argv[i + 1]
+            i += 2
+            continue
+        i += 1
+    return path
+
+
+def _lone_cd_target(command: str) -> str | None:
+    """If the command chain contains exactly one ``cd <path>``, that path; else
+    None. A single ``cd`` sets the cwd for the git that follows; two are
+    ambiguous, so we fall back to the session cwd rather than guess.
+    """
+    cds = [argv[1] for argv in _argvs(command) if len(argv) >= 2 and argv[0] == "cd"]
+    return cds[0] if len(cds) == 1 else None
+
+
+def _commit_dir(argv: list[str], command: str, default: str) -> str:
+    """Where a ``git commit`` actually runs: its own ``-C <path>``, else a lone
+    ``cd <path>`` in the chain, else the session's cwd. A relative path resolves
+    against the session cwd. This is the fix for the guard judging a commit by
+    where the SESSION was launched (the main checkout, on ``main``) instead of
+    where the command targets (a lane worktree) — which blocked legitimate
+    commits on a lane from a session rooted in main.
+    """
+    target = _dash_c_dir(argv) or _lone_cd_target(command) or default
+    if not os.path.isabs(target):
+        target = os.path.normpath(os.path.join(default, target))
+    return target
+
+
 def _deny_commit_on_trunk(me: sqlite3.Row, command: str) -> str | None:
     """Deny an agent committing directly on a protected trunk branch
     (``main``/``master``, or ``[trunk].names``).
@@ -495,28 +533,35 @@ def _deny_commit_on_trunk(me: sqlite3.Row, command: str) -> str | None:
     it to origin from there. A repo that commits on its trunk on purpose opts out
     with ``[trunk].mode = "off"``.
     """
-    if not any(_commits(argv) for argv in _argvs(command)):
-        return None
     if not me["cwd"] or config.trunk_mode(me["cwd"], me["project_name"]) == "off":
         return None
-    root = tree_root(me["cwd"])
-    if not root:
-        return None
-    branch = _current_branch(root)
-    if branch is None or branch not in config.trunk_names(me["cwd"], me["project_name"]):
-        return None
-    return (
-        f"cabildo: committing directly on `{branch}` diverges your local trunk from "
-        f"origin. The daemon advances origin/{branch} from lanes and can only "
-        f"fast-forward a local trunk, never rewrite one that carries its own "
-        f"commits — so this commit strands {branch} and it drifts further behind "
-        f"every push to origin until ff can no longer reconcile it. Work on a lane "
-        f"and push it to origin, leaving {branch} a ref the daemon keeps current:\n"
-        f"    git switch -c <lane>   # or an isolated tree: git worktree add ../wt-<lane> -b <lane>\n"
-        f"    …commit on <lane>, then queue the push to origin:\n"
-        f'    request(action="push", params={{"cwd": "{me["cwd"]}", "target": "{branch}"}})\n'
-        f'Opt out per-repo with `[trunk].mode = "off"` in .cabildo/config.toml.'
-    )
+    trunk = config.trunk_names(me["cwd"], me["project_name"])
+    # Judge each commit by the branch of the directory it ACTUALLY targets (its
+    # -C/cd, else the session cwd) — not by where the session was launched. A
+    # commit on a lane worktree is fine even from a session rooted in main.
+    for argv in _argvs(command):
+        if not _commits(argv):
+            continue
+        root = tree_root(_commit_dir(argv, command, me["cwd"]))
+        if not root:
+            continue
+        branch = _current_branch(root)
+        if branch is None or branch not in trunk:
+            continue
+        return (
+            f"cabildo: committing directly on `{branch}` in {root} diverges your "
+            f"local trunk from origin. The daemon advances origin/{branch} from "
+            f"lanes and can only fast-forward a local trunk, never rewrite one that "
+            f"carries its own commits — so this commit strands {branch} and it "
+            f"drifts further behind every push to origin until ff can no longer "
+            f"reconcile it. Work on a lane and push it to origin, leaving {branch} a "
+            f"ref the daemon keeps current:\n"
+            f"    git switch -c <lane>   # or an isolated tree: git worktree add ../wt-<lane> -b <lane>\n"
+            f"    …commit on <lane>, then queue the push to origin:\n"
+            f'    request(action="push", params={{"cwd": "{root}", "target": "{branch}"}})\n'
+            f'Opt out per-repo with `[trunk].mode = "off"` in .cabildo/config.toml.'
+        )
+    return None
 
 
 def _shell_tokens(command: str) -> list[str]:
