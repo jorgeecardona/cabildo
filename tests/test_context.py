@@ -37,6 +37,36 @@ def test_git_project_falls_back_to_cwd_without_repo(tmp_path):
     assert name == "loose"
 
 
+def test_repo_config_name_pins_project(tmp_path, monkeypatch):
+    # <root>/.cabildo/config.toml [project].name overrides the basename guess, so
+    # two repos sharing a folder name stop colliding on one channel (issue #26).
+    monkeypatch.setenv("CABILDO_HOME", str(tmp_path / "h"))
+    monkeypatch.delenv("CABILDO_PROJECT", raising=False)
+    repo = tmp_path / "cabildo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".cabildo").mkdir()
+    (repo / ".cabildo" / "config.toml").write_text('[project]\nname = "cabildo-oss"\n')
+    root, name = git_project(str(repo / "src" if (repo / "src").exists() else repo))
+    assert root == str(repo)
+    assert name == "cabildo-oss"
+
+
+def test_registry_pin_and_env_override_the_repo_config(tmp_path, monkeypatch):
+    from cabildo import cloud
+
+    monkeypatch.setenv("CABILDO_HOME", str(tmp_path / "h"))
+    monkeypatch.delenv("CABILDO_PROJECT", raising=False)
+    repo = tmp_path / "cabildo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".cabildo").mkdir()
+    (repo / ".cabildo" / "config.toml").write_text('[project]\nname = "from-toml"\n')
+    assert git_project(str(repo))[1] == "from-toml"
+    cloud.register_root("from-registry", str(repo))  # registry pin wins over toml
+    assert git_project(str(repo))[1] == "from-registry"
+    monkeypatch.setenv("CABILDO_PROJECT", "FromEnv")  # env wins over everything
+    assert git_project(str(repo))[1] == "fromenv"
+
+
 def _make_worktree(tmp_path, *, commondir=True):
     """Build a repo + one linked worktree. Returns (repo, worktree_dir)."""
     repo = tmp_path / "myrepo"

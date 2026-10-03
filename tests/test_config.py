@@ -39,6 +39,28 @@ def test_missing_files_read_as_empty(homes):
     assert config.watch_topic(repo, "proj") is None
 
 
+def test_repo_project_name_pins_identity(homes):
+    _, repo, write_repo = homes
+    assert config.repo_project_name(repo) is None  # no file -> no pin
+    write_repo('[project]\nname = "Cabildo-OSS"\n')
+    assert config.repo_project_name(repo) == "cabildo-oss"  # lowered
+
+
+def test_repo_project_name_ignores_a_scoping_table(homes):
+    # `[project.foo]` is a scoping table, not a `name` pin -> no identity claimed.
+    _, repo, write_repo = homes
+    write_repo("[project.foo]\nisolated = true\n")
+    assert config.repo_project_name(repo) is None
+
+
+def test_project_isolated_reads_the_scoped_flag(homes):
+    write_global, repo, _ = homes
+    assert config.project_isolated(repo, "self") is False  # default
+    write_global("[project.self]\nisolated = true\n")
+    assert config.project_isolated(repo, "self") is True
+    assert config.project_isolated(repo, "crm") is False  # scoped to `self` only
+
+
 def test_repo_overrides_global(homes):
     write_global, repo, write_repo = homes
     write_global('[push]\nmode = "auto"\n')

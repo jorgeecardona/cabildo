@@ -26,6 +26,8 @@ rather than taking down the guard or the CLI that reads it.
 Recognised tables (``push``, ``destructive`` and ``watch`` are wired to behaviour
 today; the rest are read generically and wired one call site at a time):
 
+    [project] name = "..."                   # repo-local identity pin (git_project)
+    [project.<name>] isolated = true         # global: catch-all gets no channel
     [push]        mode = "auto" | "manual"     # guard._deny_push
     [destructive] mode = "guard" | "off"        # guard._deny_destructive_git
     [trunk]   mode = "guard" | "off", names   # guard._deny_commit_on_trunk
@@ -112,6 +114,39 @@ def load(cwd: str | None = None, project_name: str | None = None) -> dict[str, A
             _deep_merge(merged, section)
     _deep_merge(merged, _read(Path(tree_root(cwd)) / ".cabildo" / "config.toml"))  # highest
     return merged
+
+
+def repo_project_name(tree_root: str | None) -> str | None:
+    """``[project].name`` from the repo-local ``.cabildo/config.toml`` at
+    ``tree_root``, lowered, or None.
+
+    This is the repo's committed statement of its own identity, pinning the
+    project name against the directory-basename guess (issue #26, leak #1: two
+    repos sharing a folder name must not share a channel). It is read WITHOUT a
+    git lookup -- a plain file read of one known path -- so ``git_project`` can
+    consult it without recursing back through ``load()``, which itself calls
+    ``git_project``. A missing or malformed file reads as "no pin".
+    """
+    if not tree_root:
+        return None
+    proj = _read(Path(tree_root) / ".cabildo" / "config.toml").get("project")
+    if isinstance(proj, dict):
+        name = proj.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip().lower()
+    return None
+
+
+def project_isolated(cwd: str | None = None, project_name: str | None = None) -> bool:
+    """``[project.<name>].isolated`` for this project: default False.
+
+    True marks a catch-all name (``self``, ``tmp``, a home dir) that must NOT get
+    a shared ``proj:<name>`` channel -- agents there are isolated, DM-only (issue
+    #26, leak #2: parent directories pooling unrelated agents into one room). Set
+    in the machine-wide ``~/.cabildo/config.toml`` under ``[project.<name>]``.
+    """
+    val = get(cwd, "isolated", project_name=project_name, default=False)
+    return val is True or str(val).strip().lower() in ("1", "true", "yes", "on")
 
 
 def get(

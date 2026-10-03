@@ -367,6 +367,20 @@ def git_project(cwd: str | None = None) -> tuple[str, str]:
         start = origin
     root, name = _git_project(start)
 
+    # The repo's own committed statement of its name (<root>/.cabildo/config.toml,
+    # [project].name) overrides the directory-basename guess, so two repos sharing
+    # a folder name stop colliding on one channel (issue #26, leak #1). A registry
+    # pin and CABILDO_PROJECT still override this, matching their precedence over
+    # the guess. Read by path, never through config.load() (which calls us back).
+    try:
+        from . import config
+
+        toml_name = config.repo_project_name(root)
+    except Exception:  # a malformed repo config must not break sessions
+        toml_name = None
+    if toml_name:
+        name = toml_name
+
     try:
         from . import cloud
 

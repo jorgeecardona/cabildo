@@ -21,6 +21,20 @@
 
 # --- wired today -----------------------------------------------------------
 
+# [project] pins this repo's identity on the bus. Two uses, two files:
+#
+#   In a REPO-local file: `name` overrides the directory-basename guess, so two
+#   checkouts that happen to share a folder name (e.g. an `oss/cabildo` and a
+#   `self/projects/cabildo`) stop colliding on one proj:<name> channel (#26).
+#     [project]
+#     name = "cabildo-oss"
+#
+#   In the GLOBAL file, scoped per name: `isolated` marks a catch-all name (a
+#   parent dir like `self`, `tmp`, a home dir) that must NOT get a shared channel
+#   — agents resolving to it are DM-only, never pooled into one room (#26).
+#     [project.self]
+#     isolated = true
+
 [push]
 # "auto"   (default) keep the push guard: while a peer is live on the project a
 #          bare `git push` is denied and routed to `request push`.

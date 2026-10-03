@@ -36,6 +36,25 @@ def test_register_creates_default_subscriptions(conn):
     assert store.DEFAULT_TOPIC in {t["name"] for t in store.list_topics(conn)}
 
 
+def test_isolated_name_gets_no_shared_channel(home, conn):
+    # A catch-all name marked isolated in the machine-wide config gets NO proj:
+    # channel — agents there are DM-only, not pooled into one room (issue #26).
+    (home / "config.toml").write_text("[project.self]\nisolated = true\n")
+    make_session(conn, "s1", project_name="self")
+    assert store.project_topic("self") not in store.subscriptions_of(conn, "s1")
+
+
+def test_project_change_drops_the_old_channel(conn):
+    # A reused session that moves to a new project must stop delivering into its
+    # former proj: channel (issue #26, leak #3).
+    make_session(conn, "s1", project_name="alpha")
+    assert store.project_topic("alpha") in store.subscriptions_of(conn, "s1")
+    store.register_session(conn, "s1", project_name="beta")
+    subs = set(store.subscriptions_of(conn, "s1"))
+    assert store.project_topic("beta") in subs
+    assert store.project_topic("alpha") not in subs
+
+
 def test_general_is_opt_in(conn):
     make_session(conn, "s1", project_name="alpha")
     store.subscribe(conn, "s1", store.DEFAULT_TOPIC)

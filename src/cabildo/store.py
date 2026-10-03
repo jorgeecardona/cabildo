@@ -498,8 +498,9 @@ def register_session(
     if owner_pid is None:
         owner_pid = claude_pid
     row = conn.execute(
-        "SELECT session_id FROM sessions WHERE session_id=?", (session_id,)
+        "SELECT session_id, project_name FROM sessions WHERE session_id=?", (session_id,)
     ).fetchone()
+    old_pname = (row["project_name"] if row else None) or None
     if row is None:
         conn.execute(
             "INSERT INTO sessions(session_id, cwd, project, project_name, claude_pid, "
@@ -541,10 +542,28 @@ def register_session(
     # agent must never receive paas chatter just by starting up. Isolation by
     # default; broadcasting on purpose.
     ensure_topic(conn, DEFAULT_TOPIC)  # keep the room available to join
-    if project_name:
-        pt = project_topic(project_name)
-        ensure_topic(conn, pt, project=project, created_by=session_id)
-        subscribe(conn, session_id, pt)
+    # The effective name after this upsert: a caller that didn't pass one leaves
+    # the stored value in place (COALESCE above), so fall back to the old name.
+    new_pname = project_name or old_pname
+    # Reconcile a project change: a reused session that moved to a new project
+    # must stop delivering into its former proj: channel (issue #26, leak #3).
+    if old_pname and new_pname and old_pname.strip().lower() != new_pname.strip().lower():
+        unsubscribe(conn, session_id, project_topic(old_pname))
+    if new_pname:
+        # A catch-all name (self/tmp/a home dir) marked `[project.<name>].isolated`
+        # gets NO shared room — agents there are DM-only (issue #26, leak #2).
+        try:
+            from . import config
+
+            isolated = config.project_isolated(cwd, new_pname)
+        except Exception:  # config is advisory; its failure must not block a session
+            isolated = False
+        pt = project_topic(new_pname)
+        if isolated:
+            unsubscribe(conn, session_id, pt)
+        else:
+            ensure_topic(conn, pt, project=project, created_by=session_id)
+            subscribe(conn, session_id, pt)
     conn.commit()
 
 
