@@ -326,7 +326,7 @@ def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         rc, out = run([gate], root, timeout=GATE_TIMEOUT)
         steps.append({"step": "gate", "rc": rc, "out": out[-8000:]})
         if rc != 0:
-            return _fail(f"gate failed (rc={rc}) — not pushing:\n{out[-2000:]}", steps)
+            return _fail(_gate_failure_reason(rc, out), steps)
         gate_state = "passed"
     else:
         # Loud, and recorded in the result, so "no gate" can never look like
@@ -526,6 +526,42 @@ def _local_sync(
 
 def _fail(reason: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
     return {"ok": False, "pushed": False, "reason": reason, "steps": steps}
+
+
+# moon prints an upgrade banner into gate output; it is noise that, because the
+# inbox previews the DM, truncates the one line an agent needs — which task
+# failed and why (issue #22).
+_BANNER_RE = re.compile(
+    r"(^\s*▮)|(There's a new version of moon)|(moonrepo\.dev/blog)|"
+    r"(Run proto install moon)|(OpenTelemetry, shared worktree cache)",
+)
+# Lines that name the actual failure, to lead the DM with.
+_FAILURE_RE = re.compile(
+    r"(?i)(^\s*[×✘]\s)|(\bFAILED?\b)|(\bERR_[A-Z_]+)|(error TS\d+)|"
+    r"(\bnot found\b)|(Error:)|(\bexit code\b)|(Task .* failed)",
+)
+
+
+def _clean_gate_output(out: str) -> str:
+    """Drop the moon upgrade banner from gate output so it cannot crowd out or
+    truncate the real error (issue #22).
+    """
+    return "\n".join(ln for ln in out.splitlines() if not _BANNER_RE.search(ln))
+
+
+def _gate_failure_reason(rc: int, out: str) -> str:
+    """Compose the land-failure reason so the failing task leads, the moon banner
+    is gone, and the full (cleaned) tail still rides along for `get_message`.
+    """
+    cleaned = _clean_gate_output(out)
+    lead = [ln.strip() for ln in cleaned.splitlines() if _FAILURE_RE.search(ln)]
+    # De-dup, keep order, cap so the preview stays about the failure.
+    seen: set[str] = set()
+    lead = [x for x in lead if x and not (x in seen or seen.add(x))][:4]
+    head = f"gate failed (rc={rc}) — not pushing."
+    if lead:
+        head += "\n" + "\n".join(lead)
+    return f"{head}\n\n{cleaned[-2000:]}"
 
 
 # --------------------------------------------------------------------------- #

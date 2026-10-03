@@ -651,22 +651,47 @@ def read(
     message_ids: list[int] | None = None,
     topic: str | None = None,
     all: bool = False,
+    ids: list[int] | None = None,
+    id: int | None = None,
 ) -> dict[str, Any]:
     """Explicitly mark messages as read (they are never auto-read). Pass
     specific `message_ids`, or a `topic` to clear a channel, or all=True to
     clear your whole inbox. Returns how many were newly marked.
+
+    `ids` (and `id` for a single message) are accepted as aliases for
+    `message_ids`, since `inbox` returns each item's `id` — a mismatched name
+    used to silently no-op (issue #23).
     """
+    # Fold the aliases into one id list, de-duplicated and order-stable.
+    merged: list[int] = []
+    for src in (message_ids, ids):
+        if src:
+            merged.extend(src)
+    if id is not None:
+        merged.append(id)
+    seen: set[int] = set()
+    id_list = [m for m in merged if not (m in seen or seen.add(m))] or None
+
     with store.connect() as conn:
         sid = _me(conn)
         n = store.mark_read(
             conn,
             sid,
-            message_ids=message_ids,
+            message_ids=id_list,
             topic=topic.lstrip("#") if topic else None,
             all_unread=all,
         )
         remaining = store.unread_summary(conn, sid)["count"]
-        return {"ok": True, "marked_read": n, "unread_remaining": remaining}
+        result: dict[str, Any] = {"ok": True, "marked_read": n, "unread_remaining": remaining}
+        # A zero is otherwise indistinguishable from success; say why (issue #23).
+        if n == 0:
+            if not (id_list or topic or all):
+                result["note"] = (
+                    "nothing to do — pass message_ids (or ids/id), a topic, or all=True"
+                )
+            else:
+                result["note"] = "no match — those ids were already read or are not in your inbox"
+        return result
 
 
 @mcp.tool()

@@ -301,3 +301,36 @@ def test_full_still_means_full(two_agents):
     two_agents(222)
     item = srv.inbox(full=True)["messages"][0]
     assert len(item["body"]) == 5000
+
+
+# --------------------------------------------------------------------------- #
+# read() accepts the natural id aliases and no longer silently no-ops (issue #23)
+# --------------------------------------------------------------------------- #
+def test_read_accepts_ids_alias(two_agents):
+    two_agents(111)
+    mid = srv.send("mark me", to="bob")["message_id"]
+    two_agents(222)
+    res = srv.read(ids=[mid])  # the wrong-but-obvious name used to no-op
+    assert res["marked_read"] == 1
+    assert res["unread_remaining"] == 0
+
+
+def test_read_accepts_singular_id_alias(two_agents):
+    two_agents(111)
+    mid = srv.send("mark me too", to="bob")["message_id"]
+    two_agents(222)
+    assert srv.read(id=mid)["marked_read"] == 1
+
+
+def test_read_zero_match_explains_itself(two_agents):
+    two_agents(222)
+    res = srv.read(ids=[999999])  # not in bob's inbox
+    assert res["marked_read"] == 0
+    assert "note" in res and "no match" in res["note"]
+
+
+def test_read_nothing_specified_says_so(two_agents):
+    two_agents(222)
+    res = srv.read()
+    assert res["marked_read"] == 0
+    assert "note" in res and "nothing to do" in res["note"]
