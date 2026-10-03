@@ -28,6 +28,7 @@ today; the rest are read generically and wired one call site at a time):
 
     [project] name = "..."                   # repo-local identity pin (git_project)
     [project.<name>] isolated = true         # global: catch-all gets no channel
+    [grants]  approver = "human" | "project"  # who decides cross-project requests
     [push]        mode = "auto" | "manual"     # guard._deny_push
     [destructive] mode = "guard" | "off"        # guard._deny_destructive_git
     [trunk]   mode = "guard" | "off", names   # guard._deny_commit_on_trunk

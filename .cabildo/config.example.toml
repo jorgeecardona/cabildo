@@ -54,6 +54,15 @@ local_sync = "ff-only"
 #             never a main checkout, never a lane with unpushed work.
 cleanup_lanes = "off"
 
+[grants]
+# Who decides a cross-project access request aimed at THIS project (issue #26,
+# `request_access` -> `grant`/`deny`):
+#   "human"   (default) the request is put to the human; nothing connects without
+#             them.
+#   "project" any active agent in this project may decide, for autonomous
+#             cross-project coordination.
+approver = "human"
+
 [watch]
 # Default channel for `cabildo watch` when you pass no -t:
 #   "project"    this repo's own channel (proj:<name>)
