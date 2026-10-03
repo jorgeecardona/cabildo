@@ -123,7 +123,11 @@ CREATE TABLE IF NOT EXISTS topics (
     name        TEXT PRIMARY KEY,
     project     TEXT,                 -- non-null for auto per-project channels
     created_by  TEXT,
-    created_at  REAL NOT NULL
+    created_at  REAL NOT NULL,
+    -- 1 => a private room: a listen/send grant is required to join or post.
+    -- 0 (default) => open-join, today's #general model. A proj:<name> channel
+    -- stays gated by project identity, not by this flag.
+    gated       INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS subscriptions (
@@ -352,6 +356,39 @@ CREATE TABLE IF NOT EXISTS decisions (
     tags          TEXT                               -- freeform, for filtering
 );
 CREATE INDEX IF NOT EXISTS idx_decisions_project ON decisions(project_name, created_at);
+
+-- Cross-project consent (issue #26). A grant is one DIRECTIONAL, SCOPED row:
+-- project `grantee` may, with `capability`, reach `resource`. It is the unit of
+-- deliberate interaction on an otherwise isolated bus — discovery (the
+-- directory) never implies delivery, a grant does. A `cabildo project --link`
+-- is the coarse mutual case (kept in cloud.json); these rows add the fine,
+-- directional, per-resource cases a link cannot express, plus the
+-- request->decide lifecycle.
+--
+--   grantee       : project name that receives access
+--   resource_kind : 'project' | 'topic' | 'agent'
+--   resource      : a project name, a topic name, or a session id
+--   capability    : 'listen' (subscribe/read) | 'send' (post/DM)
+--   status        : 'requested' | 'granted' | 'denied' | 'revoked'
+--
+-- One row per (grantee, resource_kind, resource, capability): a re-request or a
+-- re-grant updates the same row rather than piling up history.
+CREATE TABLE IF NOT EXISTS grants (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    grantee       TEXT NOT NULL,
+    resource_kind TEXT NOT NULL,
+    resource      TEXT NOT NULL,
+    capability    TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'requested',
+    requested_by  TEXT,                    -- session id that asked
+    decided_by    TEXT,                    -- session id / human that decided
+    note          TEXT,
+    created_at    REAL NOT NULL,
+    decided_at    REAL,
+    UNIQUE (grantee, resource_kind, resource, capability)
+);
+CREATE INDEX IF NOT EXISTS idx_grants_grantee ON grants(grantee, status);
+CREATE INDEX IF NOT EXISTS idx_grants_resource ON grants(resource_kind, resource, status);
 """
 
 
@@ -436,6 +473,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if "facts" in tables and "decisions" not in tables:
         conn.execute("ALTER TABLE facts RENAME TO decisions")
+
+    # topics.gated: new column on an existing table (issue #26). Default 0 keeps
+    # every existing topic open-join; the grants layer gates only what is flagged.
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(topics)")}
+    if "gated" not in have:
+        conn.execute("ALTER TABLE topics ADD COLUMN gated INTEGER NOT NULL DEFAULT 0")
 
     conn.commit()
 
@@ -1227,12 +1270,170 @@ def _msg_dict(r: sqlite3.Row) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 def list_topics(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = conn.execute(
-        "SELECT t.name, t.project, "
+        "SELECT t.name, t.project, t.gated, "
         "(SELECT COUNT(*) FROM subscriptions s WHERE s.topic=t.name) AS subscribers, "
         "(SELECT COUNT(*) FROM messages m WHERE m.topic=t.name) AS messages "
         "FROM topics t ORDER BY t.name"
     ).fetchall()
-    return [dict(r) for r in rows]
+    out = [dict(r) for r in rows]
+    for r in out:
+        r["gated"] = bool(r["gated"])
+    return out
+
+
+def set_topic_gated(conn: sqlite3.Connection, topic: str, gated: bool = True) -> None:
+    """Mark a topic private (gated=1, a listen/send grant required to join/post)
+    or open (gated=0). Ensures the topic exists first.
+    """
+    ensure_topic(conn, topic)
+    conn.execute("UPDATE topics SET gated=? WHERE name=?", (1 if gated else 0, topic))
+    conn.commit()
+
+
+def topic_is_gated(conn: sqlite3.Connection, topic: str) -> bool:
+    row = conn.execute("SELECT gated FROM topics WHERE name=?", (topic,)).fetchone()
+    return bool(row["gated"]) if row else False
+
+
+# --------------------------------------------------------------------------- #
+# Grants (cross-project consent) + directory (discovery) — issue #26
+# --------------------------------------------------------------------------- #
+GRANT_KINDS = ("project", "topic", "agent")
+GRANT_CAPS = ("listen", "send")
+GRANT_STATUSES = ("requested", "granted", "denied", "revoked")
+
+
+def _norm_grant_resource(kind: str, resource: str) -> str:
+    """Project and topic names are case-insensitive; a session id (agent) is
+    opaque and kept verbatim.
+    """
+    r = (resource or "").strip()
+    return r.lower() if kind in ("project", "topic") else r
+
+
+def upsert_grant(
+    conn: sqlite3.Connection,
+    *,
+    grantee: str,
+    resource_kind: str,
+    resource: str,
+    capability: str,
+    status: str,
+    by: str | None = None,
+    requested_by: str | None = None,
+    note: str | None = None,
+) -> int:
+    """Insert or update the single grant row for (grantee, kind, resource,
+    capability) and return its id. `status='requested'` stamps `requested_by`;
+    any decided status stamps `decided_by` (from `by`) and `decided_at`.
+    """
+    grantee = (grantee or "").strip().lower()
+    resource = _norm_grant_resource(resource_kind, resource)
+    now = _now()
+    decided_at = None if status == "requested" else now
+    conn.execute(
+        "INSERT INTO grants(grantee,resource_kind,resource,capability,status,"
+        "requested_by,decided_by,note,created_at,decided_at) VALUES (?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(grantee,resource_kind,resource,capability) DO UPDATE SET "
+        "status=excluded.status, "
+        "requested_by=COALESCE(excluded.requested_by, grants.requested_by), "
+        "decided_by=COALESCE(excluded.decided_by, grants.decided_by), "
+        "note=COALESCE(excluded.note, grants.note), "
+        "decided_at=excluded.decided_at",
+        (grantee, resource_kind, resource, capability, status, requested_by, by, note, now, decided_at),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT id FROM grants WHERE grantee=? AND resource_kind=? AND resource=? AND capability=?",
+        (grantee, resource_kind, resource, capability),
+    ).fetchone()
+    return int(row["id"])
+
+
+def get_grant(conn: sqlite3.Connection, grant_id: int) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM grants WHERE id=?", (grant_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def decide_grant(
+    conn: sqlite3.Connection, grant_id: int, *, status: str, by: str | None
+) -> dict[str, Any] | None:
+    """Move a grant to a decided status (granted|denied|revoked). Returns the
+    updated row, or None if no such grant.
+    """
+    if conn.execute("SELECT 1 FROM grants WHERE id=?", (grant_id,)).fetchone() is None:
+        return None
+    conn.execute(
+        "UPDATE grants SET status=?, decided_by=?, decided_at=? WHERE id=?",
+        (status, by, _now(), grant_id),
+    )
+    conn.commit()
+    return get_grant(conn, grant_id)
+
+
+def has_grant(
+    conn: sqlite3.Connection, grantee: str, resource_kind: str, resource: str, capability: str
+) -> bool:
+    """True iff a GRANTED row lets `grantee` reach `resource` with `capability`."""
+    grantee = (grantee or "").strip().lower()
+    resource = _norm_grant_resource(resource_kind, resource)
+    row = conn.execute(
+        "SELECT 1 FROM grants WHERE grantee=? AND resource_kind=? AND resource=? "
+        "AND capability=? AND status='granted'",
+        (grantee, resource_kind, resource, capability),
+    ).fetchone()
+    return row is not None
+
+
+def list_grants(
+    conn: sqlite3.Connection,
+    *,
+    grantee: str | None = None,
+    resource_kind: str | None = None,
+    resource: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Grant rows, newest first, narrowed by any of grantee/kind/resource/status."""
+    where: list[str] = []
+    args: list[Any] = []
+    if grantee is not None:
+        where.append("grantee=?")
+        args.append(grantee.strip().lower())
+    if resource_kind is not None:
+        where.append("resource_kind=?")
+        args.append(resource_kind)
+    if resource is not None and resource_kind is not None:
+        where.append("resource=?")
+        args.append(_norm_grant_resource(resource_kind, resource))
+    if status is not None:
+        where.append("status=?")
+        args.append(status)
+    sql = "SELECT * FROM grants"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY id DESC LIMIT ?"
+    args.append(max(1, limit))
+    return [dict(r) for r in conn.execute(sql, args).fetchall()]
+
+
+def directory(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Read-only roster of the projects active on the bus: each project's name,
+    its active-agent count, and the roles present. No message content and no
+    channel contents — this is discovery, not delivery, so any agent may read it
+    without a grant.
+    """
+    rows = conn.execute(
+        "SELECT project_name AS project, COUNT(*) AS agents, "
+        "GROUP_CONCAT(DISTINCT role) AS roles "
+        "FROM sessions WHERE status='active' AND COALESCE(project_name,'')<>'' "
+        "GROUP BY lower(project_name) ORDER BY agents DESC, project_name"
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        roles = sorted({x for x in (r["roles"] or "").split(",") if x})
+        out.append({"project": r["project"], "agents": r["agents"], "roles": roles})
+    return out
 
 
 # --------------------------------------------------------------------------- #
