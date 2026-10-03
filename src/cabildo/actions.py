@@ -449,6 +449,11 @@ def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     #    can't fast-forward is a warning, not a failure.
     local_sync = _local_sync(root, remote, target, branch, config.push_local_sync(cwd), steps, ctx)
 
+    # 8. Remove the throwaway land lane now that it is fully on the remote, so
+    #    lanes do not accumulate (issue #24). Opt-in and strictly guarded; never
+    #    fails the push (it already succeeded).
+    lane_cleanup = _remove_landed_lane(root, branch, config.push_cleanup_lanes(cwd), steps, ctx)
+
     return {
         "ok": True,
         "pushed": True,
@@ -458,6 +463,7 @@ def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         "gate": gate_state,
         "verified": f"{remote}/{target} contains {sha[:12]} per ls-remote ({detail})",
         "local_sync": local_sync,
+        "lane_cleanup": lane_cleanup,
         "steps": steps,
     }
 
@@ -562,6 +568,49 @@ def _gate_failure_reason(rc: int, out: str) -> str:
     if lead:
         head += "\n" + "\n".join(lead)
     return f"{head}\n\n{cleaned[-2000:]}"
+
+
+def _remove_landed_lane(
+    root: str,
+    branch: str,
+    mode: str,
+    steps: list[dict[str, Any]],
+    ctx: Ctx,
+) -> dict[str, Any]:
+    """After a verified-successful push, remove the throwaway land lane so lanes
+    stop accumulating (issue #24). Conservative by construction: only a LINKED
+    worktree on a ``land/*`` branch with no uncommitted tracked changes, and only
+    when ``[push].cleanup_lanes = "landed"``. Never a main checkout, never a lane
+    with unpushed work. Removal runs from the main repo; a landed branch is then
+    deleted with ``git branch -d`` (which refuses if somehow not merged).
+    """
+
+    def record(removed: bool, reason: str, detail: str) -> dict[str, Any]:
+        steps.append({"step": "lane_cleanup", "rc": 0, "out": f"{reason}: {detail}"})
+        return {"removed": removed, "reason": reason, "detail": detail}
+
+    if mode != "landed":
+        return record(False, "off", "cleanup disabled ([push].cleanup_lanes)")
+    # A main checkout has a `.git` directory; a linked worktree has a `.git` file.
+    if not os.path.isfile(os.path.join(root, ".git")):
+        return record(False, "not-a-lane", "root is a main checkout, not a linked worktree")
+    if not branch.startswith("land/"):
+        return record(False, "not-a-lane", f"branch {branch!r} is not a land/* lane")
+    # Never discard uncommitted tracked work (untracked build dirs are fine to drop).
+    rc, out = git(["status", "--porcelain", "--untracked-files=no"], root)
+    if rc != 0 or out.strip():
+        return record(False, "dirty", "lane has uncommitted tracked changes; keeping it")
+    rc, common = git(["rev-parse", "--path-format=absolute", "--git-common-dir"], root)
+    main_root = os.path.dirname(common.strip()) if rc == 0 and common.strip() else ""
+    if not main_root or not os.path.isdir(main_root):
+        return record(False, "no-main", "could not locate the main repo to remove from")
+    rc, out = git(["worktree", "remove", "--force", root], main_root)
+    if rc != 0:
+        return record(False, "remove-failed", out[-400:])
+    git(["worktree", "prune"], main_root)
+    git(["branch", "-d", branch], main_root)  # safe: -d refuses an unmerged branch
+    ctx.log(f"  removed landed lane {root} ({branch})")
+    return record(True, "removed", f"removed lane worktree {root} and branch {branch}")
 
 
 # --------------------------------------------------------------------------- #

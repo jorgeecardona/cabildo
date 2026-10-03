@@ -32,7 +32,7 @@ today; the rest are read generically and wired one call site at a time):
     [watch]   topic, interval, tail         # cli.cmd_watch
     [uplink]  level = "none" | ...          # cloud
     [notify]  enabled, quiet_hours          # desktop / notify
-    [push]    target, local_sync           # actions.push (local_sync: issue #20)
+    [push]    target, local_sync, cleanup_lanes   # actions.push (#20, #24)
     [spawn]   model, max_agents, max_depth   # request spawn
     [record]  messages = true                # config.record_messages (daemon ingest)
     [roles]   <name> = "responsibilities"    # config.roles (agent-card roster)
@@ -185,6 +185,24 @@ def push_local_sync(cwd: str | None = None, project_name: str | None = None) -> 
     """
     mode = str(get(cwd, "push", "local_sync", project_name=project_name, default="ff-only")).lower()
     return mode if mode in ("off", "ff-only", "reset") else "ff-only"
+
+
+def push_cleanup_lanes(cwd: str | None = None, project_name: str | None = None) -> str:
+    """``[push].cleanup_lanes`` for this project (issue #24): what the daemon does
+    with a throwaway land lane after a verified-successful push.
+
+    - ``"off"`` (the default) -- leave every worktree in place; today's behavior.
+    - ``"landed"`` -- remove the lane worktree IFF it is a linked worktree on a
+      ``land/*`` branch with no uncommitted tracked changes and its HEAD is now on
+      the remote target (i.e. fully landed, nothing to lose). Never touches a main
+      checkout or a lane with unpushed work.
+
+    Default off on purpose: cabildo is installed editable, so this runs in the
+    live daemon every agent lands through; a repo opts in once it trusts it.
+    An unknown value falls back to ``"off"``.
+    """
+    mode = str(get(cwd, "push", "cleanup_lanes", project_name=project_name, default="off")).lower()
+    return mode if mode in ("off", "landed") else "off"
 
 
 def destructive_mode(cwd: str | None = None, project_name: str | None = None) -> str:
