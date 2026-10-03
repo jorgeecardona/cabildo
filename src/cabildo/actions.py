@@ -30,6 +30,14 @@ GATE_TIMEOUT = 1800
 # Repo-owned, not requester-supplied. The agent asking to push does not get to
 # choose the thing that judges it.
 GATE_PATH = ".cabildo/gate.sh"
+# gate.sh and provision.sh are run with these env vars set, so a repo can scope
+# its work to what a land changes instead of gating every project (issue #17):
+#   CABILDO_BASE_REF       ref this land is diffed against (e.g. origin/main)
+#   CABILDO_HEAD           the lane's resolved HEAD sha
+#   CABILDO_CHANGED_FILES  newline-separated repo-relative paths this land adds
+# e.g. a moon repo's gate can run `moon run :check --affected` off these; cabildo
+# stays tool-agnostic and never assumes moon. See _affected_env.
+#
 # Optional repo-owned env setup, run after rebase and before the gate so a fresh
 # worktree is provisioned before it is judged (issue #18). Idempotent by contract.
 PROVISION_PATH = ".cabildo/provision.sh"
@@ -94,8 +102,13 @@ class Reject(Exception):
 # --------------------------------------------------------------------------- #
 # Subprocess helpers
 # --------------------------------------------------------------------------- #
-def run(args: list[str], cwd: str, timeout: int = GIT_TIMEOUT) -> tuple[int, str]:
-    """Run argv (never a shell string) and return (rc, combined output)."""
+def run(
+    args: list[str], cwd: str, timeout: int = GIT_TIMEOUT, env: dict[str, str] | None = None
+) -> tuple[int, str]:
+    """Run argv (never a shell string) and return (rc, combined output). `env`
+    adds/overrides variables on top of the inherited environment (used to hand
+    the gate the affected-file set, issue #17).
+    """
     try:
         p = subprocess.run(
             args,
@@ -104,7 +117,7 @@ def run(args: list[str], cwd: str, timeout: int = GIT_TIMEOUT) -> tuple[int, str
             text=True,
             timeout=timeout,
             # Keep the daemon's own git out of the agents' interactive auth.
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0", **(env or {})},
         )
     except subprocess.TimeoutExpired:
         return 124, f"timed out after {timeout}s: {shlex.join(args)}"
@@ -115,6 +128,30 @@ def run(args: list[str], cwd: str, timeout: int = GIT_TIMEOUT) -> tuple[int, str
 
 def git(args: list[str], cwd: str, timeout: int = GIT_TIMEOUT) -> tuple[int, str]:
     return run(["git", *args], cwd, timeout)
+
+
+def _affected_env(root: str, base_ref: str) -> dict[str, str]:
+    """The affected-file set handed to the provision + gate scripts so a repo can
+    scope its work to what this land changes instead of gating every project
+    (issue #17). The gate stays a black box: cabildo does not know or assume moon;
+    it just exposes the facts a `moon run :check --affected` (or any other scoping)
+    needs:
+
+      CABILDO_BASE_REF       the ref this land is diffed against (remote/target)
+      CABILDO_HEAD           the lane's resolved HEAD sha
+      CABILDO_CHANGED_FILES  newline-separated repo-relative paths this land adds
+
+    Computed after the rebase, so the diff is exactly this lane's commits. A failed
+    diff yields the refs with an empty file list, so a gate can fall back to its
+    own detection rather than mistaking "no info" for "nothing changed".
+    """
+    _, head = git(["rev-parse", "HEAD"], root)
+    rc, out = git(["diff", "--name-only", f"{base_ref}...HEAD"], root)
+    return {
+        "CABILDO_BASE_REF": base_ref,
+        "CABILDO_HEAD": head.strip(),
+        "CABILDO_CHANGED_FILES": out.strip() if rc == 0 else "",
+    }
 
 
 # Files Claude Code rewrites by itself — accepting a permission prompt edits
@@ -294,6 +331,11 @@ def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
             steps,
         )
 
+    # The affected-file set this land introduces, handed to the provision + gate
+    # scripts so a repo can scope its work to what changed instead of gating every
+    # project (issue #17). Computed here, post-rebase, so it is exactly this lane.
+    affected = _affected_env(root, f"{remote}/{target}")
+
     # 3.5 Provision (optional, repo-owned). Runs AFTER the rebase and BEFORE the
     #    gate, so a fresh worktree has its environment (deps, venv, node_modules)
     #    before it is judged. A failure here is reported as PROVISIONING, not a gate
@@ -306,7 +348,7 @@ def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         if not os.access(provision, os.X_OK):
             return _fail(f"{PROVISION_PATH} exists but is not executable — refusing to push", steps)
         ctx.log(f"  running provision {PROVISION_PATH} (timeout {GATE_TIMEOUT}s)")
-        rc, out = run([provision], root, timeout=GATE_TIMEOUT)
+        rc, out = run([provision], root, timeout=GATE_TIMEOUT, env=affected)
         steps.append({"step": "provision", "rc": rc, "out": out[-4000:]})
         if rc != 0:
             return _fail(
@@ -323,7 +365,7 @@ def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         if not os.access(gate, os.X_OK):
             return _fail(f"{GATE_PATH} exists but is not executable — refusing to push", steps)
         ctx.log(f"  running gate {GATE_PATH} (timeout {GATE_TIMEOUT}s)")
-        rc, out = run([gate], root, timeout=GATE_TIMEOUT)
+        rc, out = run([gate], root, timeout=GATE_TIMEOUT, env=affected)
         steps.append({"step": "gate", "rc": rc, "out": out[-8000:]})
         if rc != 0:
             return _fail(_gate_failure_reason(rc, out), steps)
