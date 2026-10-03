@@ -187,6 +187,28 @@ def _proj_topic_name(topic: str | None) -> str | None:
     return None
 
 
+def _may_reach_project(
+    conn, my_project: str | None, target_project: str | None, capability: str
+) -> bool:
+    """Whether a session in `my_project` may reach `target_project` with
+    `capability` ('listen'|'send'). True for your own project, a legacy symmetric
+    `--link` peer (cloud.json), or a granted directional row (issue #26). A
+    session with no project identity (human/daemon) is unrestricted.
+    """
+    mine = (my_project or "").strip().lower()
+    tgt = (target_project or "").strip().lower()
+    if not mine or not tgt or mine == tgt:
+        return True
+    try:
+        from . import cloud
+
+        if tgt in cloud.peers_visible(mine):
+            return True
+    except Exception:
+        pass
+    return store.has_grant(conn, mine, "project", tgt, capability)
+
+
 # --------------------------------------------------------------------------- #
 # Presence / identity tools
 # --------------------------------------------------------------------------- #
@@ -361,15 +383,24 @@ def join_topic(topic: str) -> dict[str, Any]:
     topic = topic.lstrip("#")
     with store.connect() as conn:
         sid = _me(conn)
-        visible = _visible_projects(conn, sid)
+        my_project = _project_name(conn, sid)
         pj = _proj_topic_name(topic)
-        if visible is not None and pj is not None and pj not in visible:
+        if pj is not None and not _may_reach_project(conn, my_project, pj, "listen"):
             return {
                 "ok": False,
-                "error": f"#{topic} is project '{pj}'s private channel, "
-                f"not linked to yours — `cabildo project <yours> "
-                f"--link {pj}` to allow",
+                "error": f"#{topic} is project '{pj}'s private channel, not reachable "
+                f"from yours — `request_access` for a grant, or "
+                f"`cabildo project <yours> --link {pj}`",
             }
+        # A gated (private) topic needs a 'listen' grant to join (issue #26).
+        if pj is None and store.topic_is_gated(conn, topic) and (my_project or "").strip():
+            mine = (my_project or "").strip().lower()
+            if not store.has_grant(conn, mine, "topic", topic, "listen"):
+                return {
+                    "ok": False,
+                    "error": f"#{topic} is a gated topic — `request_access` for a "
+                    f"'listen' grant to join",
+                }
         store.ensure_topic(conn, topic, created_by=sid)
         store.subscribe(conn, sid, topic)
         conn.commit()
@@ -385,6 +416,219 @@ def leave_topic(topic: str) -> dict[str, Any]:
         store.unsubscribe(conn, sid, topic)
         conn.commit()
         return {"ok": True, "topic": topic, "subscriptions": store.subscriptions_of(conn, sid)}
+
+
+# --------------------------------------------------------------------------- #
+# Directory (discovery) + grants (cross-project consent) — issue #26
+# --------------------------------------------------------------------------- #
+def _may_decide_grant(conn, sid: str, grant: dict[str, Any]) -> bool:
+    """Who may grant/deny/revoke a request. The human always may. A `project`
+    request is decided by an agent in the asked-for project when that project's
+    `[grants].approver` is "project". A `topic` request is decided by an already
+    admitted member (a project holding a granted listen on it). An `agent`
+    request is decided by that agent itself.
+    """
+    if sid == store.HUMAN_SESSION:
+        return True
+    kind, resource = grant["resource_kind"], grant["resource"]
+    my = (_project_name(conn, sid) or "").strip().lower()
+    if kind == "project":
+        return bool(my) and my == resource and config.grants_approver(None, resource) == "project"
+    if kind == "topic":
+        return store.has_grant(conn, my, "topic", resource, "listen") if my else False
+    if kind == "agent":
+        return sid == resource
+    return False
+
+
+@mcp.tool()
+def directory() -> list[dict[str, Any]]:
+    """The cross-project phone book: every project active on the bus with its
+    active-agent count and the roles present. Discovery only — no message content
+    and no channel contents, so seeing a project here does NOT mean you receive
+    its chatter. Find a project you are not linked to, then `request_access` to
+    reach it.
+    """
+    with store.connect() as conn:
+        _me(conn)
+        return store.directory(conn)
+
+
+@mcp.tool()
+def request_access(
+    resource: str,
+    capability: str = "send",
+    kind: str = "project",
+    note: str | None = None,
+) -> dict[str, Any]:
+    """Ask another project (or a gated topic) for consent to reach it — the
+    deliberate alternative to accidental cross-project contact (issue #26).
+
+    `kind` is "project" or "topic"; `capability` is "send" (post/DM) or "listen"
+    (subscribe/read). This files a directional request from YOUR project; the
+    target decides. Routing follows the target's `[grants].approver`: "human"
+    (default) notifies the human; "project" lets an agent there decide with
+    `grant`/`deny`. The knock is announced to the target so someone can act on
+    it. Poll `grants` for the outcome, or wait for the DM.
+    """
+    kind = kind.strip().lower()
+    capability = capability.strip().lower()
+    if kind not in ("project", "topic"):
+        return {"ok": False, "error": "kind must be 'project' or 'topic'"}
+    if capability not in store.GRANT_CAPS:
+        return {"ok": False, "error": f"capability must be one of {store.GRANT_CAPS}"}
+    resource = resource.lstrip("#").strip()
+    with store.connect() as conn:
+        sid = _me(conn)
+        me_handle = _handle(conn, sid)
+        my_project = (_project_name(conn, sid) or "").strip().lower()
+        if not my_project:
+            return {"ok": False, "error": "you have no project identity to request from"}
+        target = resource.lower()
+        if kind == "project" and target == my_project:
+            return {"ok": False, "error": "that is your own project"}
+        gid = store.upsert_grant(
+            conn,
+            grantee=my_project,
+            resource_kind=kind,
+            resource=resource,
+            capability=capability,
+            status="requested",
+            requested_by=sid,
+            note=note,
+        )
+        who = store.display_name(store.get_session(conn, sid), sid)
+        knock = (
+            f"🔔 access request #{gid}: project '{my_project}' asks to {capability} "
+            f"{'your project' if kind == 'project' else f'#{resource}'}"
+            f"{' — ' + note if note else ''}. An approver here can `grant({gid})` or `deny({gid})`."
+        )
+        # Announce the knock: to the target project's channel when it's a project
+        # request (its agents are subscribed there), and always to the human.
+        if kind == "project":
+            store.post_message(
+                conn,
+                from_session=sid,
+                from_handle=me_handle,
+                body=knock,
+                topic=store.project_topic(target),
+                project=my_project,
+                urgent=False,
+            )
+        store.post_message(
+            conn,
+            from_session=sid,
+            from_handle=me_handle,
+            body=knock,
+            to_session=store.HUMAN_SESSION,
+            project=my_project,
+            urgent=True,
+        )
+        conn.commit()
+        return {"ok": True, "grant_id": gid, "status": "requested", "from": who}
+
+
+@mcp.tool()
+def grant(request_id: int) -> dict[str, Any]:
+    """Approve a pending access request (see `grants`). Only an approver for the
+    target may: the human, or — per the target's `[grants].approver` policy — an
+    agent in the asked-for project (for a project request) or an admitted member
+    (for a topic). The requester is DM'd the outcome.
+    """
+    return _decide(request_id, "granted")
+
+
+@mcp.tool()
+def deny(request_id: int) -> dict[str, Any]:
+    """Refuse a pending access request (see `grants`). Same authority rules as
+    `grant`. The requester is DM'd the outcome.
+    """
+    return _decide(request_id, "denied")
+
+
+@mcp.tool()
+def revoke(grant_id: int) -> dict[str, Any]:
+    """Withdraw a previously granted access (see `grants`). Same authority rules
+    as `grant`; takes effect immediately on the next send/join.
+    """
+    return _decide(grant_id, "revoked")
+
+
+def _decide(grant_id: int, status: str) -> dict[str, Any]:
+    with store.connect() as conn:
+        sid = _me(conn)
+        me_handle = _handle(conn, sid)
+        g = store.get_grant(conn, grant_id)
+        if g is None:
+            return {"ok": False, "error": f"no grant #{grant_id}"}
+        if not _may_decide_grant(conn, sid, g):
+            return {"ok": False, "error": f"you are not an approver for grant #{grant_id}"}
+        store.decide_grant(conn, grant_id, status=status, by=sid)
+        # Tell the requester, if that session is still around.
+        requester = g.get("requested_by")
+        if requester:
+            store.post_message(
+                conn,
+                from_session=sid,
+                from_handle=me_handle,
+                body=f"access request #{grant_id} ({g['capability']} {g['resource_kind']} "
+                f"'{g['resource']}') → {status}",
+                to_session=requester,
+                project=_project(conn, sid),
+                urgent=(status != "granted"),
+            )
+        conn.commit()
+        return {"ok": True, "grant_id": grant_id, "status": status}
+
+
+@mcp.tool()
+def grants(status: str | None = None, mine: bool = True) -> list[dict[str, Any]]:
+    """List access grants and pending requests. By default those your project
+    requested (`mine`); set mine=False to see requests aimed AT your project
+    (what you may `grant`/`deny`). Filter by status
+    (requested|granted|denied|revoked).
+    """
+    with store.connect() as conn:
+        sid = _me(conn)
+        my_project = (_project_name(conn, sid) or "").strip().lower()
+        if mine:
+            rows = store.list_grants(conn, grantee=my_project or None, status=status)
+        else:
+            # Requests whose target is my project (a project resource aimed at me).
+            rows = [
+                r
+                for r in store.list_grants(conn, resource_kind="project", status=status)
+                if r["resource"] == my_project
+            ]
+        return rows
+
+
+@mcp.tool()
+def gate_topic(topic: str, gated: bool = True) -> dict[str, Any]:
+    """Make a topic private (gated=True) or open (gated=False). Gating a room
+    means a `listen`/`send` grant is required to join or post; gating it grants
+    YOUR project both so you keep access, and subscribes you. Others reach it via
+    `request_access` (issue #26).
+    """
+    topic = topic.lstrip("#")
+    with store.connect() as conn:
+        sid = _me(conn)
+        my = (_project_name(conn, sid) or "").strip().lower()
+        store.set_topic_gated(conn, topic, gated)
+        if gated and my:
+            for cap in ("listen", "send"):
+                store.upsert_grant(
+                    conn,
+                    grantee=my,
+                    resource_kind="topic",
+                    resource=topic,
+                    capability=cap,
+                    status="granted",
+                    by=sid,
+                )
+            store.subscribe(conn, sid, topic)
+        conn.commit()
+        return {"ok": True, "topic": topic, "gated": gated}
 
 
 # --------------------------------------------------------------------------- #
@@ -424,28 +668,38 @@ def send(
                 return {"ok": False, "error": "no project channel; specify `to` or `topic`"}
             topic = store.project_topic(pname)
 
-        # Dial A: projects are isolated. You may DM an agent, or post to a
-        # project channel, only for your own project or one you've linked.
-        visible = _visible_projects(conn, sid)
-        if visible is not None:
-            if to_session is not None:
-                trow = store.get_session(conn, to_session)
-                tname = ((trow["project_name"] if trow else "") or "").strip().lower()
-                if tname and tname not in visible:
+        # Cross-project consent (issue #26). Reaching another project — by DM, by
+        # its channel, or through a gated topic — needs your own project, a
+        # `--link` peer, or a granted `send` row. Open topics stay open.
+        my_project = _project_name(conn, sid)
+        if to_session is not None:
+            trow = store.get_session(conn, to_session)
+            tname = (trow["project_name"] if trow else None) or ""
+            if not _may_reach_project(conn, my_project, tname, "send"):
+                return {
+                    "ok": False,
+                    "error": f"'{to}' is on project '{tname.strip().lower()}', not "
+                    f"reachable from yours — `request_access` for a grant, or "
+                    f"`cabildo project <yours> --link {tname.strip().lower()}`",
+                }
+        else:
+            pj = _proj_topic_name(topic)
+            if pj is not None:
+                if not _may_reach_project(conn, my_project, pj, "send"):
                     return {
                         "ok": False,
-                        "error": f"'{to}' is on project '{tname}', not linked "
-                        f"to yours — `cabildo project <yours> --link "
-                        f"{tname}` to allow",
+                        "error": f"#{topic} is project '{pj}'s channel, not reachable "
+                        f"from yours — `request_access` for a grant, or "
+                        f"`cabildo project <yours> --link {pj}`",
                     }
-            else:
-                pj = _proj_topic_name(topic)
-                if pj is not None and pj not in visible:
+            elif topic and store.topic_is_gated(conn, topic) and (my_project or "").strip():
+                mine = (my_project or "").strip().lower()
+                subscribed = topic in store.subscriptions_of(conn, sid)
+                if not subscribed and not store.has_grant(conn, mine, "topic", topic, "send"):
                     return {
                         "ok": False,
-                        "error": f"#{topic} is project '{pj}'s channel, not "
-                        f"linked to yours — `cabildo project <yours> "
-                        f"--link {pj}` to allow",
+                        "error": f"#{topic} is a gated topic — `request_access` for a "
+                        f"'send' grant (or join it with a 'listen' grant first)",
                     }
 
         mid = store.post_message(
@@ -475,11 +729,11 @@ def send_to_role(role: str, body: str, urgent: bool = False) -> dict[str, Any]:
         sid = _me(conn)
         me_handle = _handle(conn, sid)
         project = _project(conn, sid)
-        visible = _visible_projects(conn, sid)
+        my_project = _project_name(conn, sid)
         recipients: list[dict[str, Any]] = []
         for r in store.agents_with_role(conn, role, exclude=sid):
             tname = (r["project_name"] or "").strip().lower()
-            if visible is not None and tname and tname not in visible:
+            if not _may_reach_project(conn, my_project, tname, "send"):
                 continue
             mid = store.post_message(
                 conn,

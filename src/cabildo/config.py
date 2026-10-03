@@ -302,6 +302,21 @@ def roles(cwd: str | None = None, project_name: str | None = None) -> dict[str, 
     }
 
 
+def grants_approver(cwd: str | None = None, project_name: str | None = None) -> str:
+    """``[grants].approver`` for this project: who decides a cross-project access
+    request aimed at it (issue #26).
+
+    - ``"human"`` (the default) -- the request is put to the human; nothing
+      connects without them.
+    - ``"project"`` -- any active agent in this project may decide, enabling
+      autonomous cross-project coordination.
+
+    An unknown value falls back to ``"human"``, the conservative policy.
+    """
+    val = str(get(cwd, "grants", "approver", project_name=project_name, default="human")).lower()
+    return val if val in ("human", "project") else "human"
+
+
 def record_messages(cwd: str | None = None, project_name: str | None = None) -> bool:
     """``[record].messages`` for this project: default False.
 

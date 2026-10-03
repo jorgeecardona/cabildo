@@ -334,3 +334,81 @@ def test_read_nothing_specified_says_so(two_agents):
     res = srv.read()
     assert res["marked_read"] == 0
     assert "note" in res and "nothing to do" in res["note"]
+
+
+# --------------------------------------------------------------------------- #
+# Cross-project consent: directory, request_access, grant/deny, gated topics
+# (issue #26)
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def two_projects(conn, monkeypatch):
+    """Agent A on project 'crm' (pid 111), agent B on project 'paas' (pid 222),
+    plus the human (pid 999). Returns a knob to pick who 'we' are.
+    """
+    store.register_session(
+        conn, "A", cwd="/repo/crm", project="/repo/crm", project_name="crm", claude_pid=111
+    )
+    store.register_session(
+        conn, "B", cwd="/repo/paas", project="/repo/paas", project_name="paas", claude_pid=222
+    )
+    store.register_session(conn, store.HUMAN_SESSION, cwd="/home", claude_pid=999)
+    store.set_handle(conn, "A", "ava")
+    store.set_handle(conn, "B", "ben")
+    current = {"pid": 111}
+    monkeypatch.setattr(srv, "resolve_claude_pid", lambda: current["pid"])
+    return lambda pid: current.__setitem__("pid", pid)
+
+
+def test_cross_project_dm_blocked_until_granted(two_projects):
+    two_projects(111)  # crm
+    res = srv.send("hi paas", to="ben")
+    assert res["ok"] is False
+    assert "not reachable" in res["error"]
+    # crm requests send access to paas; the human grants it.
+    req = srv.request_access("paas", capability="send", kind="project")
+    assert req["ok"] is True
+    two_projects(999)  # human may always decide
+    assert srv.grant(req["grant_id"])["ok"] is True
+    two_projects(111)
+    assert srv.send("hi paas", to="ben")["ok"] is True
+
+
+def test_project_approver_lets_an_agent_decide(two_projects, home):
+    (home / "config.toml").write_text('[project.paas]\ngrants = { approver = "project" }\n')
+    two_projects(111)  # crm asks
+    req = srv.request_access("paas", capability="send", kind="project")
+    two_projects(222)  # an agent in paas decides, because paas set approver=project
+    assert srv.grant(req["grant_id"])["ok"] is True
+    two_projects(111)
+    assert srv.send("now allowed", to="ben")["ok"] is True
+
+
+def test_agent_cannot_decide_when_approver_is_human(two_projects):
+    two_projects(111)
+    req = srv.request_access("paas", capability="send", kind="project")
+    two_projects(222)  # paas agent, but default approver is human
+    res = srv.grant(req["grant_id"])
+    assert res["ok"] is False
+    assert "not an approver" in res["error"]
+
+
+def test_directory_lists_projects_without_delivery(two_projects):
+    two_projects(111)
+    names = {row["project"].lower() for row in srv.directory()}
+    assert {"crm", "paas"} <= names
+
+
+def test_gated_topic_requires_listen_grant(two_projects):
+    # paas gates a room; crm cannot join without a listen grant.
+    two_projects(222)
+    srv.gate_topic("war-room", True)
+    two_projects(111)
+    blocked = srv.join_topic("war-room")
+    assert blocked["ok"] is False
+    assert "gated" in blocked["error"]
+    # Grant crm a listen (human), then crm can join.
+    req = srv.request_access("war-room", capability="listen", kind="topic")
+    two_projects(999)
+    assert srv.grant(req["grant_id"])["ok"] is True
+    two_projects(111)
+    assert srv.join_topic("war-room")["ok"] is True

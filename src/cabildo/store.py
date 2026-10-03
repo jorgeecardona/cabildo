@@ -1340,7 +1340,18 @@ def upsert_grant(
         "decided_by=COALESCE(excluded.decided_by, grants.decided_by), "
         "note=COALESCE(excluded.note, grants.note), "
         "decided_at=excluded.decided_at",
-        (grantee, resource_kind, resource, capability, status, requested_by, by, note, now, decided_at),
+        (
+            grantee,
+            resource_kind,
+            resource,
+            capability,
+            status,
+            requested_by,
+            by,
+            note,
+            now,
+            decided_at,
+        ),
     )
     conn.commit()
     row = conn.execute(

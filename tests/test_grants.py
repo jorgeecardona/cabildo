@@ -69,12 +69,22 @@ def test_rerequest_updates_the_same_row(conn):
 
 def test_list_grants_filters(conn):
     store.upsert_grant(
-        conn, grantee="crm", resource_kind="project", resource="paas",
-        capability="send", status="granted", by="x",
+        conn,
+        grantee="crm",
+        resource_kind="project",
+        resource="paas",
+        capability="send",
+        status="granted",
+        by="x",
     )
     store.upsert_grant(
-        conn, grantee="crm", resource_kind="project", resource="paas",
-        capability="listen", status="requested", requested_by="y",
+        conn,
+        grantee="crm",
+        resource_kind="project",
+        resource="paas",
+        capability="listen",
+        status="requested",
+        requested_by="y",
     )
     assert len(store.list_grants(conn, grantee="crm")) == 2
     assert len(store.list_grants(conn, grantee="crm", status="granted")) == 1
