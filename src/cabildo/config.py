@@ -225,20 +225,20 @@ def push_local_sync(cwd: str | None = None, project_name: str | None = None) -> 
 
 def push_cleanup_lanes(cwd: str | None = None, project_name: str | None = None) -> str:
     """``[push].cleanup_lanes`` for this project (issue #24): what the daemon does
-    with a throwaway land lane after a verified-successful push.
+    with a throwaway worktree after a verified-successful push.
 
     - ``"off"`` (the default) -- leave every worktree in place; today's behavior.
-    - ``"landed"`` -- remove the lane worktree IFF it is a linked worktree on a
-      ``land/*`` branch with no uncommitted tracked changes and its HEAD is now on
-      the remote target (i.e. fully landed, nothing to lose). Never touches a main
-      checkout or a lane with unpushed work.
+    - ``"merged"`` -- remove the worktree IFF it is a linked worktree with no
+      uncommitted tracked changes whose HEAD is already merged into the remote
+      target (nothing to lose). Never touches a main checkout or a worktree with
+      unpushed work.
 
     Default off on purpose: cabildo is installed editable, so this runs in the
-    live daemon every agent lands through; a repo opts in once it trusts it.
+    live daemon every agent pushes through; a repo opts in once it trusts it.
     An unknown value falls back to ``"off"``.
     """
     mode = str(get(cwd, "push", "cleanup_lanes", project_name=project_name, default="off")).lower()
-    return mode if mode in ("off", "landed") else "off"
+    return mode if mode in ("off", "merged") else "off"
 
 
 def destructive_mode(cwd: str | None = None, project_name: str | None = None) -> str:

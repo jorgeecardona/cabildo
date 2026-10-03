@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-cabildo is pre-1.0 (alpha). Security fixes land on `main` and ship in the next
-release to [PyPI](https://pypi.org/project/cabildo/). Please run the latest
+cabildo is pre-1.0 (alpha). Security fixes go to `main` and are released in the
+next version on [PyPI](https://pypi.org/project/cabildo/). Please run the latest
 released version before reporting; older versions are not patched separately.
 
 ## Reporting a vulnerability

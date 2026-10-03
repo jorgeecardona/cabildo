@@ -38,8 +38,8 @@ Six conventions are enforced, all scoped to the session's own project:
 The last four are one story: concurrent agents on one repo collide at commit
 and push, and every recovery from that collision (reset, revert, force-push)
 destroys more than the collision did. So the guard stops the collision instead
-of the recovery, and every deny names the ordered path through — a lane that
-lands via ``push``, which the daemon runs one at a time.
+of the recovery, and every deny names the ordered path through — a worktree that
+reaches ``origin/main`` via ``push``, which the daemon runs one at a time.
 
 Deny only ever fires against a live peer or a claim held by *someone else*;
 everything else falls through to Claude Code's normal permission flow. The reason

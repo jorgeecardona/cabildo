@@ -323,7 +323,7 @@ def test_commit_on_main_is_denied(conn, tmp_path):
     reason = _bash(conn, "a", 'git commit -m "fix: whatever"')
     assert reason is not None
     assert "`main`" in reason
-    assert "request(action=" in reason  # names the way out: land from a lane
+    assert "request(action=" in reason  # names the way out: push a lane to origin
     assert "git switch -c" in reason or "worktree add" in reason
 
 

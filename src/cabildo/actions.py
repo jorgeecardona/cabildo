@@ -31,10 +31,10 @@ GATE_TIMEOUT = 1800
 # choose the thing that judges it.
 GATE_PATH = ".cabildo/gate.sh"
 # gate.sh and provision.sh are run with these env vars set, so a repo can scope
-# its work to what a land changes instead of gating every project (issue #17):
-#   CABILDO_BASE_REF       ref this land is diffed against (e.g. origin/main)
-#   CABILDO_HEAD           the lane's resolved HEAD sha
-#   CABILDO_CHANGED_FILES  newline-separated repo-relative paths this land adds
+# its work to what a push changes instead of gating every project (issue #17):
+#   CABILDO_BASE_REF       ref this push is diffed against (e.g. origin/main)
+#   CABILDO_HEAD           the worktree's resolved HEAD sha
+#   CABILDO_CHANGED_FILES  newline-separated repo-relative paths this push adds
 # e.g. a moon repo's gate can run `moon run :check --affected` off these; cabildo
 # stays tool-agnostic and never assumes moon. See _affected_env.
 #
@@ -132,16 +132,16 @@ def git(args: list[str], cwd: str, timeout: int = GIT_TIMEOUT) -> tuple[int, str
 
 def _affected_env(root: str, base_ref: str) -> dict[str, str]:
     """The affected-file set handed to the provision + gate scripts so a repo can
-    scope its work to what this land changes instead of gating every project
+    scope its work to what this push changes instead of gating every project
     (issue #17). The gate stays a black box: cabildo does not know or assume moon;
     it just exposes the facts a `moon run :check --affected` (or any other scoping)
     needs:
 
-      CABILDO_BASE_REF       the ref this land is diffed against (remote/target)
-      CABILDO_HEAD           the lane's resolved HEAD sha
-      CABILDO_CHANGED_FILES  newline-separated repo-relative paths this land adds
+      CABILDO_BASE_REF       the ref this push is diffed against (remote/target)
+      CABILDO_HEAD           the worktree's resolved HEAD sha
+      CABILDO_CHANGED_FILES  newline-separated repo-relative paths this push adds
 
-    Computed after the rebase, so the diff is exactly this lane's commits. A failed
+    Computed after the rebase, so the diff is exactly this push's commits. A failed
     diff yields the refs with an empty file list, so a gate can fall back to its
     own detection rather than mistaking "no info" for "nothing changed".
     """
@@ -331,7 +331,7 @@ def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
             steps,
         )
 
-    # The affected-file set this land introduces, handed to the provision + gate
+    # The affected-file set this push introduces, handed to the provision + gate
     # scripts so a repo can scope its work to what changed instead of gating every
     # project (issue #17). Computed here, post-rebase, so it is exactly this lane.
     affected = _affected_env(root, f"{remote}/{target}")
@@ -491,10 +491,12 @@ def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     #    can't fast-forward is a warning, not a failure.
     local_sync = _local_sync(root, remote, target, branch, config.push_local_sync(cwd), steps, ctx)
 
-    # 8. Remove the throwaway land lane now that it is fully on the remote, so
-    #    lanes do not accumulate (issue #24). Opt-in and strictly guarded; never
-    #    fails the push (it already succeeded).
-    lane_cleanup = _remove_landed_lane(root, branch, config.push_cleanup_lanes(cwd), steps, ctx)
+    # 8. Remove the throwaway worktree now that its work is on the remote, so
+    #    worktrees do not accumulate (issue #24). Opt-in and strictly guarded;
+    #    never fails the push (it already succeeded).
+    worktree_cleanup = _remove_merged_worktree(
+        root, branch, remote, target, config.push_cleanup_lanes(cwd), steps, ctx
+    )
 
     return {
         "ok": True,
@@ -505,7 +507,7 @@ def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         "gate": gate_state,
         "verified": f"{remote}/{target} contains {sha[:12]} per ls-remote ({detail})",
         "local_sync": local_sync,
-        "lane_cleanup": lane_cleanup,
+        "worktree_cleanup": worktree_cleanup,
         "steps": steps,
     }
 
@@ -598,7 +600,7 @@ def _clean_gate_output(out: str) -> str:
 
 
 def _gate_failure_reason(rc: int, out: str) -> str:
-    """Compose the land-failure reason so the failing task leads, the moon banner
+    """Compose the push-failure reason so the failing task leads, the moon banner
     is gone, and the full (cleaned) tail still rides along for `get_message`.
     """
     cleaned = _clean_gate_output(out)
@@ -612,36 +614,42 @@ def _gate_failure_reason(rc: int, out: str) -> str:
     return f"{head}\n\n{cleaned[-2000:]}"
 
 
-def _remove_landed_lane(
+def _remove_merged_worktree(
     root: str,
     branch: str,
+    remote: str,
+    target: str,
     mode: str,
     steps: list[dict[str, Any]],
     ctx: Ctx,
 ) -> dict[str, Any]:
-    """After a verified-successful push, remove the throwaway land lane so lanes
+    """After a verified-successful push, remove the throwaway worktree so they
     stop accumulating (issue #24). Conservative by construction: only a LINKED
-    worktree on a ``land/*`` branch with no uncommitted tracked changes, and only
-    when ``[push].cleanup_lanes = "landed"``. Never a main checkout, never a lane
-    with unpushed work. Removal runs from the main repo; a landed branch is then
+    worktree with no uncommitted tracked changes whose HEAD is already merged into
+    ``<remote>/<target>`` (nothing to lose), and only when
+    ``[push].cleanup_lanes = "merged"``. Never a main checkout, never a worktree
+    with unpushed work. Removal runs from the main repo; the merged branch is then
     deleted with ``git branch -d`` (which refuses if somehow not merged).
     """
 
     def record(removed: bool, reason: str, detail: str) -> dict[str, Any]:
-        steps.append({"step": "lane_cleanup", "rc": 0, "out": f"{reason}: {detail}"})
+        steps.append({"step": "worktree_cleanup", "rc": 0, "out": f"{reason}: {detail}"})
         return {"removed": removed, "reason": reason, "detail": detail}
 
-    if mode != "landed":
+    if mode != "merged":
         return record(False, "off", "cleanup disabled ([push].cleanup_lanes)")
     # A main checkout has a `.git` directory; a linked worktree has a `.git` file.
     if not os.path.isfile(os.path.join(root, ".git")):
-        return record(False, "not-a-lane", "root is a main checkout, not a linked worktree")
-    if not branch.startswith("land/"):
-        return record(False, "not-a-lane", f"branch {branch!r} is not a land/* lane")
+        return record(False, "not-a-worktree", "root is a main checkout, not a linked worktree")
     # Never discard uncommitted tracked work (untracked build dirs are fine to drop).
     rc, out = git(["status", "--porcelain", "--untracked-files=no"], root)
     if rc != 0 or out.strip():
-        return record(False, "dirty", "lane has uncommitted tracked changes; keeping it")
+        return record(False, "dirty", "worktree has uncommitted tracked changes; keeping it")
+    # Only when HEAD is fully merged into the remote target — otherwise there is
+    # unpushed work and removing the worktree would lose it.
+    anc_rc, _ = git(["merge-base", "--is-ancestor", "HEAD", f"{remote}/{target}"], root)
+    if anc_rc != 0:
+        return record(False, "not-merged", f"HEAD is not yet in {remote}/{target}; keeping it")
     rc, common = git(["rev-parse", "--path-format=absolute", "--git-common-dir"], root)
     main_root = os.path.dirname(common.strip()) if rc == 0 and common.strip() else ""
     if not main_root or not os.path.isdir(main_root):
@@ -651,8 +659,8 @@ def _remove_landed_lane(
         return record(False, "remove-failed", out[-400:])
     git(["worktree", "prune"], main_root)
     git(["branch", "-d", branch], main_root)  # safe: -d refuses an unmerged branch
-    ctx.log(f"  removed landed lane {root} ({branch})")
-    return record(True, "removed", f"removed lane worktree {root} and branch {branch}")
+    ctx.log(f"  removed merged worktree {root} ({branch})")
+    return record(True, "removed", f"removed merged worktree {root} and branch {branch}")
 
 
 # --------------------------------------------------------------------------- #

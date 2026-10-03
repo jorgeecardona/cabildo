@@ -1,5 +1,5 @@
 """The gate/provision scripts are handed the affected-file set so a repo can
-scope its work to what a land changes instead of gating every project
+scope its work to what a push changes instead of gating every project
 (issue #17). cabildo exposes the facts; the scoping lives in the repo's gate.
 """
 
@@ -41,11 +41,11 @@ def test_affected_env_lists_only_this_lanes_changes(tmp_path):
     (repo / "a.py").write_text("a\n")
     _sh(["git", "add", "."], repo)
     _sh(["git", "commit", "-m", "base"], repo)
-    # A lane ahead of main that adds one file.
-    _sh(["git", "checkout", "-b", "land/x"], repo)
+    # A branch ahead of main that adds one file.
+    _sh(["git", "checkout", "-b", "feature/x"], repo)
     (repo / "b.py").write_text("b\n")
     _sh(["git", "add", "."], repo)
-    _sh(["git", "commit", "-m", "lane"], repo)
+    _sh(["git", "commit", "-m", "work"], repo)
 
     env = actions._affected_env(str(repo), "main")
     changed = env["CABILDO_CHANGED_FILES"].split()

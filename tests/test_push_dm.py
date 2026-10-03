@@ -1,4 +1,4 @@
-"""Land-failure DM ergonomics: the moon upgrade banner must not crowd out or
+"""Push-failure DM ergonomics: the moon upgrade banner must not crowd out or
 truncate the actual failing task (issue #22).
 """
 

@@ -47,11 +47,11 @@ target = "main"    # default branch for `request push`
 # "reset"   force it to origin/<target> (destructive; opt-in).
 # "off"     leave it alone (prior behaviour; local main drifts behind).
 local_sync = "ff-only"
-# What to do with a throwaway land lane after a verified-successful push (#24):
+# What to do with a throwaway worktree after a verified-successful push (#24):
 #   "off"     (default) leave every worktree in place.
-#   "landed"  remove the lane IFF it's a linked worktree on a land/* branch with
-#             no uncommitted tracked changes and its HEAD is now on the remote —
-#             never a main checkout, never a lane with unpushed work.
+#   "merged"  remove the worktree IFF it's a linked worktree with no uncommitted
+#             tracked changes whose HEAD is already merged into the remote target —
+#             never a main checkout, never a worktree with unpushed work.
 cleanup_lanes = "off"
 
 [grants]
