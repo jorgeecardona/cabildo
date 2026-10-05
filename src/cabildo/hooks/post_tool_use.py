@@ -35,6 +35,7 @@ def main() -> None:
         text = notify._join(
             notify.midturn_urgent_text(conn, session_id),
             notify.condition_text(conn, session_id),
+            notify.winddown_text(conn, session_id),
             notify.timeline_text(conn, session_id, config.timeline_interval(cwd)),
         )
     finally:

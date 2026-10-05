@@ -389,6 +389,45 @@ CREATE TABLE IF NOT EXISTS grants (
 );
 CREATE INDEX IF NOT EXISTS idx_grants_grantee ON grants(grantee, status);
 CREATE INDEX IF NOT EXISTS idx_grants_resource ON grants(resource_kind, resource, status);
+
+-- The attention engine's schedule inputs: the lines the human sets for the
+-- fleet to wind down against (the "I stop at 23:00" of the slot-machine issue).
+-- Durable because the nudge is computed from this row at a session's next tool
+-- call, not pushed by a producer, so a bare `cabildo stop 23:00` steers every
+-- session even with no daemon up.
+--
+--   scope   : 'global' (the whole machine's fleet) | a project path (one repo)
+--   kind    : 'stop' (a hard line for the day) | 'block' (a bounded break; later)
+--   line_at : the wall-clock moment a session is steered TOWARD — the stop time,
+--             or a block's start. ends_at bounds a block; NULL for a stop.
+--   active  : 0 retires a line (superseded by a newer stop for the same scope,
+--             or cleared by hand) without deleting the history.
+CREATE TABLE IF NOT EXISTS schedule (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    host        TEXT NOT NULL,
+    scope       TEXT NOT NULL DEFAULT 'global',
+    kind        TEXT NOT NULL DEFAULT 'stop',
+    label       TEXT,
+    line_at     REAL NOT NULL,
+    ends_at     REAL,
+    created_by  TEXT,
+    created_at  REAL NOT NULL,
+    active      INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_schedule_active ON schedule(host, active, line_at);
+
+-- Per-session wind-down delivery receipts. `step` is the highest escalation
+-- step this session has already been shown for this line (1=heads-up, 2=land-it,
+-- 3=past-the-line); a session hears each step at most once, and a line that
+-- merely persists in the same step stays silent — the same once-per-episode
+-- discipline the conditions channel uses, keyed to the step instead.
+CREATE TABLE IF NOT EXISTS schedule_deliveries (
+    schedule_id   INTEGER NOT NULL,
+    session_id    TEXT NOT NULL,
+    step          INTEGER NOT NULL,
+    delivered_at  REAL NOT NULL,
+    PRIMARY KEY (schedule_id, session_id)
+);
 """
 
 
@@ -2077,3 +2116,109 @@ def prune_conditions(conn: sqlite3.Connection) -> int:
     )
     conn.commit()
     return cur.rowcount
+
+
+# --------------------------------------------------------------------------- #
+# Schedule / wind-down (the attention engine's stop lines)
+# --------------------------------------------------------------------------- #
+# How long after its line a stop stays in force. A stop at 23:00 keeps nudging
+# "you're past your stop" into the small hours if the human works on; the next
+# day's stop supersedes it, but absent that we stop honouring a line this long
+# past it so a forgotten stop doesn't haunt tomorrow morning.
+SCHEDULE_STALE_AFTER = 8 * 3600.0
+
+
+def set_stop(
+    conn: sqlite3.Connection,
+    *,
+    line_at: float,
+    scope: str = "global",
+    created_by: str | None = None,
+    host: str | None = None,
+) -> dict[str, Any]:
+    """Set the stop line for ``scope`` on this host, retiring any prior active
+    stop for the same scope (one line per scope — a new one replaces it rather
+    than stacking). Returns the new row.
+    """
+    host = host or hostname()
+    now = _now()
+    conn.execute(
+        "UPDATE schedule SET active=0 WHERE host=? AND scope=? AND kind='stop' AND active=1",
+        (host, scope),
+    )
+    cur = conn.execute(
+        "INSERT INTO schedule(host, scope, kind, label, line_at, ends_at, created_by, "
+        "created_at, active) VALUES (?,?,'stop',NULL,?,NULL,?,?,1)",
+        (host, scope, line_at, created_by, now),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM schedule WHERE id=?", (cur.lastrowid,)).fetchone()
+    return dict(row)
+
+
+def clear_stops(
+    conn: sqlite3.Connection, *, scope: str | None = None, host: str | None = None
+) -> int:
+    """Retire active stop lines on this host, optionally only for one ``scope``.
+    Returns how many were retired.
+    """
+    host = host or hostname()
+    q = "UPDATE schedule SET active=0 WHERE host=? AND kind='stop' AND active=1"
+    params: list[Any] = [host]
+    if scope is not None:
+        q += " AND scope=?"
+        params.append(scope)
+    cur = conn.execute(q, params)
+    conn.commit()
+    return cur.rowcount
+
+
+def active_stops(conn: sqlite3.Connection, *, host: str | None = None) -> list[dict[str, Any]]:
+    """Active, non-stale stop lines on this host, soonest line first."""
+    host = host or hostname()
+    now = _now()
+    rows = conn.execute(
+        "SELECT * FROM schedule WHERE host=? AND kind='stop' AND active=1 "
+        "AND line_at > ? ORDER BY line_at ASC",
+        (host, now - SCHEDULE_STALE_AFTER),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def governing_stop(
+    conn: sqlite3.Connection, session_id: str, *, host: str | None = None
+) -> dict[str, Any] | None:
+    """The stop line a given session is steered by: the soonest active line
+    whose scope is ``global`` or matches the session's own project. None when no
+    line governs it — which is most of the time, so the nudge stays silent.
+    """
+    me = get_session(conn, session_id)
+    project = me["project"] if me else None
+    for row in active_stops(conn, host=host):
+        if row["scope"] == "global" or (project and row["scope"] == project):
+            return row
+    return None
+
+
+def winddown_due(conn: sqlite3.Connection, schedule_id: int, session_id: str, step: int) -> bool:
+    """True if ``step`` is a NEW escalation step for this session on this line
+    (strictly past the highest it has been shown), recording it when so. Step 0
+    (outside the window) is never due. The record-on-true keeps the stamp and the
+    nudge from drifting apart, exactly like ``_throttle_due``.
+    """
+    if step <= 0:
+        return False
+    row = conn.execute(
+        "SELECT step FROM schedule_deliveries WHERE schedule_id=? AND session_id=?",
+        (schedule_id, session_id),
+    ).fetchone()
+    if row is not None and row["step"] >= step:
+        return False
+    conn.execute(
+        "INSERT INTO schedule_deliveries(schedule_id, session_id, step, delivered_at) "
+        "VALUES (?,?,?,?) ON CONFLICT(schedule_id, session_id) DO UPDATE SET "
+        "step=excluded.step, delivered_at=excluded.delivered_at",
+        (schedule_id, session_id, step, _now()),
+    )
+    conn.commit()
+    return True

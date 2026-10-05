@@ -36,7 +36,7 @@ import argparse
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import __version__, config, store
@@ -345,6 +345,103 @@ def cmd_alert(args) -> int:
         f"(episode {res['episode']}) — every session here hears it at its next tool call"
     )
     print(f"{C.DIM}stand it down with: cabildo alert --clear {args.key}{C.OFF}")
+    return 0
+
+
+def _parse_stop_time(s: str) -> float | None:
+    """A wall-clock stop time (``23:00``, ``23``, ``11pm``, ``9:30pm``) as an
+    epoch for today, rolled to tomorrow if it has already passed. None if it
+    doesn't parse — the caller reports it rather than guessing a time.
+    """
+    raw = s.strip().lower().replace(" ", "")
+    ampm = None
+    if raw.endswith("am") or raw.endswith("pm"):
+        ampm, raw = raw[-2:], raw[:-2]
+    try:
+        if ":" in raw:
+            hh, mm = raw.split(":", 1)
+            hour, minute = int(hh), int(mm)
+        else:
+            hour, minute = int(raw), 0
+    except ValueError:
+        return None
+    if ampm == "pm" and hour < 12:
+        hour += 12
+    elif ampm == "am" and hour == 12:
+        hour = 0
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    now = datetime.now().astimezone()
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return target.timestamp()
+
+
+def cmd_stop(args) -> int:
+    """Set the fleet's wind-down line: the time you mean to stop.
+
+    ``cabildo stop 23:00`` tells every active session on this machine to wind
+    down as 23:00 nears — a gentle nudge at ~45 min, firmer inside 15, and once
+    past the line. Schedule-anchored, so it never fires in the afternoon; and
+    advisory, so it never blocks a tool call. ``--project`` scopes the line to
+    this repo instead of the whole fleet; ``--clear`` stands it down.
+    """
+    from .context import git_project
+
+    conn = store.connect()
+    scope = "global"
+    if getattr(args, "project", False):
+        try:
+            path, _ = git_project(os.getcwd())
+        except Exception:
+            path = None
+        if not path:
+            print("--project: not inside a known project", file=sys.stderr)
+            return 1
+        scope = path
+
+    if args.clear:
+        n = store.clear_stops(conn, scope=None if args.all else scope)
+        where = (
+            "every scope" if args.all else ("this project" if scope != "global" else "the fleet")
+        )
+        print(f"stood down {n} stop line(s) for {where}" if n else "no active stop line to clear")
+        return 0
+
+    if not args.time:
+        rows = store.active_stops(conn)
+        if not rows:
+            print(f"{C.DIM}no stop line set on {store.hostname()}{C.OFF}")
+            return 0
+        now = time.time()
+        for r in rows:
+            at = datetime.fromtimestamp(r["line_at"]).astimezone()
+            dim = C.DIM
+            delta = r["line_at"] - now
+            when = f"in {_ago(delta)}" if delta > 0 else f"{_ago(-delta)} ago"
+            label = "fleet" if r["scope"] == "global" else r["scope"]
+            print(f"{C.BOLD}{at:%H:%M}{C.OFF} ({when}) · {label}")
+            told = conn.execute(
+                "SELECT COUNT(*) n FROM schedule_deliveries WHERE schedule_id=?", (r["id"],)
+            ).fetchone()["n"]
+            print(
+                f"    {dim}set {_ago(now - r['created_at'])} ago · nudged {told} session(s){C.OFF}"
+            )
+        return 0
+
+    line_at = _parse_stop_time(args.time)
+    if line_at is None:
+        print(f"could not read a time from {args.time!r} (try 23:00, 11pm, 23)", file=sys.stderr)
+        return 1
+    row = store.set_stop(conn, line_at=line_at, scope=scope, created_by=f"@{HUMAN_HANDLE}")
+    at = datetime.fromtimestamp(row["line_at"]).astimezone()
+    where = "this project" if scope != "global" else "every session on this machine"
+    print(
+        f"stop set for {C.BOLD}{at:%H:%M}{C.OFF} ({at:%a %d %b}) — {where} winds down "
+        f"as it nears (nudge at ~45m, 15m, and past the line)"
+    )
+    print(f"{C.DIM}stand it down with: cabildo stop --clear{C.OFF}")
     return 0
 
 
@@ -1723,6 +1820,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     al.add_argument("--clear", metavar="KEY", help="stand a condition down")
     al.set_defaults(fn=cmd_alert)
+
+    st = sub.add_parser(
+        "stop", help="set the fleet's wind-down line (e.g. 'stop 23:00'); bare to show it"
+    )
+    st.add_argument("time", nargs="?", help="when you mean to stop: 23:00, 11pm, 23")
+    st.add_argument(
+        "--project", action="store_true", help="scope the line to this repo, not the whole fleet"
+    )
+    st.add_argument("--clear", action="store_true", help="stand the stop line down")
+    st.add_argument(
+        "--all", action="store_true", help="with --clear: clear every scope, not just this one"
+    )
+    st.set_defaults(fn=cmd_stop)
 
     mm = sub.add_parser("mem", help="this machine's RAM, attributed to the agents holding it")
     mm.add_argument("--loose", action="store_true", help="only what agents left behind")

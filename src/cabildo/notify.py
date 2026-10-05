@@ -170,6 +170,66 @@ def heartbeat_reason(conn: sqlite3.Connection, session_id: str, interval: float)
     )
 
 
+# The wind-down window, schedule-anchored so a nudge NEVER fires at 3pm (the
+# failure mode of a per-session clock reminder): step 1 opens HEADS_UP before the
+# line, step 2 at LAND, step 3 once the line is crossed. Minutes, not seconds, in
+# the prose because that is how a human reads "time left".
+WINDDOWN_HEADS_UP = 45 * 60.0
+WINDDOWN_LAND = 15 * 60.0
+
+
+def _winddown_step(line_at: float, now: float) -> tuple[int, int]:
+    """(escalation step, whole minutes to/past the line) for a stop at ``line_at``.
+
+    Step 0 is "outside the window" — before HEADS_UP — and is what keeps the
+    channel silent for the whole afternoon. 1 = heads-up, 2 = land it, 3 = past
+    the line. The minutes are always a positive magnitude; the sign is the step.
+    """
+    delta = line_at - now
+    minutes = int(abs(delta) // 60)
+    if delta <= 0:
+        return 3, minutes
+    if delta <= WINDDOWN_LAND:
+        return 2, minutes
+    if delta <= WINDDOWN_HEADS_UP:
+        return 1, minutes
+    return 0, minutes
+
+
+def winddown_text(conn: sqlite3.Connection, session_id: str) -> str | None:
+    """The wind-down nudge for this session, or None.
+
+    Advisory, never a block: it rides PostToolUse like the clock line, carries
+    the stop the human set for the fleet, and escalates as the line nears and
+    passes. Each escalation step lands at most once per session (see
+    store.winddown_due), and nothing is said outside the wrap-up window — so an
+    agent working at 3pm against a 23:00 stop hears nothing until 22:15.
+    """
+    row = store.governing_stop(conn, session_id)
+    if row is None:
+        return None
+    step, minutes = _winddown_step(row["line_at"], store._now())
+    if step == 0 or not store.winddown_due(conn, row["id"], session_id, step):
+        return None
+    at = datetime.datetime.fromtimestamp(row["line_at"]).astimezone()
+    hhmm = f"{at:%H:%M}"
+    where = "" if row["scope"] == "global" else " (this project)"
+    if step == 1:
+        return (
+            f"🌙 cabildo wind-down: ~{minutes} min to your {hhmm} stop{where}. Good "
+            "point to pick a finishing task rather than start a big one."
+        )
+    if step == 2:
+        return (
+            f"🌙 cabildo wind-down: ~{minutes} min to your {hhmm} stop{where}. Land "
+            "what you have — don't start anything big now."
+        )
+    return (
+        f"🌙 cabildo wind-down: it's past your {hhmm} stop{where} ({minutes} min over). "
+        "Wrap up what's in flight, or set a new line with `cabildo stop <time>`."
+    )
+
+
 def _join(*parts: str | None) -> str | None:
     """Stitch several injections into one additionalContext blob, dropping the
     silent ones. Hooks emit at most one string, so anything with something to
