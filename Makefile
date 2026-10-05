@@ -1,4 +1,8 @@
-# cabildo -- task runner. uv is the only tool needed; the package is stdlib-only at runtime.
+# cabildo -- human task verbs. These are thin aliases: the CI-graded tasks
+# (lint/format-check/typecheck/test/docs/build) delegate to the matching moon
+# task, so the command + its inputs/outputs live in ONE place (moon.yml) and
+# `make` runs exactly what CI runs, with moon's caching. Only the verbs moon has
+# no task for (format = write, bump, install*, viewer, clean) run directly here.
 # One-time setup after cloning:  make install-hooks
 .DEFAULT_GOAL := help
 .PHONY: help install install-hooks format lint typecheck test check bump docs viewer build clean
@@ -19,31 +23,31 @@ format: ## auto-format + autofix lint (ruff)
 	uv run ruff format src tests
 	uv run ruff check --fix src tests
 
-lint: ## lint (ruff) -- same as CI
-	uv run ruff check src tests
+lint: ## lint (ruff) -- the CI :lint task
+	moon run :lint
 
-format-check: ## verify formatting (ruff) -- same as CI; run `make format` to fix
-	uv run ruff format --check src tests
+format-check: ## verify formatting (ruff) -- the CI :format-check task; run `make format` to fix
+	moon run :format-check
 
-typecheck: ## type-check (pyright) -- same as CI
-	uv run pyright
+typecheck: ## type-check (pyright) -- the CI :typecheck task
+	moon run :typecheck
 
-test: ## run the test suite
-	uv run pytest -q
+test: ## run the test suite -- the CI :test task
+	moon run :test
 
 check: lint format-check typecheck test ## the full CI test stage: lint + format-check + typecheck + test
 
 bump: ## bump version in pyproject.toml -- TYPE=patch|minor|major (default patch)
 	./scripts/bump-version $(or $(TYPE),patch)
 
-docs: ## build docs strictly (as CI / Pages do)
-	uv run --extra docs mkdocs build --strict
+docs: ## build docs strictly (as CI / Pages do) -- the CI :docs task
+	moon run :docs
 
 viewer: ## run the local web viewer on http://127.0.0.1:8787
 	uv run cabildo viewer --open
 
-build: ## build sdist + wheel into dist/
-	uv build --out-dir dist
+build: ## build sdist + wheel into dist/ -- the CI :build task
+	moon run :build
 
 clean: ## remove build + test caches
 	rm -rf dist build *.egg-info .pytest_cache .ruff_cache site
