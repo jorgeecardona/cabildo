@@ -247,13 +247,69 @@ def remove_peer(name: str, peer: str) -> list[str]:
     return peers_of(n)
 
 
+# Short TTL on the per-project [link] config read, so peers_visible — called on
+# every gated bus op — doesn't re-read the same TOML files dozens of times a
+# second. Same cheap-cache shape as project_key's.
+_LINK_TTL = 10.0
+_link_cache: dict[str, tuple[float, frozenset[str], bool]] = {}
+
+
+def _link_cfg(name: str) -> tuple[frozenset[str], bool]:
+    """(friends, open) declared by project `name` in its repo-local
+    `.cabildo/config.toml` (read via its registered root) merged with the global
+    `[project.<name>]` section. Empty/False when it declares nothing or its root
+    is unknown. Cached briefly — config is advisory and this is a hot path.
+    """
+    now = time.time()
+    hit = _link_cache.get(name)
+    if hit and now - hit[0] < _LINK_TTL:
+        return hit[1], hit[2]
+    friends: frozenset[str] = frozenset()
+    is_open = False
+    try:
+        from . import config
+
+        roots = roots_of(name)
+        cwd = roots[0] if roots else None
+        friends = frozenset(config.link_friends(cwd, name))
+        is_open = config.link_open(cwd, name)
+    except Exception:
+        pass
+    _link_cache[name] = (now, friends, is_open)
+    return friends, is_open
+
+
 def peers_visible(name: Any) -> set[str]:
-    """The set of projects an agent in `name` may see on the bus: itself + its
-    linked peers. Used to enforce cross-project isolation. Takes a name or a
-    path, like every other lookup here.
+    """The set of projects an agent in `name` may see and talk to on the bus:
+    itself, plus every project it is linked to. Used to enforce cross-project
+    isolation. Takes a name or a path, like every other lookup here.
+
+    Three ways a project B joins A's set, isolation-preserving by construction:
+      * a legacy symmetric `cabildo project --link` peer (cloud.json);
+      * a MUTUAL config friendship — A names B in `[link].friends` AND B names A
+        back (so no project can unilaterally join another's bus by editing only
+        its own file); `[link].open = true` is "friends = everyone", satisfying a
+        project's own half of every link;
+      * B is open — an open project accepts every project, so anyone may reach it.
+
+    Config friends are resolved across the registered projects, so an open or
+    befriending project must be known to the registry (via `cabildo add`) or
+    declared in the global `[project.<name>]` section to be reachable.
     """
     n = project_key(name)
-    return {n} | set(peers_of(n)) if n else set()
+    if not n:
+        return set()
+    visible = {n} | set(peers_of(n))  # legacy cloud.json symmetric links
+    my_friends, my_open = _link_cfg(n)
+    for b in set(project_registry()) | visible:
+        if b == n:
+            continue
+        b_friends, b_open = _link_cfg(b)
+        a_lists_b = my_open or b in my_friends
+        b_lists_a = b_open or n in b_friends
+        if b_open or (a_lists_b and b_lists_a):
+            visible.add(b)
+    return visible
 
 
 # --------------------------------------------------------------------------- #

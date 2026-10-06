@@ -29,6 +29,7 @@ today; the rest are read generically and wired one call site at a time):
     [project] name = "..."                   # repo-local identity pin (git_project)
     [project.<name>] isolated = true         # global: catch-all gets no channel
     [grants]  approver = "human" | "project"  # who decides cross-project requests
+    [link]    friends = [...], open = true    # mutual bus visibility (cloud.peers_visible)
     [push]        mode = "auto" | "manual"     # guard._deny_push
     [destructive] mode = "guard" | "off"        # guard._deny_destructive_git
     [trunk]   mode = "guard" | "off", names   # guard._deny_commit_on_trunk
@@ -361,6 +362,31 @@ def timeline_heartbeat(cwd: str | None = None, project_name: str | None = None) 
         return float(val)
     except (TypeError, ValueError):
         return 0.0
+
+
+def link_friends(cwd: str | None = None, project_name: str | None = None) -> set[str]:
+    """``[link].friends`` for this project: the other projects it names as friends,
+    lowercased. Links are MUTUAL — this list is only half of a link; the other
+    project must name this one back (or be ``[link].open``) before the two can see
+    or message each other on the bus (see cloud.peers_visible). Empty by default,
+    so a project stays isolated until it opts in. A non-list value reads as empty.
+    """
+    node = get(cwd, "link", "friends", project_name=project_name, default=None)
+    if isinstance(node, (list, tuple)):
+        return {str(n).strip().lower() for n in node if str(n).strip()}
+    return set()
+
+
+def link_open(cwd: str | None = None, project_name: str | None = None) -> bool:
+    """``[link].open`` for this project: default False.
+
+    True means "friends = everyone" — the project accepts every other project on
+    the bus without naming them, for a shared/open project others may freely reach.
+    It still composes with the mutual rule: an open project satisfies its own half
+    of every link automatically, so anyone who names it (or is itself open) links.
+    """
+    val = get(cwd, "link", "open", project_name=project_name, default=False)
+    return val is True or str(val).strip().lower() in ("1", "true", "yes", "on")
 
 
 def watch_topic(cwd: str | None = None, project_name: str | None = None) -> str | None:
