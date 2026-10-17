@@ -35,11 +35,13 @@ Seven conventions are enforced, all scoped to the session's own project:
     because a checkout has one HEAD and moving it commits the next agent onto a
     branch it never chose. A worktree has its own HEAD and is the way out.
   * committing on a protected trunk — ``git commit`` while ``main``/``master``
-    (or ``[trunk].names``) is checked out — is denied by default, because the
-    daemon can only fast-forward a local trunk and a commit made straight on it
-    diverges it from origin, drifting further behind every push to origin until
-    ff can no longer reconcile it. Branch and push from there instead; opt out
-    with ``[trunk].mode = "off"``.
+    (or ``[trunk].names``) is checked out — is denied only where a repo opts in
+    with ``[trunk].mode = "guard"``, because the daemon can only fast-forward a
+    local trunk and a commit made straight on it diverges it from origin,
+    drifting further behind every push to origin until ff can no longer reconcile
+    it. It is off by default: a plain commit on ``main`` is the ordinary
+    trunk-based flow, and the guard earns its cost only under the daemon-advances-
+    origin/main-from-lanes model. Where on, branch and push from there instead.
 
 The last four are one story: concurrent agents on one repo collide at commit
 and push, and every recovery from that collision (reset, revert, force-push)
@@ -594,11 +596,12 @@ def _deny_commit_on_trunk(me: sqlite3.Row, command: str) -> str | None:
     is the one cheap point in that sequence; every later fix (reset, rebase,
     force-push) destroys more than the divergence did.
 
-    The escape hatch is the intended workflow: branch, commit on the lane, push
-    it to origin from there. A repo that commits on its trunk on purpose opts out
-    with ``[trunk].mode = "off"``.
+    So the guard is off by default — a plain commit on ``main`` is the ordinary
+    trunk-based flow — and a repo that runs the daemon-advances-origin/main model
+    opts in with ``[trunk].mode = "guard"``. Where on, the intended workflow is
+    the escape hatch: branch, commit on the lane, push it to origin from there.
     """
-    if not me["cwd"] or config.trunk_mode(me["cwd"], me["project_name"]) == "off":
+    if not me["cwd"] or config.trunk_mode(me["cwd"], me["project_name"]) != "guard":
         return None
     trunk = config.trunk_names(me["cwd"], me["project_name"])
     # Judge each commit by the branch of the directory it ACTUALLY targets (its

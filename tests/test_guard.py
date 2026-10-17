@@ -315,7 +315,24 @@ def test_push_lock_still_enforced(conn, clock):
 # --------------------------------------------------------------------------- #
 # Committing on a protected trunk — diverges local main from origin
 # --------------------------------------------------------------------------- #
-def test_commit_on_main_is_denied(conn, tmp_path):
+@pytest.fixture
+def trunk_guard(home):
+    """Opt the `alpha` project into the trunk guard, which is off by default."""
+    (home / "config.toml").write_text('[project.alpha]\ntrunk = { mode = "guard" }\n')
+    return home
+
+
+def test_commit_on_main_allowed_by_default(conn, tmp_path):
+    # The trunk guard is opt-in: with no config, a plain commit on main — the
+    # ordinary trunk-based flow — is allowed.
+    repo = _git_repo(tmp_path / "repo", branch="main")
+    store.register_session(
+        conn, "a", cwd=str(repo), project=str(repo), project_name="alpha", claude_pid=1000
+    )
+    assert _bash(conn, "a", "git commit -m x") is None
+
+
+def test_commit_on_main_is_denied(conn, tmp_path, trunk_guard):
     repo = _git_repo(tmp_path / "repo", branch="main")
     store.register_session(
         conn, "a", cwd=str(repo), project=str(repo), project_name="alpha", claude_pid=1000
@@ -327,7 +344,7 @@ def test_commit_on_main_is_denied(conn, tmp_path):
     assert "git switch -c" in reason or "worktree add" in reason
 
 
-def test_commit_on_master_is_denied(conn, tmp_path):
+def test_commit_on_master_is_denied(conn, tmp_path, trunk_guard):
     repo = _git_repo(tmp_path / "repo", branch="master")
     store.register_session(
         conn, "a", cwd=str(repo), project=str(repo), project_name="alpha", claude_pid=1000
@@ -335,7 +352,7 @@ def test_commit_on_master_is_denied(conn, tmp_path):
     assert _bash(conn, "a", "git commit -m x") is not None
 
 
-def test_commit_on_a_lane_is_allowed(conn, tmp_path):
+def test_commit_on_a_lane_is_allowed(conn, tmp_path, trunk_guard):
     repo = _git_repo(tmp_path / "repo", branch="feature-x")
     store.register_session(
         conn, "a", cwd=str(repo), project=str(repo), project_name="alpha", claude_pid=1000
@@ -345,7 +362,7 @@ def test_commit_on_a_lane_is_allowed(conn, tmp_path):
     assert _bash(conn, "a", "git commit --amend --no-edit") is None
 
 
-def test_commit_into_a_lane_from_a_main_rooted_session_is_allowed(conn, tmp_path):
+def test_commit_into_a_lane_from_a_main_rooted_session_is_allowed(conn, tmp_path, trunk_guard):
     # The bug: the guard judged by where the SESSION was launched (the main
     # checkout, on main), so a commit targeting a lane worktree was blocked. It
     # must judge by where the commit actually runs (its -C / a lone cd).
@@ -359,7 +376,7 @@ def test_commit_into_a_lane_from_a_main_rooted_session_is_allowed(conn, tmp_path
     assert _bash(conn, "a", "git commit -m x") is not None  # plain commit runs in main → denied
 
 
-def test_commit_dash_c_onto_another_main_checkout_is_denied(conn, tmp_path):
+def test_commit_dash_c_onto_another_main_checkout_is_denied(conn, tmp_path, trunk_guard):
     # -C must not be a loophole: targeting another checkout that is itself on main
     # is still committing on trunk.
     main = _git_repo(tmp_path / "main", branch="main")
@@ -370,7 +387,7 @@ def test_commit_dash_c_onto_another_main_checkout_is_denied(conn, tmp_path):
     assert _bash(conn, "a", f"git -C {other} commit -m x") is not None
 
 
-def test_dry_run_commit_on_main_is_allowed(conn, tmp_path):
+def test_dry_run_commit_on_main_is_allowed(conn, tmp_path, trunk_guard):
     # --dry-run writes nothing, so it does not strand the branch.
     repo = _git_repo(tmp_path / "repo", branch="main")
     store.register_session(
@@ -379,7 +396,7 @@ def test_dry_run_commit_on_main_is_allowed(conn, tmp_path):
     assert _bash(conn, "a", "git commit --dry-run") is None
 
 
-def test_amend_on_main_is_denied(conn, tmp_path):
+def test_amend_on_main_is_denied(conn, tmp_path, trunk_guard):
     # --amend still rewrites the trunk tip, so it diverges just the same.
     repo = _git_repo(tmp_path / "repo", branch="main")
     store.register_session(
@@ -388,14 +405,14 @@ def test_amend_on_main_is_denied(conn, tmp_path):
     assert _bash(conn, "a", "git commit --amend --no-edit") is not None
 
 
-def test_trunk_off_mode_bypasses_the_guard(conn, tmp_path, home):
+def test_trunk_off_mode_bypasses_the_guard(conn, tmp_path, home, trunk_guard):
     repo = _git_repo(tmp_path / "repo", branch="main")
     store.register_session(
         conn, "a", cwd=str(repo), project=str(repo), project_name="alpha", claude_pid=1000
     )
-    assert _bash(conn, "a", "git commit -m x") is not None  # baseline: denied
+    assert _bash(conn, "a", "git commit -m x") is not None  # baseline: opted into guard
     (home / "config.toml").write_text('[project.alpha]\ntrunk = { mode = "off" }\n')
-    assert _bash(conn, "a", "git commit -m x") is None  # opted out
+    assert _bash(conn, "a", "git commit -m x") is None  # opted back out
 
 
 def test_trunk_names_override(conn, tmp_path, home):
@@ -404,7 +421,9 @@ def test_trunk_names_override(conn, tmp_path, home):
     store.register_session(
         conn, "a", cwd=str(repo), project=str(repo), project_name="alpha", claude_pid=1000
     )
-    (home / "config.toml").write_text('[project.alpha]\ntrunk = { names = ["trunk"] }\n')
+    (home / "config.toml").write_text(
+        '[project.alpha]\ntrunk = { mode = "guard", names = ["trunk"] }\n'
+    )
     assert _bash(conn, "a", "git commit -m x") is not None  # `trunk` protected
     subprocess.run(["git", "-C", str(repo), "symbolic-ref", "HEAD", "refs/heads/main"], check=True)
     assert _bash(conn, "a", "git commit -m x") is None  # main no longer in the set

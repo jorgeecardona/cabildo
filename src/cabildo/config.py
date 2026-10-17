@@ -32,7 +32,7 @@ today; the rest are read generically and wired one call site at a time):
     [link]    friends = [...], open = true    # mutual bus visibility (cloud.peers_visible)
     [push]        mode = "auto" | "manual"     # guard._deny_push
     [destructive] mode = "guard" | "off"        # guard._deny_destructive_git
-    [trunk]   mode = "guard" | "off", names   # guard._deny_commit_on_trunk
+    [trunk]   mode = "off" | "guard", names   # guard._deny_commit_on_trunk (opt-in)
     [watch]   topic, interval, tail         # cli.cmd_watch
     [uplink]  level = "none" | ...          # cloud
     [notify]  enabled, quiet_hours          # desktop / notify
@@ -256,20 +256,24 @@ def destructive_mode(cwd: str | None = None, project_name: str | None = None) ->
 
 
 def trunk_mode(cwd: str | None = None, project_name: str | None = None) -> str:
-    """``[trunk].mode`` for this project: "guard" (the default) or "off".
+    """``[trunk].mode`` for this project: "off" (the default) or "guard".
 
     "guard" denies an agent committing directly on a protected trunk branch
     (``main``/``master``, or ``[trunk].names``). The daemon advances
     ``origin/main`` from lanes and cannot fast-forward a checkout that carries
     its own commits, so a commit made straight on local ``main`` diverges it
     from origin and drifts one commit further per push to origin until ff can no
-    longer reconcile it. Work belongs on a lane pushed to origin via
-    ``request push``; ``main`` stays a ref the daemon keeps current. "off" turns
-    the guard off for a repo
-    that commits on its trunk on purpose. An unknown value falls back to "guard".
+    longer reconcile it. Work then belongs on a lane pushed to origin via
+    ``request push``; ``main`` stays a ref the daemon keeps current.
+
+    It is "off" by default: a plain commit on ``main`` is the ordinary flow for a
+    trunk-based solo repo, and the guard only earns its cost where the daemon is
+    actually advancing ``origin/main`` from lanes under concurrent agents — a
+    repo opts in with ``[trunk].mode = "guard"`` when it runs that way. An
+    unknown value falls back to "off".
     """
-    mode = str(get(cwd, "trunk", "mode", project_name=project_name, default="guard")).lower()
-    return mode if mode in ("guard", "off") else "guard"
+    mode = str(get(cwd, "trunk", "mode", project_name=project_name, default="off")).lower()
+    return mode if mode in ("guard", "off") else "off"
 
 
 def trunk_names(cwd: str | None = None, project_name: str | None = None) -> set[str]:
