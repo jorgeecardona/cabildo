@@ -1,7 +1,7 @@
 """Decision logic for the PreToolUse guard hook: turn advisory claims into
 enforced ones at the tool-call boundary.
 
-Six conventions are enforced, all scoped to the session's own project:
+Seven conventions are enforced, all scoped to the session's own project:
 
   * ``file:<path>`` — a write to a matching path is denied, whether it arrives
     as Edit/MultiEdit/Write/NotebookEdit, a Codex ``apply_patch``, or a shell
@@ -16,6 +16,12 @@ Six conventions are enforced, all scoped to the session's own project:
     and *also* denied while any other agent is simply live on the project, with
     the reason pointing at ``request push``. A lease you hold yourself is the
     deliberate escape hatch.
+  * force/delete push — ``git push --force``/``-f``/``--force-with-lease``/
+    ``--delete``/``+<refspec>`` — denied by default whether or not a peer is live,
+    because it rewrites or drops a remote ref and destroys committed work that
+    lives only on the remote, which no fetch+rebase can recover. A repo opts out
+    with ``[destructive].mode = "off"`` — a force-push is the remote-side member
+    of the destructive family.
   * blanket staging in a shared working tree — ``git add -A``, ``git add .``,
     ``git commit -a`` — is denied while another agent shares the same checkout,
     because it sweeps their half-written files into your commit.
@@ -231,6 +237,42 @@ def _destroys_tree(argv: list[str]) -> str | None:
     return None
 
 
+def _force_pushes(argv: list[str]) -> str | None:
+    """Label for a ``git push`` that rewrites or deletes a remote ref, else None.
+
+    This is the one git op that destroys another agent's already-*committed*
+    work: a plain push is rejected non-fast-forward and recovered with
+    fetch+rebase, but ``--force`` overwrites the remote tip and ``--delete`` drops
+    the ref outright, discarding commits that live only on the remote. Classified
+    on tokens, like its siblings.
+
+      * ``--force`` / ``-f`` (bundled short flags too, ``-fv``).
+      * ``--force-with-lease`` (``=...`` form included): safer — it refuses a
+        stale overwrite — but it still discards the peer commits you *did* fetch,
+        so it is denied and opted out of deliberately, not reached for by habit.
+      * ``--delete`` / ``-d``.
+      * a force refspec, ``+<src>[:<dst>]`` (``git push origin +main``).
+    """
+    sub, args = _git_subcommand(argv)
+    if sub != "push":
+        return None
+    for a in args:
+        if a in ("--force", "--delete"):
+            return f"git push {a}"
+        if a == "--force-with-lease" or a.startswith("--force-with-lease="):
+            return "git push --force-with-lease"
+        if a.startswith("-") and not a.startswith("--") and ("f" in a[1:] or a == "-d"):
+            return "git push -f" if "f" in a[1:] else "git push --delete"
+    return next(
+        (
+            "git push +<refspec>"
+            for a in args
+            if not a.startswith("-") and a.startswith("+") and len(a) > 1
+        ),
+        None,
+    )
+
+
 def _held_by_other(conn: sqlite3.Connection, resource: str, session_id: str) -> sqlite3.Row | None:
     row = conn.execute(
         "SELECT * FROM claims WHERE resource=? AND expires_at>? AND holder_session!=?",
@@ -291,6 +333,29 @@ def _deny_push(conn: sqlite3.Connection, me: sqlite3.Row, command: str) -> str |
         "leave no tracked changes behind. It DMs you the result. If you really "
         f"must push by hand, take `{resource}` with `claim` first — that denies "
         "the others and makes the rebase yours to own."
+    )
+
+
+def _deny_force_push(me: sqlite3.Row, command: str) -> str | None:
+    """Deny a force/delete push. Denied by default whether or not a peer is live:
+    it destroys committed work on the remote, which no fetch+rebase can bring
+    back, so it is dangerous even to a lone agent. A repo opts out with
+    ``[destructive].mode = "off"`` — the same switch that governs working-tree
+    discards, because a force-push is the remote-side member of that family.
+    """
+    label = next((lbl for argv in _argvs(command) if (lbl := _force_pushes(argv))), None)
+    if label is None:
+        return None
+    if config.destructive_mode(me["cwd"], me["project_name"]) == "off":
+        return None  # this project opted out (.cabildo/config.toml)
+    return (
+        f"cabildo: `{label}` rewrites or deletes a ref on the remote, discarding commits "
+        f"that live only there — including a peer's already-pushed work, which no "
+        f"fetch+rebase can bring back. Recover a rejected push the non-destructive way "
+        f"instead:\n"
+        f"    git fetch origin && git rebase origin/<branch> && git push origin HEAD:<branch>\n"
+        f"If you genuinely must rewrite the remote (e.g. your own feature branch), opt out "
+        f'per-repo with `[destructive].mode = "off"` in .cabildo/config.toml.'
     )
 
 
@@ -728,7 +793,8 @@ def deny_reason(
     if tool_name == "Bash" and me["project_name"]:
         command = tool_input.get("command") or ""
         return (
-            _deny_push(conn, me, command)
+            _deny_force_push(me, command)
+            or _deny_push(conn, me, command)
             or _deny_blanket_stage(conn, me, command)
             or _deny_branch_switch(conn, me, command)
             or _deny_destructive_git(conn, me, command)

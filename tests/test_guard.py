@@ -461,6 +461,57 @@ def test_push_manual_mode_bypasses_the_guard(conn, clock, home):
     assert _bash(conn, "a", "git push origin main") is None  # opted out
 
 
+# --------------------------------------------------------------------------- #
+# Force / delete push — destroys committed work on the remote
+# --------------------------------------------------------------------------- #
+FORCE_PUSH = [
+    "git push --force origin main",
+    "git push -f origin main",
+    "git push -fv origin main",  # bundled short flags
+    "git push --force-with-lease origin main",
+    "git push --force-with-lease=main origin main",
+    "git push --delete origin topic",
+    "git push -d origin topic",
+    "git push origin +main",  # force refspec, no colon
+    "git push origin +refs/heads/main:refs/heads/main",
+    "cd sub && git push --force origin main",  # found past a chain separator
+]
+
+
+@pytest.mark.parametrize("command", FORCE_PUSH)
+def test_force_push_denied_even_when_alone(conn, clock, command):
+    # Denied by default whether or not a peer is here: it discards committed work
+    # on the remote that no fetch+rebase can bring back.
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    reason = _bash(conn, "a", command)
+    assert reason is not None, command
+    assert "remote" in reason and "fetch" in reason
+
+
+def test_force_push_off_mode_bypasses_the_guard(conn, clock, home):
+    # A force-push is the remote-side member of the destructive family, so the
+    # same `[destructive].mode = off` switch opts out of it.
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    assert _bash(conn, "a", "git push --force origin main") is not None  # baseline
+    (home / "config.toml").write_text('[project.alpha]\ndestructive = { mode = "off" }\n')
+    assert _bash(conn, "a", "git push --force origin main") is None  # opted out
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push origin main",  # plain push is not a force-push
+        "git push origin HEAD:main",
+        'git commit -m "use --force carefully"',  # the flag in a message
+    ],
+)
+def test_non_force_push_not_caught_by_force_guard(conn, clock, command):
+    # Alone, so the plain-push guard stays silent too: only the force guard is
+    # under test here, and it must not fire on any of these.
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    assert _bash(conn, "a", command) is None, command
+
+
 def test_push_denial_survives_an_expired_lease(conn, clock):
     # The lease lapsing must not turn into a free-for-all: peers are still here.
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
