@@ -125,11 +125,6 @@ def pre_tool_use(data: dict) -> None:
     conn = store.connect()
     try:
         reason = guard.deny_reason(conn, session_id, tool_name, tool_input)
-        if not reason:
-            try:
-                guard.autoclaim_on_edit(conn, session_id, tool_name, tool_input)
-            except Exception:
-                pass
     finally:
         conn.close()
     if not reason:

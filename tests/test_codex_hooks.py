@@ -32,31 +32,27 @@ def test_session_start_registers_as_codex(conn, monkeypatch):
     assert row["owner_pid"] == 333  # bound to the codex process, not the hook's pid
 
 
-def test_pre_tool_use_denies_on_conflicting_claim(conn, capsys):
+def test_pre_tool_use_denies_force_push(conn, capsys):
     store.register_session(
         conn, "cx", client="codex", owner_pid=1, project="/repo/x", project_name="x"
     )
-    store.register_session(conn, "peer", claude_pid=2, project="/repo/x", project_name="x")
-    store.acquire_claim(
-        conn,
-        resource="file:a.py",
-        holder_session="peer",
-        holder_handle=None,
-        project="/repo/x",
-        ttl_seconds=300,
-        note=None,
-    )
     codex_hooks.pre_tool_use(
-        {"session_id": "cx", "tool_name": "Edit", "tool_input": {"file_path": "/repo/x/a.py"}}
+        {
+            "session_id": "cx",
+            "tool_name": "Bash",
+            "tool_input": {"command": "git push --force origin main"},
+        }
     )
     obj = json.loads(capsys.readouterr().out)
     hso = obj["hookSpecificOutput"]
     assert hso["hookEventName"] == "PreToolUse"
     assert hso["permissionDecision"] == "deny"
-    assert "file:a.py" in hso["permissionDecisionReason"]
+    assert "force" in hso["permissionDecisionReason"]
 
 
-def test_pre_tool_use_allows_and_autoclaims(conn, capsys):
+def test_pre_tool_use_allows_edits(conn, capsys):
+    # File writes are no longer gated: an Edit is allowed, takes no lease, and a
+    # peer reaching for the same file is allowed too.
     store.register_session(
         conn, "cx", client="codex", owner_pid=1, project="/repo/x", project_name="x"
     )
@@ -64,9 +60,8 @@ def test_pre_tool_use_allows_and_autoclaims(conn, capsys):
         {"session_id": "cx", "tool_name": "Edit", "tool_input": {"file_path": "/repo/x/b.py"}}
     )
     assert capsys.readouterr().out == ""  # allowed → no deny emitted
-    # the allowed edit took a lease, so a peer reaching for the same file is denied
     store.register_session(conn, "peer", claude_pid=2, project="/repo/x", project_name="x")
-    assert guard.deny_reason(conn, "peer", "Edit", {"file_path": "/repo/x/b.py"})
+    assert guard.deny_reason(conn, "peer", "Edit", {"file_path": "/repo/x/b.py"}) is None
 
 
 def test_user_prompt_submit_injects_unread(conn, capsys, monkeypatch):
@@ -119,33 +114,28 @@ def test_hook_command_str_includes_event():
 
 
 # --------------------------------------------------------------------------- #
-# Cross-client claim visibility (the #10 acceptance item)
+# Cross-client coordination (the #10 acceptance item): a Claude session and a
+# Codex session sharing one checkout see each other as peers, so the
+# shared-checkout rule fires in both directions.
 # --------------------------------------------------------------------------- #
-def test_claim_visibility_is_mutual_across_clients(conn):
-    store.register_session(conn, "claude-A", claude_pid=111, project="/repo/x", project_name="x")
+def test_shared_checkout_is_enforced_across_clients(conn):
     store.register_session(
-        conn, "codex-B", client="codex", owner_pid=222, project="/repo/x", project_name="x"
+        conn, "claude-A", claude_pid=111, cwd="/repo/x", project="/repo/x", project_name="x"
     )
-    # Codex holds the file → Claude is denied.
-    store.acquire_claim(
+    store.set_handle(conn, "claude-A", "alice")
+    store.register_session(
         conn,
-        resource="file:shared.py",
-        holder_session="codex-B",
-        holder_handle=None,
+        "codex-B",
+        client="codex",
+        owner_pid=222,
+        cwd="/repo/x",
         project="/repo/x",
-        ttl_seconds=300,
-        note=None,
+        project_name="x",
     )
-    assert guard.deny_reason(conn, "claude-A", "Edit", {"file_path": "/repo/x/shared.py"})
-    # Reverse: Claude holds it → Codex is denied.
-    store.release_claim(conn, resource="file:shared.py", holder_session="codex-B")
-    store.acquire_claim(
-        conn,
-        resource="file:shared.py",
-        holder_session="claude-A",
-        holder_handle=None,
-        project="/repo/x",
-        ttl_seconds=300,
-        note=None,
-    )
-    assert guard.deny_reason(conn, "codex-B", "Edit", {"file_path": "/repo/x/shared.py"})
+    store.set_handle(conn, "codex-B", "bob")
+    # Claude commits in the shared checkout → denied, naming the Codex peer.
+    reason = guard.deny_reason(conn, "claude-A", "Bash", {"command": "git commit -am x"})
+    assert reason is not None and "@bob" in reason
+    # Reverse: Codex commits → denied, naming the Claude peer.
+    reason = guard.deny_reason(conn, "codex-B", "Bash", {"command": "git commit -am x"})
+    assert reason is not None and "@alice" in reason

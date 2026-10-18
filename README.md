@@ -166,12 +166,14 @@ conditions, and `PostToolUse` injects unread **urgent** mail mid-turn. Explicit
 | guard | Claude | Codex |
 |---|---|---|
 | claim visibility (`claims` table) | yes | yes — shared, mutual |
-| `PreToolUse` deny on `git push`/blanket-stage/branch-switch/destructive-git | enforced | enforced when the shell tool presents as `Bash`+`command` |
+| `PreToolUse` deny on `git push`/force-push/destructive-git/shared-checkout mutation | enforced | enforced when the shell tool presents as `Bash`+`command` |
 | MCP tool-call deny | enforced | enforced (`PreToolUse` fires for `mcp__*`) |
-| `file:` lease on edits | enforced (Edit/Write) | enforced — every path in the `apply_patch` envelope (add/update/delete, both ends of a move) |
+| `file:` lease on edits | advisory only (no longer blocks an edit) | advisory only |
 
-Claims themselves are advisory leases; the `PreToolUse` deny is the enforcement,
-and it blocks via `permissionDecision:"deny"` on both clients.
+Claims themselves are advisory leases; the `PreToolUse` deny is the enforcement
+for the git guards, and it blocks via `permissionDecision:"deny"` on both
+clients. File writes are no longer gated per-file — agents coordinate by
+isolating in their own git worktrees, which the shared-checkout guard points at.
 
 **Smoke test (two real clients).** In two terminals:
 
@@ -488,8 +490,8 @@ reached until its next tool call or turn boundary. cabildo uses six events:
 |---|---|
 | `SessionStart` | register on the bus, bind `session_id ⇄ claude_pid`, inject a banner (who you are, peers, locks, unread) |
 | `UserPromptSubmit` | refresh liveness, inject a one-line `📬 N unread …` notice (silent when nothing) |
-| `PostToolUse` (`*`) | **mid-turn delivery**: inject unread URGENT mail at the next tool-call boundary. Each message injects once (tracked in `deliveries`; delivery ≠ read). Ordinary mail never interrupts a turn. Also keeps `last_seen` fresh during long autonomous turns. |
-| `PreToolUse` (`Bash\|Edit\|Write\|NotebookEdit`) | **claims enforcement, with teeth**: (a) **auto-claim on edit** — an allowed Edit/Write silently takes a short lease (`file:<path>`, 10-min TTL, refreshed per edit) so the *next* agent to touch that file is denied, without anyone remembering to `claim`; (b) deny `git push` while another session holds `push:<project>` **or** while any other agent is simply live on the project, pointing at `request push` (a lease you hold yourself is the escape hatch); (c) deny blanket staging (`add -A`, `add .`, `commit -a`) when another agent shares the same *checkout* — worktrees have their own index and are exempt; (d) deny tree-destroying git (`reset --hard`, discarding `checkout`/`restore`, `clean -f`, `stash`) while any other agent is active on the project, since those wipe the whole shared tree's uncommitted work; (e) deny **branch switching** (`checkout`/`switch` to a ref, `-b`, `branch -f`) while another agent stands in the *same checkout* — a checkout has one HEAD, so switching it moves everyone in that directory without telling them, and the next one commits onto a branch it never chose. Worktrees have their own HEAD and are exempt, which is also the way out. Deny reasons name the holder/peers so the agent negotiates on the bus. Logic in `src/cabildo/guard.py`. |
+| `PostToolUse` (`*`) | **mid-turn delivery**: inject unread URGENT mail at the next tool-call boundary. Each message injects once (tracked in `deliveries`; delivery ≠ read). Ordinary mail never interrupts a turn. Also keeps `last_seen` fresh during long autonomous turns, and injects the **fetch+rebase recipe** when a `git push` was just rejected non-fast-forward (so the agent recovers without `reset --hard`/`--force`). |
+| `PreToolUse` (`Bash`) | **git-collision enforcement**: (a) deny force/delete push (`push --force`/`-f`/`--force-with-lease`/`--delete`/`+refspec`) always — it destroys committed work on the remote; (b) deny `git push` while another session holds `push:<project>` **or** while any other agent is simply live on the project, pointing at `request push` (a lease you hold yourself is the escape hatch); (c) deny tree-destroying git (`reset --hard`, discarding `checkout`/`restore`, `clean -f`, tree-wide `stash`) whether or not a peer is active, since those discard uncommitted work the agent can't bring back; (d) deny any index/tree/HEAD-mutating git (`add`, `commit`, `checkout`/`switch`, `merge`, `rebase`, `branch -f`, …) while another agent stands in the *same checkout* — one index, one HEAD to collide on — pointing at `git worktree add`; (e) deny a commit on a protected trunk where a repo opts in with `[trunk].mode = "guard"`. (a), (c), (e) opt out per-repo via config. Deny reasons name the holder/peers so the agent negotiates on the bus. A rejected push is coached (not pre-blocked) by the `PostToolUse` recipe. Logic in `src/cabildo/guard.py`. |
 | `Stop` | refuse to go idle with unread URGENT mail — delivery is pull-based, so an idle agent is unreachable; the hook stops the stopping instead |
 | `SessionEnd` | deregister, drop the session's locks |
 

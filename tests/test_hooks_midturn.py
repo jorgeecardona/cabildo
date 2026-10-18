@@ -101,10 +101,7 @@ def test_holder_may_push_and_other_commands_pass(conn):
     _claim(conn, "a" * 8, "push:alpha")
 
     assert guard.deny_reason(conn, "a" * 8, "Bash", {"command": "git push"}) is None
-    assert (
-        guard.deny_reason(conn, "b" * 8, "Bash", {"command": "git status && git commit -m x"})
-        is None
-    )
+    assert guard.deny_reason(conn, "b" * 8, "Bash", {"command": "git status && git diff"}) is None
     # `push` as data, not as a git subcommand:
     assert (
         guard.deny_reason(conn, "b" * 8, "Bash", {"command": "echo 'git push is guarded'"}) is None
@@ -141,22 +138,20 @@ def test_expired_lock_does_not_block_a_lone_agent(conn):
     assert guard.deny_reason(conn, "b" * 8, "Bash", {"command": "git push"}) is None
 
 
-def test_file_claim_blocks_edit_including_globs(conn):
+def test_file_claims_no_longer_block_edits(conn):
+    # File leases were removed: coordination is by worktree, not per-file. A held
+    # `file:` claim is advisory metadata now and never denies an Edit/Write.
     make_session(conn, "a" * 8, handle="holder")
     make_session(conn, "b" * 8)
     _claim(conn, "a" * 8, "file:src/core.py")
     _claim(conn, "a" * 8, "file:hooks/*")
 
-    deny = guard.deny_reason(conn, "b" * 8, "Edit", {"file_path": "/repo/alpha/src/core.py"})
-    assert deny is not None and "@holder" in deny
-
-    deny = guard.deny_reason(conn, "b" * 8, "Write", {"file_path": "/repo/alpha/hooks/stop.py"})
-    assert deny is not None
-
-    assert guard.deny_reason(conn, "b" * 8, "Edit", {"file_path": "/repo/alpha/README.md"}) is None
-    # The holder edits their own claimed file freely.
     assert (
-        guard.deny_reason(conn, "a" * 8, "Edit", {"file_path": "/repo/alpha/src/core.py"}) is None
+        guard.deny_reason(conn, "b" * 8, "Edit", {"file_path": "/repo/alpha/src/core.py"}) is None
+    )
+    assert (
+        guard.deny_reason(conn, "b" * 8, "Write", {"file_path": "/repo/alpha/hooks/stop.py"})
+        is None
     )
 
 

@@ -65,7 +65,7 @@ target parsed from the command (placeholder when bare); on rebase conflict, `--c
 `<target>` is parsed from the push argv. NOT yet done: the same text as standing SessionStart
 guidance (optional; the at-the-moment-of-failure injection is the load-bearing half).
 
-### Phase 2 — Collapse the four shared-checkout rules into one
+### Phase 2 — Collapse the four shared-checkout rules into one (DONE)
 Replace file-lease (+ autoclaim, the shell-write parser, redirect tokenising, apply_patch path
 extraction), blanket-stage, branch-switch, and the peers-half of destructive with a single rule:
 if a live peer shares your `tree_root` and the argv is a mutating git op, deny with "get a
