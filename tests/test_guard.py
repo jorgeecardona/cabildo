@@ -789,3 +789,45 @@ def test_out_of_project_shell_write_is_not_auto_claimed(conn, clock, command):
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
     assert guard.autoclaim_on_edit(conn, "a", "Bash", {"command": command}) is None
     assert store.list_claims(conn) == []
+
+
+# --------------------------------------------------------------------------- #
+# Push-failure recipe — coach the rejected push instead of pre-blocking it
+# --------------------------------------------------------------------------- #
+REJECTION = (
+    " ! [rejected]        main -> main (non-fast-forward)\n"
+    "error: failed to push some refs to 'origin'\n"
+    "hint: Updates were rejected because the tip of your current branch is behind\n"
+    "hint: its remote counterpart. Integrate the remote changes (e.g. 'git pull ...')."
+)
+
+
+def test_recipe_fires_on_a_rejected_push():
+    recipe = guard.push_failure_recipe("git push origin main", REJECTION)
+    assert recipe is not None
+    assert "git fetch origin" in recipe
+    assert "git rebase origin/main" in recipe  # target parsed from the command
+    assert "reset --hard" in recipe and "force" in recipe  # names what NOT to do
+    assert "<branch>" not in recipe
+
+
+def test_recipe_parses_a_head_colon_refspec():
+    recipe = guard.push_failure_recipe("git push origin HEAD:release", REJECTION)
+    assert recipe is not None and "git rebase origin/release" in recipe
+
+
+def test_recipe_uses_a_placeholder_when_the_target_is_unknown():
+    recipe = guard.push_failure_recipe("git push", REJECTION)
+    assert recipe is not None and "git rebase origin/<branch>" in recipe
+
+
+def test_recipe_silent_on_a_clean_push():
+    assert guard.push_failure_recipe("git push origin main", "Everything up-to-date") is None
+
+
+def test_recipe_silent_on_a_non_push():
+    assert guard.push_failure_recipe("git commit -m x", REJECTION) is None
+
+
+def test_recipe_silent_without_output():
+    assert guard.push_failure_recipe("git push origin main", None) is None

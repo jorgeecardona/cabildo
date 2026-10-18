@@ -46,7 +46,7 @@ observed = 3). The minimal system that still protects committed work is ~150–2
 
 ## The plan — phased, each phase ships independently
 
-### Phase 0 — Add the missing deny: force-push. Unconditional. (START HERE)
+### Phase 0 — Add the missing deny: force-push. Unconditional. (DONE — 966e8e0)
 Deny `git push` carrying `--force` / `-f` (incl. bundled short flags) / `--force-with-lease` /
 `--delete` / `-d` / a refspec beginning `+`. Denied whether or not a peer is live, because it
 destroys committed work even for a lone agent. Opt out per repo like `[destructive]`. ~15 lines in
@@ -55,12 +55,15 @@ guard.py + tests. Pure addition, closes the real hole, ships on its own.
 Out of band (no code): turn off "allow force push" on origin's protected branches. The server
 setting is the actual guarantee; the hook is convenience.
 
-### Phase 1 — Push-failure recipe (PostToolUse)
-~30 lines in `hooks/post_tool_use.py`: when `tool_name == "Bash"`, `_is_push(command)`, and
-`tool_response` matches `rejected|non-fast-forward|fetch first|stale info`, emit context with the
-recipe: `git fetch origin && git rebase origin/<target> && git push origin HEAD:<target>`; on
-rebase conflict, `git rebase --abort` and `send` the file owners; never `reset --hard`, never
-`--force`, never a merge `pull`. Same text as standing guidance at SessionStart. Additive.
+### Phase 1 — Push-failure recipe (PostToolUse) (DONE)
+`guard.push_failure_recipe(command, output)` (pure, tested) + wiring in
+`hooks/post_tool_use.py`: when `tool_name == "Bash"`, `_is_push(command)`, and the output matches
+`non-fast-forward|fetch first|[rejected]|stale info|tip ... is behind`, emit the recipe —
+`git fetch origin` → `git rebase origin/<target>` → `git push origin HEAD:<target>`, with the
+target parsed from the command (placeholder when bare); on rebase conflict, `--continue` or
+`--abort` and coordinate on the bus; never `reset --hard`, `--force`, or a merge `pull`. The
+`<target>` is parsed from the push argv. NOT yet done: the same text as standing SessionStart
+guidance (optional; the at-the-moment-of-failure injection is the load-bearing half).
 
 ### Phase 2 — Collapse the four shared-checkout rules into one
 Replace file-lease (+ autoclaim, the shell-write parser, redirect tokenising, apply_patch path

@@ -161,6 +161,61 @@ def _is_push(command: str) -> bool:
     return any(_git_subcommand(argv)[0] == "push" for argv in _argvs(command))
 
 
+def _push_target(command: str) -> str | None:
+    """Best-effort: the remote branch a ``git push`` targets, for the recovery
+    recipe. ``git push origin main`` -> main; ``git push origin HEAD:release`` ->
+    release; a bare ``git push`` or anything unparsed -> None (the recipe then
+    uses a ``<branch>`` placeholder the agent fills in).
+    """
+    for argv in _argvs(command):
+        sub, rest = _git_subcommand(argv)
+        if sub != "push":
+            continue
+        positionals = [a for a in rest if not a.startswith("-")]
+        if len(positionals) >= 2:
+            dst = positionals[1].split(":")[-1].lstrip("+")
+            if dst and dst != "HEAD":
+                return dst
+    return None
+
+
+# The remote rejected a push because our tip is behind — the only push failure
+# the fetch+rebase recipe answers. Other failures (auth, no such remote) are not
+# ours to coach. Matched case-insensitively against the command's output.
+_PUSH_REJECTED = re.compile(
+    r"non-fast-forward|fetch first|\[rejected\]|stale info|tip of your current branch is behind",
+    re.IGNORECASE,
+)
+
+
+def push_failure_recipe(command: str, output: str | None) -> str | None:
+    """The non-destructive recovery for a ``git push`` the remote rejected because
+    it moved (non-fast-forward), or None if this was not a rejected push.
+
+    This is the whole point of *not* pre-blocking an ordinary push: git already
+    rejects the loser of a race, and the correct recovery is fetch + rebase +
+    re-push. The danger was never the rejection — it is an agent reaching for
+    ``reset --hard``/``push --force``/a merge ``pull`` for lack of the right
+    instruction, and those discard the commits it has not fetched yet. So hand it
+    the instruction at the moment it is rejected. Pure text match on the output,
+    identical for Claude Code's ``tool_response`` and Codex's.
+    """
+    if not command or not output or not _is_push(command) or not _PUSH_REJECTED.search(output):
+        return None
+    branch = _push_target(command) or "<branch>"
+    return (
+        "cabildo: that push was rejected — the remote moved since you last fetched "
+        "(someone pushed in between). Recover without discarding their commits:\n"
+        "    git fetch origin\n"
+        f"    git rebase origin/{branch}\n"
+        f"    git push origin HEAD:{branch}\n"
+        "If the rebase conflicts, resolve and `git rebase --continue`, or `git rebase "
+        "--abort` to back out and coordinate on the bus. Do NOT `git reset --hard`, "
+        "`git push --force`, or a merge `git pull` here — each discards the commits "
+        "you have not fetched yet."
+    )
+
+
 def _stages_whole_tree(argv: list[str]) -> str | None:
     """Label for a command that stages or commits the *whole* tree instead of
     named paths, else None. `git add src/x.py` is fine; `git add -A` is not.
