@@ -5,7 +5,7 @@
 # no task for (format = write, bump, install*, viewer, clean) run directly here.
 # One-time setup after cloning:  make install-hooks
 .DEFAULT_GOAL := help
-.PHONY: help install install-hooks format lint typecheck test check bump docs viewer build clean
+.PHONY: help install install-hooks format lint typecheck test check deadcode bump docs viewer build clean
 
 help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -36,6 +36,9 @@ test: ## run the test suite -- the CI :test task
 	moon run :test
 
 check: lint format-check typecheck test ## the full CI test stage: lint + format-check + typecheck + test
+
+deadcode: ## report dead-code candidates (vulture); not a gate -- confirm each by hand
+	@uv run vulture || true
 
 bump: ## bump version in pyproject.toml -- TYPE=patch|minor|major (default patch)
 	./scripts/bump-version $(or $(TYPE),patch)

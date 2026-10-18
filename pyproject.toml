@@ -62,6 +62,7 @@ dev = [
     "pyright>=1.1.390",
     "pytest>=8",
     "musil>=0.35; python_version >= '3.12'",
+    "vulture>=2.11",
 ]
 
 [tool.pytest.ini_options]
@@ -173,3 +174,18 @@ typeCheckingMode = "standard"
 reportPrivateUsage = false
 venvPath = "."
 venv = ".venv"
+
+[tool.vulture]
+# Dead-code candidates (`make deadcode`). Not a CI gate: vulture cannot see
+# dynamic dispatch, so it reports candidates for a human to confirm, not errors.
+# Scans src only — scanning tests drowns the signal in pytest fixture params
+# (used for their side effect, never referenced). The cost is that a src symbol
+# used ONLY from a test can show up here; confirm against `grep` in tests/ before
+# deleting anything.
+paths = ["src/cabildo"]
+min_confidence = 60
+# Entry points reached by name/registry, never by a direct call vulture can see:
+ignore_decorators = ["@mcp.tool", "@op"]
+# Framework callbacks (http.server handler) and a sqlite hook attribute.
+ignore_names = ["do_GET", "do_POST", "do_HEAD", "log_message", "row_factory"]
+sort_by_size = true
