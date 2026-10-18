@@ -67,6 +67,7 @@ cabildo issues show <slug>
 | Issue | Area | Scope | Verify | Status | Waiting on |
 |---|---|---|---|---|---|
 | [Browser lifecycle is managed by a loose script and hand-edited JSON, not by cabildo](29-08-2026-cabildo-browser-subcommand.md) | cli | M | probe | open | — |
+| [Fleet-aware attention engine: schedule-driven wind-down, bedtime signal, and a day-timeline viewer](04-10-2026-fleet-aware-attention-engine-schedule-driven-wind-down-bedtime-signal-and-a.md) | scheduling | L | probe | open | — |
 
-_1 open — 1 open. Generated; edit the files, then `cabildo issues reindex`._
+_2 open — 2 open. Generated; edit the files, then `cabildo issues reindex`._
 <!-- END GENERATED INDEX -->
