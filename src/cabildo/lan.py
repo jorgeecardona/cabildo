@@ -82,7 +82,6 @@ class Peer:
     host: str
     port: int
     project: str
-    last_seen: float
 
 
 # --------------------------------------------------------------------------- #
@@ -366,7 +365,6 @@ def discover(project: str, timeout: float, node: str) -> dict[str, Peer]:
                 host=addr[0],
                 port=int(m.get("port") or 0),
                 project=key,
-                last_seen=time.time(),
             )
     finally:
         s.close()

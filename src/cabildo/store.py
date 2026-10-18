@@ -1337,9 +1337,7 @@ def topic_is_gated(conn: sqlite3.Connection, topic: str) -> bool:
 # --------------------------------------------------------------------------- #
 # Grants (cross-project consent) + directory (discovery) — issue #26
 # --------------------------------------------------------------------------- #
-GRANT_KINDS = ("project", "topic", "agent")
 GRANT_CAPS = ("listen", "send")
-GRANT_STATUSES = ("requested", "granted", "denied", "revoked")
 
 
 def _norm_grant_resource(kind: str, resource: str) -> str:
@@ -1715,10 +1713,6 @@ def list_intents(
     a.append(limit)
     out = [intent_dict(r) for r in conn.execute(q, a)]
     return [d for d in out if d is not None]
-
-
-def get_intent(conn: sqlite3.Connection, intent_id: int) -> dict[str, Any] | None:
-    return intent_dict(conn.execute("SELECT * FROM intents WHERE id=?", (intent_id,)).fetchone())
 
 
 def _pid_alive(pid: int) -> bool:

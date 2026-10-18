@@ -461,9 +461,6 @@ class Snapshot:
                 out.setdefault(p.session_id, []).append(p)
         return out
 
-    def rss_kb_of(self, session_id: str) -> int:
-        return sum(p.rss_kb for p in self.procs if p.session_id == session_id)
-
 
 def snapshot(min_rss_mb: int = 100, *, pid_to_session: dict[int, str] | None = None) -> Snapshot:
     procs = processes(min_rss_kb=min_rss_mb * 1024)

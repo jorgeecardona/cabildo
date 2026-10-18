@@ -68,7 +68,6 @@ from collections.abc import Iterable, Mapping
 #: `docs/` out of git wholesale, and a small library often has no `docs/` at all — neither is a
 #: reason to be unable to keep a register. `CABILDO_ISSUES_DIR` overrides all of it.
 FOLDER_CANDIDATES = (("docs", "issues"), ("issues",), (".issues",))
-FOLDER_PARTS = FOLDER_CANDIDATES[0]
 CONFIG_NAME = "config.toml"
 README_NAME = "README.md"
 
