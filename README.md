@@ -175,6 +175,16 @@ for the git guards, and it blocks via `permissionDecision:"deny"` on both
 clients. File writes are no longer gated per-file — agents coordinate by
 isolating in their own git worktrees, which the shared-checkout guard points at.
 
+**Plain git, no daemon.** The `PreToolUse` guard only sees git that arrives as an
+agent tool call. For a human (or an agent whose git runs in a subshell), run
+`cabildo guard install` in the repo: it wires a thin `pre-commit`/`pre-push` hook
+that calls `cabildo githook <event>`, applying the *same* force-push,
+push-race, destructive, and shared-checkout denials to plain `git`. It composes
+with an existing hook rather than clobbering it, and fails open (any guard error
+lets git proceed). Start here; add the MCP server and the daemon's serialized
+`request(action="push")` later if you want them. Bypass one run with
+`git … --no-verify`; `cabildo guard uninstall` removes it.
+
 **Smoke test (two real clients).** In two terminals:
 
 1. Claude Code in the wired repo, and Codex after `cabildo codex` (+ `/hooks`

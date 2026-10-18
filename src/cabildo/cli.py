@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta
@@ -1754,6 +1755,108 @@ def cmd_githook(args) -> int:
     return 0
 
 
+_GUARD_MARK_START = "# >>> cabildo guard >>>"
+_GUARD_MARK_END = "# <<< cabildo guard <<<"
+
+
+def _guard_block(event: str) -> str:
+    return f"{_GUARD_MARK_START}\ncabildo githook {event} || exit $?\n{_GUARD_MARK_END}\n"
+
+
+def _git_hooks_dir(repo: str) -> Path | None:
+    """The directory git runs hooks from for ``repo`` — honouring an explicit
+    ``core.hooksPath`` (husky/lefthook), else ``<git-dir>/hooks`` (worktree-aware
+    via ``--absolute-git-dir``). None if ``repo`` is not a git work tree.
+    """
+
+    def _git(*args: str) -> str | None:
+        try:
+            p = subprocess.run(
+                ["git", "-C", repo, *args], capture_output=True, text=True, timeout=10
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return p.stdout.strip() if p.returncode == 0 else None
+
+    hp = _git("config", "--get", "core.hooksPath")
+    if hp:
+        return Path(hp) if os.path.isabs(hp) else Path(repo) / hp
+    git_dir = _git("rev-parse", "--absolute-git-dir")
+    return Path(git_dir) / "hooks" if git_dir else None
+
+
+def _install_one_hook(hooks_dir: Path, event: str, *, dry_run: bool) -> str:
+    """Install (or report) the cabildo block in the ``event`` hook, composing
+    with whatever is already there. Returns a one-line status.
+    """
+    block = _guard_block(event)
+    path = hooks_dir / event
+    existing = path.read_text() if path.exists() else ""
+    if f"cabildo githook {event}" in existing:
+        return f"{event}: already installed"
+    if not existing:
+        new = "#!/usr/bin/env bash\n" + block
+    else:
+        lines = existing.splitlines(keepends=True)
+        if lines[0].startswith("#!"):  # run cabildo first, keep the rest below
+            new = lines[0] + block + "".join(lines[1:])
+        else:
+            new = block + existing
+    if dry_run:
+        return f"{event}: would write {path}\n{new}"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    path.write_text(new)
+    path.chmod(path.stat().st_mode | 0o111)  # make it executable
+    return f"{event}: installed → {path}"
+
+
+def cmd_guard_install(args) -> int:
+    """Wire the git-hook guard into this repo's pre-commit and pre-push, so plain
+    `git` here is coordinated like an agent's tool-call git — without needing the
+    MCP server or the daemon. Idempotent, and it chains ahead of any hook you
+    already have rather than clobbering it. `--print` shows what it would do.
+    """
+    repo = os.getcwd()
+    hooks_dir = _git_hooks_dir(repo)
+    if hooks_dir is None:
+        print(f"cabildo: {repo} is not a git work tree — nothing to install", file=sys.stderr)
+        return 1
+    for event in ("pre-commit", "pre-push"):
+        print(_install_one_hook(hooks_dir, event, dry_run=args.print))
+    if not args.print:
+        print("Bypass any one run with `git commit`/`git push --no-verify`.")
+    return 0
+
+
+def cmd_guard_uninstall(args) -> int:
+    """Remove the cabildo block from this repo's pre-commit/pre-push hooks,
+    leaving anything else in them untouched.
+    """
+    repo = os.getcwd()
+    hooks_dir = _git_hooks_dir(repo)
+    if hooks_dir is None:
+        print(f"cabildo: {repo} is not a git work tree", file=sys.stderr)
+        return 1
+    import re as _re
+
+    pattern = _re.compile(
+        _re.escape(_GUARD_MARK_START) + r".*?" + _re.escape(_GUARD_MARK_END) + r"\n?",
+        _re.DOTALL,
+    )
+    for event in ("pre-commit", "pre-push"):
+        path = hooks_dir / event
+        if not path.exists():
+            continue
+        text = path.read_text()
+        stripped = pattern.sub("", text)
+        if stripped != text:
+            path.write_text(stripped)
+            print(f"{event}: removed cabildo block")
+        else:
+            print(f"{event}: nothing to remove")
+    return 0
+
+
 def cmd_doctor(args) -> int:
     """One health check across the whole install: the six hooks, both MCP
     servers, the bus DB (reachable + WAL), the daemon, and the platform features
@@ -2195,6 +2298,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     gh.add_argument("event", choices=sorted(_GITHOOK_COMMANDS))
     gh.set_defaults(fn=cmd_githook)
+
+    gd = sub.add_parser("guard", help="wire the git-hook guard into this repo (opt-in, plain git)")
+    gdsub = gd.add_subparsers(dest="guard_cmd", required=True)
+    gdi = gdsub.add_parser("install", help="add cabildo to this repo's pre-commit/pre-push hooks")
+    gdi.add_argument("--print", action="store_true", help="show what would change, write nothing")
+    gdi.set_defaults(fn=cmd_guard_install)
+    gdu = gdsub.add_parser("uninstall", help="remove cabildo from this repo's git hooks")
+    gdu.set_defaults(fn=cmd_guard_uninstall)
 
     args = p.parse_args(argv)
     return args.fn(args)

@@ -73,7 +73,7 @@ worktree: `git worktree add ...`" (Claude Code's `EnterWorktree` makes it one ca
 SessionStart notice when a sharer is already present. `claim file:<path>` stays as an advisory
 tool; `_deny_file` goes. ~40 lines replacing ~400.
 
-### Phase 3 — Coexistence: an opt-in git-hook guard layer (NOT removal)
+### Phase 3 — Coexistence: an opt-in git-hook guard layer (NOT removal) (DONE)
 Decision (Jorge, 2026-10-17): do NOT remove the daemon push-queue or
 `request(action="push")`. Keep the full-service model, and ALSO let a repo enforce the same guards
 at git's own `pre-commit`/`pre-push`, so a plain-git user — a human, or an agent whose git never
