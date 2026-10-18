@@ -53,13 +53,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import config, store
-from .context import tree_root
-
-# Sentinel session id for a caller with no cabildo session — a bare terminal
-# running the git-hook guard. It must never be None (that would make SQL
-# `holder_session != ?` compare against NULL and match no rows) and never equal
-# a real session id, so a human is seen as an outsider racing the live peers.
-HUMAN = "human"
+from .context import git_project, resolve_claude_pid, tree_root
 
 
 @dataclass(frozen=True)
@@ -645,4 +639,54 @@ def deny_git(conn: sqlite3.Connection, me: Actor, command: str) -> str | None:
         or _deny_destructive_git(me, command)
         or _deny_commit_on_trunk(me, command)
         or _deny_shared_checkout(conn, me, command)
+    )
+
+
+def resolve_actor(conn: sqlite3.Connection, cwd: str | None = None) -> Actor:
+    """The Actor for a git-hook invocation, which has no hook JSON to carry an
+    id. Mirrors ``mcp_server._me``'s priority — CABILDO_TAG, then
+    CABILDO_SESSION_ID, then the claude-pid ancestry walk — binding to that
+    session's row when one is found. Otherwise a *human* actor: a bare terminal
+    with no cabildo session, identified by the shared ``store.HUMAN_SESSION`` id
+    (never None, never a real session, so the push lock's ``holder_session != ?``
+    sees it as an outsider racing the live peers), whose ``project`` is the main
+    repo root
+    (``git_project`` — the same value sessions store, NOT the worktree root), and
+    whose ``cwd`` is the worktree it actually stands in (``tree_root``).
+
+    Honest about the residual: an interactive agent's own git binds here only via
+    the pid walk (a guess, since CABILDO_TAG is set only for daemon-spawned
+    agents and CABILDO_SESSION_ID is never set for Claude), and a human running
+    git in a shell descended from a `claude` process is misattributed to that
+    session. Never raises — a git hook that cannot resolve an actor must fall
+    through to the human default, not abort the git op.
+    """
+    base = cwd or os.environ.get("CABILDO_PROJECT_DIR") or os.getcwd()
+
+    def _row_actor(sid: str | None) -> Actor | None:
+        if not sid:
+            return None
+        row = store.get_session(conn, sid)
+        return Actor.from_row(row) if row is not None else None
+
+    tag = os.environ.get("CABILDO_TAG")
+    if tag and (actor := _row_actor(store.session_for_tag(conn, tag))):
+        return actor
+    explicit = (os.environ.get("CABILDO_SESSION_ID") or "").strip()
+    if explicit and (actor := _row_actor(explicit if store.get_session(conn, explicit) else None)):
+        return actor
+    try:
+        pid = resolve_claude_pid()
+    except Exception:
+        pid = 0
+    if pid and (actor := _row_actor(store.session_for_pid(conn, pid))):
+        return actor
+
+    root, name = git_project(base)
+    return Actor(
+        session_id=store.HUMAN_SESSION,
+        cwd=tree_root(base),
+        project=root,
+        project_name=name,
+        handle=store.HUMAN_HANDLE,
     )

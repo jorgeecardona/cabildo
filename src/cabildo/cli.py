@@ -1712,6 +1712,48 @@ _DOCTOR_GLYPH = {
 }
 
 
+# git-hook event -> the synthetic command the guard judges. A git pre-commit
+# hook is a `git commit` about to happen; a pre-push hook, a `git push`.
+_GITHOOK_COMMANDS = {"pre-commit": "git commit", "pre-push": "git push"}
+
+# The daemon's own serialized push sets this on its subprocess, so a repo with
+# [push].verify = true (which makes the daemon run this pre-push hook) never
+# denies the daemon's own push — the deadlock Opus-5.5 review finding #1.
+GITHOOK_BYPASS_ENV = "CABILDO_GITHOOK_BYPASS"
+
+
+def cmd_githook(args) -> int:
+    """Enforce the git-collision guards at git's own pre-commit/pre-push, so a
+    plain `git` in a terminal — a human, or an agent whose git never reaches the
+    PreToolUse guard — is judged by the same rules. This is the opt-in,
+    daemon-free half of cabildo's coordination; `cabildo guard install` wires it.
+
+    Fail-open at the exit-code boundary: ANY error exits 0, so a broken or slow
+    guard never blocks the user's commit/push. Only a clean, intended block exits
+    1, with the reason on stderr for git to show.
+    """
+    try:
+        if os.environ.get(GITHOOK_BYPASS_ENV):
+            return 0  # the daemon's own push: never self-deny
+        command = _GITHOOK_COMMANDS.get(args.event)
+        if command is None:
+            return 0
+        from . import guard
+
+        conn = store.connect()
+        try:
+            me = guard.resolve_actor(conn)
+            reason = guard.deny_git(conn, me, command)
+        finally:
+            conn.close()
+    except Exception:
+        return 0  # never break the user's git over a guard error
+    if reason:
+        print(reason, file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_doctor(args) -> int:
     """One health check across the whole install: the six hooks, both MCP
     servers, the bus DB (reachable + WAL), the daemon, and the platform features
@@ -2146,6 +2188,13 @@ def main(argv: list[str] | None = None) -> int:
         "doctor", help="verify the install (hooks, MCP, DB, daemon) and flag platform gaps"
     )
     dr.set_defaults(fn=cmd_doctor)
+
+    gh = sub.add_parser(
+        "githook",
+        help="enforce the git guards from a git pre-commit/pre-push hook (plain-git users)",
+    )
+    gh.add_argument("event", choices=sorted(_GITHOOK_COMMANDS))
+    gh.set_defaults(fn=cmd_githook)
 
     args = p.parse_args(argv)
     return args.fn(args)

@@ -403,7 +403,14 @@ def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     push_cmd = ["push", remote, f"HEAD:{target}"]
     if not config.push_verify(cwd):
         push_cmd.insert(1, "--no-verify")
-    push_rc, push_out = git(push_cmd, root, timeout=push_timeout)
+    # When the repo keeps its pre-push hook ([push].verify = true), that hook may
+    # be `cabildo githook pre-push` — which, seeing the agents that queued this
+    # very push still live, would deny the daemon's own serialized push and
+    # deadlock it. Mark this subprocess so the hook steps aside; the daemon IS the
+    # serialization the hook exists to route people toward.
+    push_rc, push_out = run(
+        ["git", *push_cmd], root, timeout=push_timeout, env={"CABILDO_GITHOOK_BYPASS": "1"}
+    )
     steps.append({"step": "push", "rc": push_rc, "out": push_out[-4000:]})
     if push_rc == 124:
         # A bare timeout reads like a network fault; name the usual cause instead.
