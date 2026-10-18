@@ -1,8 +1,8 @@
 site_name: cabildo
 site_description: IPC bus + chat room for coordinating parallel Claude Code agents — messaging, presence, and advisory locks with hook-level enforcement.
-site_url: https://jorgeecardona.gitlab.io/cabildo/
-repo_url: https://gitlab.com/jorgeecardona/cabildo
-repo_name: jorgeecardona/cabildo
+site_url: https://cardona-oss.gitlab.io/cabildo/
+repo_url: https://gitlab.com/cardona-oss/cabildo
+repo_name: cardona-oss/cabildo
 copyright: MIT &copy; Jorge Cardona
 
 # The repo's docs/ also holds the app's own docs/issues/ register; keep it out of the site.

@@ -4,8 +4,19 @@ Thanks for helping. This is a normal Python package: a stdio MCP server plus
 hook scripts, stdlib-only at runtime (the sole runtime dependency is `mcp`). All
 state lives in one shared SQLite DB.
 
-AI coding agents: read [AGENTS.md](AGENTS.md) instead; it is the machine-facing
-version of this file.
+## Contributing with an AI agent
+
+Most changes here will be written with a coding agent — that's expected and welcome. To get a good
+result from yours:
+
+- **Point it at [`AGENTS.md`](AGENTS.md) first** — the machine-facing contract for this repo: build
+  and test commands, the style rules, and the repo-specific gotchas (the `mcp<2` pin, platform
+  specifics). Agents read it automatically when started from the repo root.
+- **Ship a green `make check`** (lint + format-check + typecheck + test). Have the agent run it and
+  fix what it finds *before* opening the MR, not leave it for review.
+- **Don't let it bypass the hooks.** The patch version auto-bumps on `src/` changes and CI's
+  version-guard enforces it; a `--no-verify` commit fails the pipeline.
+- **Keep the diff small and typed**, add a `CHANGELOG.md` entry, and don't reformat unrelated files.
 
 This project follows a [Code of Conduct](CODE_OF_CONDUCT.md). To report a
 security issue, see [SECURITY.md](SECURITY.md) rather than filing a public issue.
@@ -78,7 +89,7 @@ The repo uses lowercase, area-prefixed subjects (for example
 ## Issues and merge requests
 
 - File issues at
-  <https://gitlab.com/jorgeecardona/cabildo/-/issues>.
+  <https://gitlab.com/cardona-oss/cabildo/-/issues>.
 - Open merge requests against `main`. Make sure `make check` passes first.
 
 ## Gotchas
