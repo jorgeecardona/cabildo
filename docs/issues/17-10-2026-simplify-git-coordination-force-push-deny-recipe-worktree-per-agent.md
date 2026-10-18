@@ -73,23 +73,40 @@ worktree: `git worktree add ...`" (Claude Code's `EnterWorktree` makes it one ca
 SessionStart notice when a sharer is already present. `claim file:<path>` stays as an advisory
 tool; `_deny_file` goes. ~40 lines replacing ~400.
 
-### Phase 3 — Delete the daemon push-queue, the push guard, the trunk guard
-Blocked by Phase 1 landing (the recipe must exist first) AND an explicit go-ahead from Jorge,
-because it removes `request(action="push")` from the MCP surface. Removes `actions.push` +
-`_local_sync` + merged-worktree cleanup + gate/conflict/settings hint helpers (~500 lines),
-`guard._deny_push` + `_deny_commit_on_trunk` + commit-dir helpers (~155), the push/trunk config
-knobs (~120). Trunk guard goes because it only existed to keep the daemon's local-ff possible — no
-daemon, no divergence — and it contradicts the trunk-based workflow anyway. The daemon stays for
-`spawn` and `ask`.
+### Phase 3 — Coexistence: an opt-in git-hook guard layer (NOT removal)
+Decision (Jorge, 2026-10-17): do NOT remove the daemon push-queue or
+`request(action="push")`. Keep the full-service model, and ALSO let a repo enforce the same guards
+at git's own `pre-commit`/`pre-push`, so a plain-git user — a human, or an agent whose git never
+arrives as an MCP/Bash tool call the PreToolUse guard sees — gets coverage without running the MCP
+server or the daemon. Two models that compose: start simple with git hooks, add the daemon later.
 
-Costs to accept (or mitigate): lose the post-push `ls-remote` verification (fold a one-line check
-into the recipe), lose automatic merged-worktree cleanup, lose the central intent log of who
-pushed when.
+Shape:
+- **`Actor`** dataclass — `session_id: str` (a non-null sentinel `"human"` for a bare terminal,
+  never None — Opus-5.5 finding #3), `cwd`, `project`, `project_name`, `handle`. Refactor the
+  `guard._deny_*` helpers to take an `Actor` instead of `sqlite3.Row` (`me["x"]` → `me.x`). A real
+  session row maps trivially; a human maps to the sentinel. Data structure first; no behaviour
+  change — this lands as its own safe refactor commit.
+- **`resolve_actor(conn)`** — mirrors `_me`'s priority (`CABILDO_TAG` → `CABILDO_SESSION_ID` →
+  claude-pid ancestry), else a human actor: project via `git_project()` (the main repo root
+  sessions store, NOT `git rev-parse --show-toplevel`, which is the worktree root — finding #4),
+  cwd via `tree_root()`. Honest about the residual: an interactive agent's git binds only via the
+  pid walk, a guess, and a human in a claude-descended shell is misattributed (finding #5).
+- **`cabildo githook <event>`** — one dispatcher (finding #8). The WHOLE body (argparse +
+  resolve_actor, which does a `touch()` that can throw `database is locked`) is wrapped so ANY
+  error → exit 0; only a clean, intended block → one distinct nonzero code with the reason on
+  stderr (fail-open at the exit-code boundary — finding #2). The daemon's own push sets an env
+  marker the push core honours so `[push].verify = true` can't deadlock it (finding #1).
+- **`cabildo guard install`** — opt-in, per-repo, a thin hook that only calls `cabildo githook`;
+  composes with an existing `core.hooksPath`/`.git/hooks` (chain, don't clobber). cabildo's own
+  `.githooks/` dev hooks are not what ships (finding #6).
+- Escape hatches that exist day one: `--no-verify`, `[push].mode = "manual"`, `[trunk].mode =
+  "off"`, `[destructive].mode = "off"`. The `cabildo claim` human-holder hatch stays out unless we
+  build a durable human claim identity (finding #7).
 
 ### Phase 4 — Shrink destructive guard to the irrecoverable set
 Drop `git stash` (recoverable via `stash list`/`pop`); keep `reset --hard`, `clean -f`,
-`checkout .`/`checkout -- <path>`, whole-tree `restore`. Remove the peers-branch of the message
-once Phase 2 exists.
+`checkout .`/`checkout -- <path>`, whole-tree `restore`. (The peers-branch of the message is
+already gone as of Phase 2.)
 
 ## Define done
 

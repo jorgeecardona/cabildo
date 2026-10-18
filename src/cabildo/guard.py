@@ -49,10 +49,43 @@ import re
 import shlex
 import sqlite3
 import subprocess
+from dataclasses import dataclass
 from typing import Any
 
 from . import config, store
 from .context import tree_root
+
+# Sentinel session id for a caller with no cabildo session — a bare terminal
+# running the git-hook guard. It must never be None (that would make SQL
+# `holder_session != ?` compare against NULL and match no rows) and never equal
+# a real session id, so a human is seen as an outsider racing the live peers.
+HUMAN = "human"
+
+
+@dataclass(frozen=True)
+class Actor:
+    """Who is acting, for the guard's decisions — a real cabildo session, or a
+    bare human at a terminal (``session_id == HUMAN``). Threaded through every
+    ``_deny_*`` so the same checks serve the PreToolUse hook (a session row) and
+    the git-hook CLI (a synthesised actor) alike.
+    """
+
+    session_id: str
+    cwd: str | None
+    project: str | None
+    project_name: str | None
+    handle: str | None
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> Actor:
+        return cls(
+            session_id=row["session_id"],
+            cwd=row["cwd"],
+            project=row["project"],
+            project_name=row["project_name"],
+            handle=row["handle"],
+        )
+
 
 # Pathspecs that name "the whole tree" rather than a specific file, so a discard
 # that carries one is not path-scoped.
@@ -329,28 +362,28 @@ def _held_by_me(conn: sqlite3.Connection, resource: str, session_id: str) -> boo
     )
 
 
-def _sharers(conn: sqlite3.Connection, me: sqlite3.Row) -> list[sqlite3.Row]:
+def _sharers(conn: sqlite3.Connection, me: Actor) -> list[sqlite3.Row]:
     """The live peers standing in the *same* working tree as ``me``. cwd is what
-    says which checkout; project can't (it collapses worktrees). A row without a
-    cwd tells us nothing, so it is not treated as a sharer.
+    says which checkout; project can't (it collapses worktrees). An actor without
+    a cwd tells us nothing, so it is not treated as sharing anyone's tree.
     """
-    if not me["cwd"]:
+    if not me.cwd:
         return []
-    mine = tree_root(me["cwd"])
+    mine = tree_root(me.cwd)
     return [
         p
-        for p in store.active_sessions(conn, project=me["project"], exclude=me["session_id"])
+        for p in store.active_sessions(conn, project=me.project, exclude=me.session_id)
         if p["cwd"] and tree_root(p["cwd"]) == mine
     ]
 
 
-def _deny_push(conn: sqlite3.Connection, me: sqlite3.Row, command: str) -> str | None:
+def _deny_push(conn: sqlite3.Connection, me: Actor, command: str) -> str | None:
     if not _is_push(command):
         return None
-    if config.push_mode(me["cwd"], me["project_name"]) == "manual":
+    if config.push_mode(me.cwd, me.project_name) == "manual":
         return None  # this project opted out of the push guard (.cabildo/config.toml)
-    resource = f"push:{me['project_name']}"
-    row = _held_by_other(conn, resource, me["session_id"])
+    resource = f"push:{me.project_name}"
+    row = _held_by_other(conn, resource, me.session_id)
     if row:
         note = f" ({row['note']})" if row["note"] else ""
         return (
@@ -365,18 +398,18 @@ def _deny_push(conn: sqlite3.Connection, me: sqlite3.Row, command: str) -> str |
     # rebase, revert or force-push, and *that* is what eats commits. The daemon
     # already runs one intent at a time, which is the ordering nobody can get
     # right by hand, so send them there rather than letting them find out.
-    if _held_by_me(conn, resource, me["session_id"]):
+    if _held_by_me(conn, resource, me.session_id):
         return None  # you took the lock: peers are the ones denied
-    peers = store.active_sessions(conn, project=me["project"], exclude=me["session_id"])
+    peers = store.active_sessions(conn, project=me.project, exclude=me.session_id)
     if not peers:
         return None  # alone: push is nobody's business but yours
     who = ", ".join(store.display_name(p) for p in peers[:5])
     return (
-        f"cabildo: {len(peers)} other agent(s) live on {me['project_name']} ({who}) — "
+        f"cabildo: {len(peers)} other agent(s) live on {me.project_name} ({who}) — "
         "a direct push races them. Queue it instead; the daemon fetches, rebases "
         "onto the target, runs the repo's gate, pushes, and verifies against the "
         "remote, one intent at a time:\n"
-        f'    request(action="push", params={{"cwd": "{me["cwd"] or me["project"]}", '
+        f'    request(action="push", params={{"cwd": "{me.cwd or me.project}", '
         '"target": "<branch you are pushing on, e.g. main>"})\n'
         "It pushes commits and never decides what to commit, so commit first and "
         "leave no tracked changes behind. It DMs you the result. If you really "
@@ -385,7 +418,7 @@ def _deny_push(conn: sqlite3.Connection, me: sqlite3.Row, command: str) -> str |
     )
 
 
-def _deny_force_push(me: sqlite3.Row, command: str) -> str | None:
+def _deny_force_push(me: Actor, command: str) -> str | None:
     """Deny a force/delete push. Denied by default whether or not a peer is live:
     it destroys committed work on the remote, which no fetch+rebase can bring
     back, so it is dangerous even to a lone agent. A repo opts out with
@@ -395,7 +428,7 @@ def _deny_force_push(me: sqlite3.Row, command: str) -> str | None:
     label = next((lbl for argv in _argvs(command) if (lbl := _force_pushes(argv))), None)
     if label is None:
         return None
-    if config.destructive_mode(me["cwd"], me["project_name"]) == "off":
+    if config.destructive_mode(me.cwd, me.project_name) == "off":
         return None  # this project opted out (.cabildo/config.toml)
     return (
         f"cabildo: `{label}` rewrites or deletes a ref on the remote, discarding commits "
@@ -408,7 +441,7 @@ def _deny_force_push(me: sqlite3.Row, command: str) -> str | None:
     )
 
 
-def _deny_destructive_git(me: sqlite3.Row, command: str) -> str | None:
+def _deny_destructive_git(me: Actor, command: str) -> str | None:
     """Deny a working-tree-destroying git op (``reset --hard``, ``clean -f``, a
     discarding ``checkout``/``restore``, a tree-wide ``stash``). Denied whether or
     not a peer is here — it discards uncommitted work an autonomous agent cannot
@@ -420,7 +453,7 @@ def _deny_destructive_git(me: sqlite3.Row, command: str) -> str | None:
     label = next((lbl for argv in _argvs(command) if (lbl := _destroys_tree(argv))), None)
     if label is None:
         return None
-    if config.destructive_mode(me["cwd"], me["project_name"]) == "off":
+    if config.destructive_mode(me.cwd, me.project_name) == "off":
         return None  # this project opted out (.cabildo/config.toml)
     return (
         f"cabildo: `{label}` clears uncommitted work across the whole tree, and an "
@@ -430,7 +463,7 @@ def _deny_destructive_git(me: sqlite3.Row, command: str) -> str | None:
     )
 
 
-def _deny_shared_checkout(conn: sqlite3.Connection, me: sqlite3.Row, command: str) -> str | None:
+def _deny_shared_checkout(conn: sqlite3.Connection, me: Actor, command: str) -> str | None:
     """Deny a git op that writes the index, working tree, or HEAD while another
     agent shares this exact checkout.
 
@@ -530,7 +563,7 @@ def _commit_dir(argv: list[str], command: str, default: str) -> str:
     return target
 
 
-def _deny_commit_on_trunk(me: sqlite3.Row, command: str) -> str | None:
+def _deny_commit_on_trunk(me: Actor, command: str) -> str | None:
     """Deny an agent committing directly on a protected trunk branch
     (``main``/``master``, or ``[trunk].names``).
 
@@ -548,16 +581,16 @@ def _deny_commit_on_trunk(me: sqlite3.Row, command: str) -> str | None:
     opts in with ``[trunk].mode = "guard"``. Where on, the intended workflow is
     the escape hatch: branch, commit on the lane, push it to origin from there.
     """
-    if not me["cwd"] or config.trunk_mode(me["cwd"], me["project_name"]) != "guard":
+    if not me.cwd or config.trunk_mode(me.cwd, me.project_name) != "guard":
         return None
-    trunk = config.trunk_names(me["cwd"], me["project_name"])
+    trunk = config.trunk_names(me.cwd, me.project_name)
     # Judge each commit by the branch of the directory it ACTUALLY targets (its
     # -C/cd, else the session cwd) — not by where the session was launched. A
     # commit on a lane worktree is fine even from a session rooted in main.
     for argv in _argvs(command):
         if not _commits(argv):
             continue
-        root = tree_root(_commit_dir(argv, command, me["cwd"]))
+        root = tree_root(_commit_dir(argv, command, me.cwd))
         if not root:
             continue
         branch = _current_branch(root)
@@ -590,16 +623,26 @@ def deny_reason(
     gated now: file writes (Edit/Write/apply_patch) are coordinated by isolating
     agents in their own worktrees, not by a per-file lease.
     """
-    me = store.get_session(conn, session_id)
-    if me is None or not me["project"]:
+    row = store.get_session(conn, session_id)
+    if row is None or not row["project"]:
         return None
-    if tool_name == "Bash" and me["project_name"]:
+    me = Actor.from_row(row)
+    if tool_name == "Bash" and me.project_name:
         command = tool_input.get("command") or ""
-        return (
-            _deny_force_push(me, command)
-            or _deny_push(conn, me, command)
-            or _deny_destructive_git(me, command)
-            or _deny_commit_on_trunk(me, command)
-            or _deny_shared_checkout(conn, me, command)
-        )
+        return deny_git(conn, me, command)
     return None
+
+
+def deny_git(conn: sqlite3.Connection, me: Actor, command: str) -> str | None:
+    """The git-collision verdict for a shell command, or None. Shared by the
+    PreToolUse hook (``deny_reason`` builds the actor from a session row) and the
+    git-hook CLI (which synthesises the actor), so a plain `git` in a terminal is
+    judged by exactly the same rules as one issued as a tool call.
+    """
+    return (
+        _deny_force_push(me, command)
+        or _deny_push(conn, me, command)
+        or _deny_destructive_git(me, command)
+        or _deny_commit_on_trunk(me, command)
+        or _deny_shared_checkout(conn, me, command)
+    )
