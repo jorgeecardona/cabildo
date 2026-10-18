@@ -1,6 +1,8 @@
 # cabildo
 
-[![PyPI](https://img.shields.io/pypi/v/cabildo)](https://pypi.org/project/cabildo/)
+[![pipeline status](https://gitlab.com/cardona-oss/cabildo/badges/main/pipeline.svg)](https://gitlab.com/cardona-oss/cabildo/-/pipelines)
+[![PyPI version](https://img.shields.io/pypi/v/cabildo.svg)](https://pypi.org/project/cabildo/)
+[![Python versions](https://img.shields.io/pypi/pyversions/cabildo.svg)](https://pypi.org/project/cabildo/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 IPC bus + chat room for coordinating parallel Claude Code agents: messaging,
@@ -220,8 +222,8 @@ call, so a hung DB must cost 5s once, not block the session repeatedly.
 
 - Repository: <https://gitlab.com/cardona-oss/cabildo>
 - PyPI: <https://pypi.org/project/cabildo/>
-- Changelog: [CHANGELOG.md](CHANGELOG.md)
-- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) · agents: [AGENTS.md](AGENTS.md)
+- Changelog: [CHANGELOG.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/CHANGELOG.md)
+- Contributing: [CONTRIBUTING.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/CONTRIBUTING.md) · agents: [AGENTS.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/AGENTS.md)
 
 ## License
 
