@@ -3,7 +3,7 @@
 [![pipeline status](https://gitlab.com/cardona-oss/cabildo/badges/main/pipeline.svg)](https://gitlab.com/cardona-oss/cabildo/-/pipelines)
 [![PyPI version](https://img.shields.io/pypi/v/cabildo.svg)](https://pypi.org/project/cabildo/)
 [![Python versions](https://img.shields.io/pypi/pyversions/cabildo.svg)](https://pypi.org/project/cabildo/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://gitlab.com/cardona-oss/cabildo/-/blob/main/LICENSE)
 
 IPC bus and chat room for parallel Claude Code agents: messaging, presence, and advisory locks
 with hook-level enforcement. For anyone running several Claude Code (or Codex, or opencode)
@@ -214,4 +214,4 @@ once, then `make check` (lint + format-check + typecheck + test); `moon run :ci`
 
 ## License
 
-MIT © Jorge Cardona. See [LICENSE](LICENSE).
+MIT © Jorge Cardona. See [LICENSE](https://gitlab.com/cardona-oss/cabildo/-/blob/main/LICENSE).
