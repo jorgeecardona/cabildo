@@ -33,6 +33,7 @@ Stdlib only, like the rest of the package.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -232,6 +233,169 @@ def cmd_log(args) -> int:
         return 0
     for m in msgs:
         print(render(m, conn=conn), "\n")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# Push delivery — a machine-readable feed for the bundled Claude Code mod
+#
+# The MCP tools (inbox/read/send/whoami) only exist inside a live agent turn.
+# The push-delivery mod runs OUTSIDE a turn (a $.clock doorbell on an idle
+# session), so it needs the same reads/writes as a plain subprocess with JSON
+# out and message ids exposed. These four verbs are that surface; they reuse
+# the store predicates so the inbox definition stays single-sourced.
+# --------------------------------------------------------------------------- #
+def _me_session(conn, args) -> str:
+    """The session acting: an explicit --session wins (the mod learns its id
+    once via `whoami` and passes it back, avoiding a pid walk per poll), else
+    resolve it the way the git hook does (CABILDO_TAG / CABILDO_SESSION_ID /
+    claude-pid ancestry).
+    """
+    sid = getattr(args, "session", None)
+    if sid:
+        return sid
+    from . import guard
+
+    return guard.resolve_actor(conn).session_id
+
+
+def cmd_whoami(args) -> int:
+    conn = store.connect()
+    from . import guard
+
+    sid = guard.resolve_actor(conn).session_id
+    row = store.get_session(conn, sid)
+    out = {
+        "session_id": sid,
+        "handle": row["handle"] if row else None,
+        "role": row["role"] if row else None,
+        "project_name": row["project_name"] if row else None,
+        "is_human": sid == HUMAN_SESSION,
+        # seed the poller's cursor to "now" so it wakes on what arrives after
+        # it starts, not on the whole backlog.
+        "cursor": store.max_message_id(conn),
+    }
+    if args.json:
+        print(json.dumps(out))
+    else:
+        who = f"@{out['handle']}" if out["handle"] else sid
+        print(f"{who}  {C.DIM}({sid}){C.OFF}  cursor={out['cursor']}")
+    return 0
+
+
+def _pull_row(m: dict, preview_chars: int) -> dict:
+    """The projection the mod gates on. Bodies are previewed, never shipped
+    whole: the mod decides whether to wake, then the model reads full bodies
+    through the `inbox` tool inside the drain turn.
+    """
+    body = m["body"]
+    preview = body[:preview_chars]
+    return {
+        "id": m["id"],
+        "from_session": m["from_session"],
+        "from_display": m["from_display"],
+        "to_session": m["to_session"],
+        "topic": m["topic"],
+        "urgent": m["urgent"],
+        "read": m["read"],
+        "created_at": m["created_at"],
+        "preview": preview,
+        "truncated": len(body) > len(preview),
+    }
+
+
+def cmd_pull(args) -> int:
+    conn = store.connect()
+    sid = _me_session(conn, args)
+    msgs = store.inbox_after(
+        conn,
+        sid,
+        after_id=args.after,
+        urgent_only=args.urgent_only,
+        limit=args.limit,
+    )
+    cursor = msgs[-1]["id"] if msgs else args.after
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "session_id": sid,
+                    "cursor": cursor,
+                    "messages": [_pull_row(m, args.preview_chars) for m in msgs],
+                }
+            )
+        )
+    else:
+        if not msgs:
+            print(f"{C.DIM}nothing after #{args.after}{C.OFF}")
+        for m in msgs:
+            print(render(m, conn=conn), "\n")
+    return 0
+
+
+def cmd_send(args) -> int:
+    body = " ".join(args.text).strip()
+    if not body:
+        print("nothing to send", file=sys.stderr)
+        return 1
+    if (args.to is None) == (args.topic is None):
+        print("send needs exactly one of --to or --topic", file=sys.stderr)
+        return 1
+    conn = store.connect()
+    sid = _me_session(conn, args)
+    row = store.get_session(conn, sid)
+    to_session = None
+    topic = None
+    if args.to:
+        to_session = _resolve(conn, args.to)
+        if to_session is None:
+            print(f"no agent matches '{args.to}' — try `agents`", file=sys.stderr)
+            return 1
+    else:
+        topic = args.topic.lstrip("#")
+        store.ensure_topic(conn, topic, created_by=sid)
+    mid = store.post_message(
+        conn,
+        from_session=sid,
+        from_handle=row["handle"] if row else None,
+        body=body,
+        to_session=to_session,
+        topic=topic,
+        urgent=args.urgent,
+    )
+    dest = to_session or f"#{topic}"
+    if args.json:
+        print(json.dumps({"id": mid, "from": sid, "to": dest, "urgent": bool(args.urgent)}))
+    else:
+        print(f"{C.GREEN}sent{C.OFF} #{mid} → {dest}")
+    return 0
+
+
+def cmd_mark_read(args) -> int:
+    conn = store.connect()
+    sid = _me_session(conn, args)
+    ids = [int(x) for x in args.ids.split(",") if x.strip()] if args.ids else None
+    n = store.mark_read(conn, sid, message_ids=ids, all_unread=args.all)
+    if args.json:
+        print(json.dumps({"marked": n}))
+    else:
+        print(f"marked {n}")
+    return 0
+
+
+def cmd_meter(args) -> int:
+    """Record one push-triggered event in `hook_metrics` so `standup` can audit
+    the cost of auto-turns ("turns triggered by push").
+    """
+    conn = store.connect()
+    sid = _me_session(conn, args)
+    store.record_hook_metric(
+        conn, session_id=sid, event=args.event, injected_chars=args.chars, elapsed_ms=None
+    )
+    if args.json:
+        print(json.dumps({"ok": True, "event": args.event, "session": sid}))
+    else:
+        print(f"metered {args.event} for {sid}")
     return 0
 
 
@@ -1918,6 +2082,45 @@ def main(argv: list[str] | None = None) -> int:
     lg.add_argument("-n", type=int, default=20)
     lg.add_argument("-t", "--topic")
     lg.set_defaults(fn=cmd_log)
+
+    # Push delivery: the machine-readable feed the bundled mod polls.
+    wh = sub.add_parser("whoami", help="the acting session's id + handle (JSON for the mod)")
+    wh.add_argument("--json", action="store_true", help="machine-readable output")
+    wh.set_defaults(fn=cmd_whoami)
+
+    pl = sub.add_parser("pull", help="inbox messages with id > --after, oldest first (cursor feed)")
+    pl.add_argument("--after", type=int, default=0, help="cursor: only messages with a greater id")
+    pl.add_argument("--session", help="act as this session id (default: resolve from the pid walk)")
+    pl.add_argument("--urgent-only", action="store_true", help="only urgent messages")
+    pl.add_argument("--limit", type=int, default=50, help="max rows (default: 50)")
+    pl.add_argument(
+        "--preview-chars", type=int, default=200, help="body preview length (default: 200)"
+    )
+    pl.add_argument("--json", action="store_true", help="machine-readable output")
+    pl.set_defaults(fn=cmd_pull)
+
+    sd = sub.add_parser("send", help="post as the acting session (unlike `say`, which is @jorge)")
+    sd.add_argument("text", nargs="+")
+    sd.add_argument("--to", help="direct message: handle, id, or short id")
+    sd.add_argument("-t", "--topic", help="channel instead of a DM")
+    sd.add_argument("--session", help="act as this session id (default: resolve from the pid walk)")
+    sd.add_argument("-u", "--urgent", action="store_true", help="blocks the recipient from idling")
+    sd.add_argument("--json", action="store_true", help="machine-readable output")
+    sd.set_defaults(fn=cmd_send)
+
+    mr = sub.add_parser("mark-read", help="mark inbox messages read by id")
+    mr.add_argument("--ids", help="comma-separated message ids")
+    mr.add_argument("--all", action="store_true", help="mark every unread message read")
+    mr.add_argument("--session", help="act as this session id (default: resolve from the pid walk)")
+    mr.add_argument("--json", action="store_true", help="machine-readable output")
+    mr.set_defaults(fn=cmd_mark_read)
+
+    mt = sub.add_parser("meter", help="record a push-triggered event in hook_metrics (auditable)")
+    mt.add_argument("--event", default="push_wake", help="event name (default: push_wake)")
+    mt.add_argument("--chars", type=int, default=0, help="chars injected into the woken turn")
+    mt.add_argument("--session", help="act as this session id (default: resolve from the pid walk)")
+    mt.add_argument("--json", action="store_true", help="machine-readable output")
+    mt.set_defaults(fn=cmd_meter)
 
     a = sub.add_parser("agents", help="who is on the bus")
     a.set_defaults(fn=cmd_agents)

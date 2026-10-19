@@ -1144,6 +1144,46 @@ def inbox(
     return [_msg_dict(r) for r in conn.execute(q, args)]
 
 
+def inbox_after(
+    conn: sqlite3.Connection,
+    session_id: str,
+    *,
+    after_id: int = 0,
+    urgent_only: bool = False,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Inbox messages with ``id > after_id``, oldest first — the cursor feed a
+    push-delivery poller drains.
+
+    Same addressed-to-me predicate as `inbox`, but keyed on the monotonic
+    ``id`` instead of read-state or a time window, so a poller never double-
+    sees a row and never misses one (gap-free by construction). Read-state
+    rides on each row (``read``) for the caller to gate on, but does not
+    filter here: the cursor is the poller's own "have I noticed this row yet"
+    pointer, independent of the `reads` table.
+    """
+    where, args = _inbox_where(session_id)
+    q = (
+        "SELECT m.*, r.read_at AS read_at FROM messages m "
+        "LEFT JOIN reads r ON r.message_id=m.id AND r.session_id=? "
+        f"WHERE {where} AND m.id > ?"
+    )
+    args = [session_id, *args, after_id]
+    if urgent_only:
+        q += " AND m.urgent=1"
+    q += " ORDER BY m.id ASC LIMIT ?"
+    args.append(limit)
+    return [_msg_dict(r) for r in conn.execute(q, args)]
+
+
+def max_message_id(conn: sqlite3.Connection) -> int:
+    """The newest message id on the bus, or 0 when there are none. A poller
+    seeds its cursor here so it wakes on what arrives *after* it starts, not on
+    the whole backlog.
+    """
+    return int(conn.execute("SELECT COALESCE(MAX(id), 0) AS m FROM messages").fetchone()["m"])
+
+
 def inbox_count(conn: sqlite3.Connection, session_id: str, *, unread_only: bool = True) -> int:
     """How many messages the inbox would return with no limit. Lets a capped
     `inbox` say how much it is holding back instead of just "there is more".

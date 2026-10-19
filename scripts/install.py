@@ -38,6 +38,14 @@ HOOK_BIN = VENV / "bin" / "cabildo-hook"
 CABILDO_BIN = VENV / "bin" / "cabildo"
 SETTINGS = Path.home() / ".claude" / "settings.json"
 
+# The bundled Claude Code mod (push delivery, GitLab #30): a marketplace root
+# holding one plugin. Installed at user scope so every session on the machine
+# loads it; the mod shells the `cabildo` CLI, found via env.CABILDO_BIN below.
+MODS_DIR = REPO / "mods"
+MOD_MARKETPLACE = "cabildo-mods"
+MOD_PLUGIN = "cabildo-push"
+MOD_PLUGIN_ID = f"{MOD_PLUGIN}@{MOD_MARKETPLACE}"
+
 CLIENTS = ("claude", "codex", "opencode", "both", "all")
 
 # event -> (cabildo-hook arg, timeout_s, tool matcher or None). The
@@ -169,9 +177,42 @@ def patch_settings() -> None:
         groups.append(group)
         print(f"  + {event}: {cmd}")
 
+    # The push-delivery mod shells the `cabildo` CLI from $.process.run, which
+    # inherits the session env. Pin the venv's binary so the mod finds it even
+    # when the venv is not on PATH.
+    env = data.setdefault("env", {})
+    if env.get("CABILDO_BIN") != str(CABILDO_BIN):
+        env["CABILDO_BIN"] = str(CABILDO_BIN)
+        print(f"  + env.CABILDO_BIN = {CABILDO_BIN}")
+
     if SETTINGS.exists():
         shutil.copy(SETTINGS, SETTINGS.with_suffix(".json.bak"))
     SETTINGS.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def register_plugin() -> None:
+    """Install and enable the bundled push-delivery mod at user scope. Uses the
+    `claude plugin` CLI (which also writes the marketplace/enable records), so a
+    future session loads it without an interactive `/plugin` step. Non-fatal:
+    an older `claude` without `plugin` subcommands, or a validate warning, must
+    not abort the rest of the install — messaging, presence and claims work
+    without the mod; it only adds the idle-wake doorbell.
+    """
+    if not MODS_DIR.exists():
+        return
+    print("• installing the cabildo-push mod (user scope)")
+    try:
+        require("claude")
+        if sh(["claude", "plugin", "validate", str(MODS_DIR)], check=False) != 0:
+            print("  ! plugin validate failed — skipping the mod (the bus still works)")
+            return
+        # `marketplace add` / `install` are idempotent in practice (a second run
+        # reports 'already …' and we tolerate a non-zero exit either way).
+        sh(["claude", "plugin", "marketplace", "add", str(MODS_DIR)], check=False)
+        sh(["claude", "plugin", "install", MOD_PLUGIN_ID, "--scope", "user"], check=False)
+        sh(["claude", "plugin", "enable", MOD_PLUGIN_ID, "--scope", "user"], check=False)
+    except InstallError as e:
+        print(f"  ! {e} — skipping the mod (the bus still works)")
 
 
 def install_codex() -> None:
@@ -227,6 +268,12 @@ def preview(clients: tuple[str, ...]) -> None:
         print(f"• Claude: wire hooks into {SETTINGS} (existing entries preserved):")
         for event, (event_arg, *_rest) in HOOKS.items():
             print(f"    {event}: {hook_command(event_arg)}")
+        print(f"    env.CABILDO_BIN = {CABILDO_BIN}")
+        if MODS_DIR.exists():
+            print("• Claude: install the push-delivery mod (user scope):")
+            print(f"    $ claude plugin validate {MODS_DIR}")
+            print(f"    $ claude plugin marketplace add {MODS_DIR}")
+            print(f"    $ claude plugin install {MOD_PLUGIN_ID} --scope user")
 
     if "codex" in clients:
         cc = _codex_config()
@@ -286,6 +333,7 @@ def main(argv: list[str] | None = None) -> int:
         if "claude" in clients:
             register_mcp()
             patch_settings()
+            register_plugin()
         if "codex" in clients:
             install_codex()
         if "opencode" in clients:

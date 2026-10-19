@@ -43,6 +43,7 @@ def steps(monkeypatch):
         "migrate_legacy_home",
         "register_mcp",
         "patch_settings",
+        "register_plugin",
         "install_codex",
     ):
         monkeypatch.setattr(install, name, lambda _n=name: calls.append(_n))
@@ -51,16 +52,18 @@ def steps(monkeypatch):
 
 def test_client_claude_is_default_and_skips_codex(steps):
     assert install.main([]) == 0
-    assert "register_mcp" in steps and "patch_settings" in steps
+    assert {"register_mcp", "patch_settings", "register_plugin"} <= set(steps)
     assert "install_codex" not in steps
 
 
 def test_client_codex_does_not_touch_claude_settings(steps):
     assert install.main(["--client", "codex"]) == 0
     assert "install_codex" in steps
-    # Codex-only must not register the Claude MCP entry or patch settings.json.
+    # Codex-only must not register the Claude MCP entry, patch settings.json, or
+    # install the mod.
     assert "register_mcp" not in steps
     assert "patch_settings" not in steps
+    assert "register_plugin" not in steps
 
 
 def test_client_both_wires_everything(steps):
@@ -78,6 +81,7 @@ def test_print_is_non_mutating(monkeypatch, capsys):
         "migrate_legacy_home",
         "register_mcp",
         "patch_settings",
+        "register_plugin",
         "install_codex",
         "sh",
     ):
