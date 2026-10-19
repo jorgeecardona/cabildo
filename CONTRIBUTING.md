@@ -70,7 +70,8 @@ tasks through `make` or `moon run`, never by hand-wiring stages.
 
 ## Versioning
 
-The version lives only in `pyproject.toml`. Do not edit it by hand: the
+The version is the `__version__` literal in `src/cabildo/__init__.py`, which
+hatchling reads so `pyproject.toml` never disagrees. Do not edit it by hand: the
 pre-commit hook auto-bumps it when anything under `src/` changes, and CI's
 version-guard enforces that a `src/` change carries a bump. Use `make bump
 TYPE=patch|minor|major` only when you need to bump without a `src/` change.

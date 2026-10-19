@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
-    { name = "Jorge Eduardo Cardona Gaviria", email = "jorgeecardona@gmail.com" },
+    { name = "Jorge Cardona", email = "jorgeecardona@gmail.com" },
 ]
 keywords = ["claude-code", "agents", "mcp", "ipc", "coordination", "multi-agent"]
 classifiers = [
@@ -68,6 +68,12 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.uv]
+# After the pre-commit hook auto-bumps __version__ in the package __init__, uv must treat the
+# editable install as stale and reinstall it; without the __init__ key the next `make check`
+# runs against the old version. (pyproject is already an implicit key; __init__ is the version source.)
+cache-keys = [{ file = "pyproject.toml" }, { file = "src/cabildo/__init__.py" }]
 
 [build-system]
 requires = ["hatchling"]

@@ -28,7 +28,7 @@ cabildo is an IPC bus and chat room for coordinating parallel Claude Code agents
 
 ## Gotchas
 
-- Version lives only in `pyproject.toml`. The pre-commit hook auto-bumps it when `src/` changes, and CI's version-guard enforces that a `src/` change carries a bump. Do not edit versions by hand.
+- The version is the `__version__` literal in `src/cabildo/__init__.py`; hatchling reads it so `pyproject.toml` never disagrees. The pre-commit hook auto-bumps it when `src/` changes, and CI's version-guard enforces that a `src/` change carries a bump. Do not edit versions by hand.
 - The `mcp` dependency is pinned `<2` on purpose: mcp 2.0 moves `FastMCP`, so an unbounded install resolves to a version where the import is gone and the MCP tools silently never appear. Relax it only in the same commit that migrates the imports.
 - moon owns task ordering; do not hand-wire CI stages. Run tasks through `make` or `moon run`.
 - Some features rely on platform specifics (`/proc` process identity, `notify-send`, `systemd --user`); `cabildo doctor` flags what a given OS lacks.
