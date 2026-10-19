@@ -41,11 +41,11 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://gitlab.com/jorgeecardona/cabildo"
-Repository = "https://gitlab.com/jorgeecardona/cabildo"
-Issues = "https://gitlab.com/jorgeecardona/cabildo/-/issues"
-Changelog = "https://gitlab.com/jorgeecardona/cabildo/-/blob/main/CHANGELOG.md"
-Documentation = "https://jorgeecardona.gitlab.io/cabildo/"
+Homepage = "https://gitlab.com/cardona-oss/cabildo"
+Repository = "https://gitlab.com/cardona-oss/cabildo"
+Issues = "https://gitlab.com/cardona-oss/cabildo/-/issues"
+Changelog = "https://gitlab.com/cardona-oss/cabildo/-/blob/main/CHANGELOG.md"
+Documentation = "https://cardona-oss.gitlab.io/cabildo/"
 
 [project.scripts]
 cabildo = "cabildo.cli:main"
