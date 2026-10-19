@@ -4,11 +4,13 @@
 
 // A per-session, per-ask correlation record. cabildo has no `reply_to` column
 // on `messages`, so the asker correlates a reply here instead of in the DB:
-// `askId` is the id of the message the model sent with `cabildo_ask`, and
+// `askId` is the id of the message the model sent with `cabildo_ask`,
 // `handoff` says who owns the reply when it lands — the blocking ask hook
 // while it still waits (`false`), or the doorbell once the hook gave up and
-// left the late reply for a push wake (`true`).
-export type PushAsk = { askId: number; handoff: boolean }
+// left the late reply for a push wake (`true`) — and `at` is the `$.clock.now()`
+// the ask was made, so a reply that never comes is pruned by TTL rather than
+// lingering as a permanent accept-list bypass.
+export type PushAsk = { askId: number; handoff: boolean; at: number }
 
 // The token bucket that caps auto-turns: `tokens` left, and `refillAt`, the
 // `$.clock.now()` stamp one token is added back at.

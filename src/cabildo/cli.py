@@ -41,7 +41,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import __version__, config, store
+from . import __version__, config, names, store
 from .store import HUMAN_HANDLE, HUMAN_SESSION
 
 
@@ -245,15 +245,18 @@ def cmd_log(args) -> int:
 # out and message ids exposed. These four verbs are that surface; they reuse
 # the store predicates so the inbox definition stays single-sourced.
 # --------------------------------------------------------------------------- #
-def _me_session(conn, args) -> str:
+def _me_session(conn, args) -> str | None:
     """The session acting: an explicit --session wins (the mod learns its id
     once via `whoami` and passes it back, avoiding a pid walk per poll), else
     resolve it the way the git hook does (CABILDO_TAG / CABILDO_SESSION_ID /
     claude-pid ancestry).
+
+    An explicit --session that names no registered session returns None so the
+    caller can refuse, rather than silently acting as a ghost session.
     """
     sid = getattr(args, "session", None)
     if sid:
-        return sid
+        return sid if store.get_session(conn, sid) is not None else None
     from . import guard
 
     return guard.resolve_actor(conn).session_id
@@ -294,6 +297,11 @@ def _pull_row(m: dict, preview_chars: int) -> dict:
         "id": m["id"],
         "from_session": m["from_session"],
         "from_display": m["from_display"],
+        # Robot name is derived deterministically from the session id, so it is
+        # spoof-resistant (unlike a self-assigned handle) — the mod gates its
+        # push allow-list on this, not on from_display.
+        "from_robot": names.robot_name(m["from_session"]),
+        "from_human": m["from_session"] == HUMAN_SESSION,
         "to_session": m["to_session"],
         "topic": m["topic"],
         "urgent": m["urgent"],
@@ -304,9 +312,19 @@ def _pull_row(m: dict, preview_chars: int) -> dict:
     }
 
 
+def _resolve_me(conn, args) -> str | None:
+    """`_me_session` with the uniform 'unknown --session' error for a CLI verb."""
+    sid = _me_session(conn, args)
+    if sid is None:
+        print(f"no such session: {args.session!r}", file=sys.stderr)
+    return sid
+
+
 def cmd_pull(args) -> int:
     conn = store.connect()
-    sid = _me_session(conn, args)
+    sid = _resolve_me(conn, args)
+    if sid is None:
+        return 1
     msgs = store.inbox_after(
         conn,
         sid,
@@ -342,7 +360,9 @@ def cmd_send(args) -> int:
         print("send needs exactly one of --to or --topic", file=sys.stderr)
         return 1
     conn = store.connect()
-    sid = _me_session(conn, args)
+    sid = _resolve_me(conn, args)
+    if sid is None:
+        return 1
     row = store.get_session(conn, sid)
     to_session = None
     topic = None
@@ -354,6 +374,12 @@ def cmd_send(args) -> int:
     else:
         topic = args.topic.lstrip("#")
         store.ensure_topic(conn, topic, created_by=sid)
+    # Same cross-project consent + gated-topic gate the MCP `send` tool enforces
+    # (issue #26): a session-identity CLI send must not be a back door.
+    err = store.consent_error(conn, sid, to_session=to_session, topic=topic)
+    if err is not None:
+        print(err, file=sys.stderr)
+        return 1
     mid = store.post_message(
         conn,
         from_session=sid,
@@ -361,6 +387,7 @@ def cmd_send(args) -> int:
         body=body,
         to_session=to_session,
         topic=topic,
+        project=row["project"] if row else None,
         urgent=args.urgent,
     )
     dest = to_session or f"#{topic}"
@@ -373,8 +400,16 @@ def cmd_send(args) -> int:
 
 def cmd_mark_read(args) -> int:
     conn = store.connect()
-    sid = _me_session(conn, args)
-    ids = [int(x) for x in args.ids.split(",") if x.strip()] if args.ids else None
+    sid = _resolve_me(conn, args)
+    if sid is None:
+        return 1
+    ids = None
+    if args.ids:
+        try:
+            ids = [int(x) for x in args.ids.split(",") if x.strip()]
+        except ValueError:
+            print(f"--ids must be comma-separated integers: {args.ids!r}", file=sys.stderr)
+            return 1
     n = store.mark_read(conn, sid, message_ids=ids, all_unread=args.all)
     if args.json:
         print(json.dumps({"marked": n}))
@@ -388,7 +423,9 @@ def cmd_meter(args) -> int:
     the cost of auto-turns ("turns triggered by push").
     """
     conn = store.connect()
-    sid = _me_session(conn, args)
+    sid = _resolve_me(conn, args)
+    if sid is None:
+        return 1
     store.record_hook_metric(
         conn, session_id=sid, event=args.event, injected_chars=args.chars, elapsed_ms=None
     )

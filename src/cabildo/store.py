@@ -1473,6 +1473,71 @@ def has_grant(
     return row is not None
 
 
+def _reach_ok(
+    conn: sqlite3.Connection, mine: str | None, target: str | None, capability: str
+) -> bool:
+    """Whether a session in project `mine` may reach project `target` with
+    `capability` ('listen'|'send'): your own project, a linked peer, or a
+    granted directional row. A session with no project identity is unrestricted.
+    """
+    m = (mine or "").strip().lower()
+    t = (target or "").strip().lower()
+    if not m or not t or m == t:
+        return True
+    try:
+        from . import cloud
+
+        if t in cloud.peers_visible(m):
+            return True
+    except Exception:
+        pass
+    return has_grant(conn, m, "project", t, capability)
+
+
+def _proj_topic(topic: str | None) -> str | None:
+    t = (topic or "").lstrip("#").strip()
+    return t[len("proj:") :].strip().lower() if t.startswith("proj:") else None
+
+
+def consent_error(
+    conn: sqlite3.Connection,
+    sid: str,
+    *,
+    to_session: str | None = None,
+    topic: str | None = None,
+) -> str | None:
+    """The cross-project consent + gated-topic check (issue #26), shared by the
+    MCP `send` tool and the `cabildo send` CLI so the CLI cannot bypass it.
+    Returns a refusal message, or None when the send is allowed.
+    """
+    row = get_session(conn, sid)
+    mine = row["project_name"] if row else None
+    if to_session is not None:
+        trow = get_session(conn, to_session)
+        tname = (trow["project_name"] if trow else None) or ""
+        if not _reach_ok(conn, mine, tname, "send"):
+            return (
+                f"'{to_session}' is on project '{tname.strip().lower()}', not reachable "
+                f"from yours — request_access for a grant, or link the projects"
+            )
+        return None
+    pj = _proj_topic(topic)
+    if pj is not None:
+        if not _reach_ok(conn, mine, pj, "send"):
+            return (
+                f"#{topic} is project '{pj}'s channel, not reachable from yours — "
+                f"request_access for a grant, or link the projects"
+            )
+        return None
+    if topic and topic_is_gated(conn, topic) and (mine or "").strip():
+        subscribed = topic in subscriptions_of(conn, sid)
+        if not subscribed and not has_grant(
+            conn, (mine or "").strip().lower(), "topic", topic, "send"
+        ):
+            return f"#{topic} is a gated topic — request_access for a 'send' grant"
+    return None
+
+
 def list_grants(
     conn: sqlite3.Connection,
     *,

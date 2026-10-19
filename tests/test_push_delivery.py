@@ -135,6 +135,45 @@ def test_cli_meter_records_a_hook_metric(conn, capsys):
     assert row["session_id"] == "B"
 
 
+def test_cli_pull_exposes_spoof_resistant_identity_fields(conn, capsys):
+    make_session(conn, "A", handle="alice")
+    make_session(conn, "B")
+    store.post_message(conn, from_session="A", from_handle="alice", body="hi", to_session="B")
+    cli.main(["pull", "--session", "B", "--json"])
+    m = json.loads(capsys.readouterr().out)["messages"][0]
+    assert m["from_robot"] and isinstance(m["from_robot"], str)
+    assert m["from_human"] is False
+
+
+def test_cli_send_enforces_cross_project_consent(conn, capsys):
+    # A on alpha, B on beta, no grant/link: the session-identity CLI send must
+    # refuse exactly as the MCP tool does (issue #26) — not a back door.
+    make_session(conn, "A", handle="alice", project="/repo/alpha", project_name="alpha")
+    make_session(conn, "B", handle="bob", project="/repo/beta", project_name="beta")
+    assert cli.main(["send", "--session", "A", "--to", "bob", "--json", "--", "hi"]) == 1
+    assert "not reachable" in capsys.readouterr().err
+    assert store.inbox_after(conn, "B", after_id=0) == []
+
+
+def test_cli_send_same_project_is_allowed(conn):
+    make_session(conn, "A", handle="alice", project_name="alpha")
+    make_session(conn, "B", handle="bob", project_name="alpha")
+    assert cli.main(["send", "--session", "A", "--to", "bob", "--json", "--", "hi"]) == 0
+
+
+def test_cli_unknown_session_is_refused(conn, capsys):
+    make_session(conn, "A")
+    assert cli.main(["pull", "--session", "ghost", "--json"]) == 1
+    assert "no such session" in capsys.readouterr().err
+    assert cli.main(["send", "--session", "ghost", "--to", "A", "--json", "--", "x"]) == 1
+
+
+def test_cli_mark_read_rejects_non_integer_ids(conn, capsys):
+    make_session(conn, "B")
+    assert cli.main(["mark-read", "--session", "B", "--ids", "1,abc", "--json"]) == 1
+    assert "integers" in capsys.readouterr().err
+
+
 def test_cli_whoami_resolves_via_session_env(conn, capsys, monkeypatch):
     make_session(conn, "sess-x", handle="xavier")
     monkeypatch.setenv("CABILDO_SESSION_ID", "sess-x")

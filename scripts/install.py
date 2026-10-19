@@ -211,6 +211,9 @@ def register_plugin() -> None:
         sh(["claude", "plugin", "marketplace", "add", str(MODS_DIR)], check=False)
         sh(["claude", "plugin", "install", MOD_PLUGIN_ID, "--scope", "user"], check=False)
         sh(["claude", "plugin", "enable", MOD_PLUGIN_ID, "--scope", "user"], check=False)
+        # Re-running after editing the mod: refresh the installed copy in case
+        # the marketplace snapshotted the local path at add time.
+        sh(["claude", "plugin", "update", MOD_PLUGIN_ID], check=False)
     except InstallError as e:
         print(f"  ! {e} — skipping the mod (the bus still works)")
 
@@ -274,6 +277,7 @@ def preview(clients: tuple[str, ...]) -> None:
             print(f"    $ claude plugin validate {MODS_DIR}")
             print(f"    $ claude plugin marketplace add {MODS_DIR}")
             print(f"    $ claude plugin install {MOD_PLUGIN_ID} --scope user")
+            print(f"    $ claude plugin enable {MOD_PLUGIN_ID} --scope user")
 
     if "codex" in clients:
         cc = _codex_config()
