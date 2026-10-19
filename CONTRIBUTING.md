@@ -106,4 +106,4 @@ The repo uses lowercase, area-prefixed subjects (for example
 ## License
 
 By contributing, you agree that your contributions are licensed under the MIT
-License, the same terms as the project (see [LICENSE](LICENSE)).
+License, the same terms as the project (see [LICENSE](https://gitlab.com/cardona-oss/cabildo/-/blob/main/LICENSE)).

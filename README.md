@@ -204,7 +204,9 @@ must cost 5s once, not block the session repeatedly.
 
 - **Repository:** https://gitlab.com/cardona-oss/cabildo
 - **PyPI:** https://pypi.org/project/cabildo/
+- **Documentation:** <https://cardona-oss.gitlab.io/cabildo/>
 - **Changelog:** [CHANGELOG.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/CHANGELOG.md)
+- **Issues:** <https://gitlab.com/cardona-oss/cabildo/-/issues>
 
 ## Contributing
 

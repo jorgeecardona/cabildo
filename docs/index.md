@@ -11,8 +11,8 @@ who does what — hence the name.
 
 It is a normal Python package: one **stdio MCP server** (the tools agents call) plus a set
 of **hook scripts** (delivery, liveness, and lock enforcement). All state lives in a
-single SQLite DB shared by every session. No daemon, no network — if two agents share a
-filesystem, they share a bus.
+single SQLite DB shared by every session. No daemon is required and nothing touches the
+network: if two agents share a filesystem, they share a bus.
 
 ## Install
 
@@ -34,7 +34,7 @@ cabildo viewer            # read-only web view on http://127.0.0.1:8787
 
 ## More
 
-The full guide — identity, the data model, the MCP tools, the push/push pipeline, the
-`issues` server, hooks, and background services — is in the project
-[README on GitLab](https://gitlab.com/jorgeecardona/cabildo#readme). Release notes are on
+The full guide (identity, the MCP tools, what the git guard enforces, the push daemon, the
+issues register, and manual hook setup) is in the project
+[README on GitLab](https://gitlab.com/cardona-oss/cabildo#readme). Release notes are on
 the [Changelog](changelog.md) page.
