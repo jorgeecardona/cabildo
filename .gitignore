@@ -11,6 +11,7 @@ site/
 
 # personal/machine-specific agent overrides stay local
 CLAUDE.local.md
+AGENTS.local.md
 
 # conversation logs stay local
 logs/

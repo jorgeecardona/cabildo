@@ -1,6 +1,6 @@
 [project]
 name = "cabildo"
-version = "0.1.94"
+dynamic = ["version"]  # the single source of truth is __version__ in src/cabildo/__init__.py (see [tool.hatch.version])
 description = "IPC bus + chat room for coordinating parallel Claude Code agents: messaging, presence, and advisory locks with hook-level enforcement"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -72,6 +72,11 @@ addopts = "-q"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+# The version lives as __version__ in the package itself; hatchling reads it (by regex, no import) so
+# pyproject and the runtime never disagree. scripts/bump-version rewrites that literal.
+path = "src/cabildo/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cabildo"]

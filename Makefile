@@ -40,7 +40,7 @@ check: lint format-check typecheck test ## the full CI test stage: lint + format
 deadcode: ## report dead-code candidates (vulture); not a gate -- confirm each by hand
 	@uv run vulture || true
 
-bump: ## bump version in pyproject.toml -- TYPE=patch|minor|major (default patch)
+bump: ## bump __version__ in src/cabildo/__init__.py -- TYPE=patch|minor|major (default patch)
 	./scripts/bump-version $(or $(TYPE),patch)
 
 docs: ## build docs strictly (as CI / Pages do) -- the CI :docs task
