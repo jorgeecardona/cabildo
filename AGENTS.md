@@ -9,7 +9,7 @@ cabildo is an IPC bus and chat room for coordinating parallel Claude Code agents
 ## Build
 
 - Toolchain (moon, uv) is pinned in `.prototools`; `proto install` brings it up.
-- `uv sync` installs dependencies. The package is stdlib-only at runtime; the only runtime dependency is `mcp`.
+- `uv sync` installs dependencies. The only runtime dependency is `mcp` (pinned `<2`); otherwise stdlib-only.
 - `python scripts/install.py` (aka `make install`) does the full editable install: it also registers the MCP server and wires the git hooks. `--client {claude,codex,both}` selects which client(s) to wire (default `claude`); `--print` is a non-mutating dry run.
 - `make install-hooks` once, to point git at the tracked `.githooks/` (pre-commit + pre-push).
 - `make build` builds the sdist and wheel into `dist/`.
@@ -17,13 +17,14 @@ cabildo is an IPC bus and chat room for coordinating parallel Claude Code agents
 ## Test
 
 - `make test` runs the suite (pytest).
-- `make check` runs lint + typecheck + test. Everything in it must pass before you commit.
+- `make check` runs lint + format-check + typecheck + test. Everything in it must pass before you commit.
 - CI runs the full graph with `moon run :ci` (and `moon run :release` on main). `:ci` also covers build, docs, and the version guard.
 
 ## Style
 
 - Format and autofix: `make format` (ruff, line length 100).
-- Lint: `make lint` (ruff). Types: `make typecheck` (pyright, strict).
+- Lint: `make lint` (ruff, `select = ["ALL"]` with per-file ignores). Types: `make typecheck` (pyright, standard; `reportPrivateUsage = false`).
+- Python 3.11+ only.
 - Prefer explicit types and small, well-typed functions; keep the public API typed.
 
 ## Gotchas
