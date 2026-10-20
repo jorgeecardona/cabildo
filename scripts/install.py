@@ -206,9 +206,8 @@ def register_plugin() -> None:
     if not res.ok:
         print(f"  ! {res.reason} — skipping the mod (the bus still works)")
     else:
-        failed = [s for s in res.steps if s.rc != 0]
-        for s in failed:
-            print(f"  ! exit {s.rc}: {' '.join(s.argv)}")
+        for s in (s for s in res.steps if s.rc != 0):
+            print(f"  ! exit {s.rc} (benign on a re-run): {' '.join(s.argv)}")
 
 
 def install_codex() -> None:

@@ -87,8 +87,15 @@ path = "src/cabildo/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/cabildo"]
 
+# Ship the bundled Claude Code mod (push delivery, #30) inside the package so
+# `cabildo plugin` finds it on any install — editable or a plain wheel in
+# site-packages — not only from a repo checkout. It lands beside the package as
+# cabildo/_bundled_mods/; `cabildo.mods.mods_dir()` looks there.
+[tool.hatch.build.targets.wheel.force-include]
+"mods" = "src/cabildo/_bundled_mods"
+
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "docs", "README.md", "CHANGELOG.md", "LICENSE"]
+include = ["src", "tests", "docs", "mods", "README.md", "CHANGELOG.md", "LICENSE"]
 exclude = ["docs/issues"]
 
 [tool.ruff]

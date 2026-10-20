@@ -29,22 +29,29 @@ PLUGIN_ID = f"{PLUGIN}@{MARKETPLACE}"
 # sequence and the claude-detection stay here.
 Runner = Callable[[list[str]], int]
 
+# This package's own directory (…/cabildo). The bundled mod sits beside it in a
+# wheel (`_bundled_mods/`) or two levels up in a repo checkout (`../mods`).
+_PKG_DIR = Path(__file__).resolve().parent
+
 
 def mods_dir() -> Path | None:
-    """The bundled marketplace root, or None when it is not beside this install.
+    """The bundled marketplace root, or None when it cannot be found.
 
-    The normal install is editable, so the package lives under the repo's `src/`
-    and the sibling `mods/` is two parents up. `CABILDO_MODS_DIR` overrides for
-    an unusual layout. A wheel install ships only the package, so there is no
-    `mods/` and this returns None — the caller then reports there is nothing to
-    install rather than guessing a path.
+    Checked in order: `CABILDO_MODS_DIR` (an explicit override); the copy shipped
+    inside the package at `cabildo/_bundled_mods/` (a plain wheel install in
+    site-packages — the common case for `pip`/`uv pip install cabildo`); then the
+    repo's own `mods/` two parents up (an editable checkout, where the wheel's
+    force-include has not run). First one that exists wins; None otherwise, and
+    the caller reports there is nothing to install rather than guessing a path.
     """
     override = os.environ.get("CABILDO_MODS_DIR")
     if override:
         p = Path(override).expanduser()
         return p if p.exists() else None
-    cand = Path(__file__).resolve().parents[2] / "mods"
-    return cand if cand.exists() else None
+    for cand in (_PKG_DIR / "_bundled_mods", _PKG_DIR.parents[1] / "mods"):
+        if cand.exists():
+            return cand
+    return None
 
 
 @dataclass(frozen=True)

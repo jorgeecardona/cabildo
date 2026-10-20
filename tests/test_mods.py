@@ -102,6 +102,26 @@ def test_mods_dir_env_override(monkeypatch, tmp_path):
     assert mods.mods_dir() is None
 
 
+def test_mods_dir_finds_the_packaged_copy(monkeypatch, tmp_path):
+    # A plain wheel install has no repo `mods/`; the mod ships beside the package
+    # as `_bundled_mods/`. Point _PKG_DIR at a fake site-packages layout.
+    pkg = tmp_path / "site-packages" / "cabildo"
+    bundled = pkg / "_bundled_mods"
+    bundled.mkdir(parents=True)
+    monkeypatch.setattr(mods, "_PKG_DIR", pkg)
+    assert mods.mods_dir() == bundled
+
+
+def test_mods_dir_env_override_beats_the_packaged_copy(monkeypatch, tmp_path):
+    pkg = tmp_path / "cabildo"
+    (pkg / "_bundled_mods").mkdir(parents=True)
+    monkeypatch.setattr(mods, "_PKG_DIR", pkg)
+    override = tmp_path / "custom"
+    override.mkdir()
+    monkeypatch.setenv("CABILDO_MODS_DIR", str(override))
+    assert mods.mods_dir() == override
+
+
 def test_plan_mirrors_the_install_sequence():
     verbs = [cmd[2] for cmd in mods.plan()]
     assert verbs == ["validate", "marketplace", "install", "enable", "update"]
