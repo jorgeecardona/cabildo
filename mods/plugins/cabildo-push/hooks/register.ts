@@ -146,10 +146,14 @@ function uniq(xs: readonly string[]): string[] {
   return [...new Set(xs)]
 }
 
-function toolResult(text: string, isError = false): {
-  result: { content: { type: 'text'; text: string }[]; isError: boolean }
-} {
-  return { result: { content: [{ type: 'text', text }], isError } }
+// A `tool.call` hook serving a registered tool resolves to `{ result }` whose
+// value is the model-visible text (a string), or `{ deny }` to hand the model
+// an error result. The MCP `{ content:[...], isError }` envelope is NOT the
+// shape here — the engine validates the resolved value against the tool's
+// output schema (string/array/undefined for a schema-less custom tool) and
+// rejects an object, which is what broke the first live call.
+function toolResult(text: string, isError = false): { result: string } | { deny: string } {
+  return isError ? { deny: text } : { result: text }
 }
 
 // --------------------------------------------------------------------------- //
