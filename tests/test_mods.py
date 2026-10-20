@@ -122,6 +122,24 @@ def test_mods_dir_env_override_beats_the_packaged_copy(monkeypatch, tmp_path):
     assert mods.mods_dir() == override
 
 
+def test_step_warnings_lists_only_non_zero_steps_and_stays_honest():
+    res = mods.Result(
+        ok=True,
+        steps=(
+            mods.Step(argv=("claude", "plugin", "install", "x"), rc=0),
+            mods.Step(argv=("claude", "plugin", "enable", "x"), rc=1),
+        ),
+    )
+    lines = mods.step_warnings(res)
+    assert len(lines) == 1
+    # The line names the failing command and does NOT assert the cause is benign.
+    assert "enable" in lines[0]
+    assert "real failure" in lines[0]
+    assert "re-run" in lines[0]
+    # All-zero → no warnings.
+    assert mods.step_warnings(mods.Result(ok=True, steps=())) == []
+
+
 def test_plan_mirrors_the_install_sequence():
     verbs = [cmd[2] for cmd in mods.plan()]
     assert verbs == ["validate", "marketplace", "install", "enable", "update"]

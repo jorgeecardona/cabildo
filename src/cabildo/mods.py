@@ -14,6 +14,7 @@ doorbell.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -77,10 +78,25 @@ class Result:
 
 def _run_echo(argv: list[str]) -> int:
     """Default runner: print the command, run it, return its exit code."""
-    import shlex
-
     print("  $", " ".join(shlex.quote(c) for c in argv))
     return subprocess.call(argv)
+
+
+def step_warnings(result: Result) -> list[str]:
+    """One line per non-zero step, for a caller to print. Neutral about the
+    cause: `install()` tolerates a non-zero `install`/`enable`/`update` because
+    on a re-run `claude` exits non-zero for "already installed"/"already
+    enabled" — but the exit code alone cannot tell that from a real failure
+    (the runner returns only an rc, not the output), so the line says both
+    rather than asserting the benign case. Single-sourced so the CLI verb and
+    the installer stay in step.
+    """
+    return [
+        f"exit {s.rc}: {' '.join(shlex.quote(c) for c in s.argv)} "
+        f"(expected on a re-run — 'already installed/enabled' — otherwise a real failure)"
+        for s in result.steps
+        if s.rc != 0
+    ]
 
 
 def install(run: Runner = _run_echo, *, scope: str = "user", update: bool = True) -> Result:

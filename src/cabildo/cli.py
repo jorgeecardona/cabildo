@@ -466,15 +466,10 @@ def cmd_plugin(args) -> int:
     if not res.ok:
         print(f"{C.YELLOW}skipped:{C.OFF} {res.reason} {C.DIM}(the bus still works){C.OFF}")
         return 1
-    # install() tolerates a non-zero install/enable (on a re-run `claude` exits
-    # non-zero for "already installed"/"already enabled"), but a step that
-    # actually failed should not hide behind the green line — so surface every
-    # non-zero step, flagged as possibly-benign rather than as a hard failure.
-    for s in (s for s in res.steps if s.rc != 0):
-        print(
-            f"  {C.YELLOW}! exit {s.rc}{C.OFF} {C.DIM}(benign on a re-run — "
-            f"'already installed/enabled'):{C.OFF} {' '.join(shlex.quote(c) for c in s.argv)}"
-        )
+    # A step that actually failed must not hide behind the green line; the
+    # wording (single-sourced in mods) stays honest about the re-run case.
+    for line in mods.step_warnings(res):
+        print(f"  {C.YELLOW}!{C.OFF} {line}")
     if args.remove:
         print(f"{C.GREEN}removed{C.OFF} — restart Claude Code sessions to drop the doorbell")
     else:
