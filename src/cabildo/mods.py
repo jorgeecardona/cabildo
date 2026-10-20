@@ -110,26 +110,31 @@ def install(run: Runner = _run_echo, *, scope: str = "user", update: bool = True
 
 def remove(run: Runner = _run_echo, *, scope: str = "user") -> Result:
     """Uninstall the mod at `scope`. `uninstall` also drops the enable record, so
-    there is no separate disable step.
+    there is no separate disable step. `ok` reflects the command's exit code — a
+    `claude` too old for `uninstall` passes `shutil.which` but exits non-zero.
     """
     if shutil.which("claude") is None:
         return Result(ok=False, reason="`claude` is not on PATH")
-    steps: list[Step] = []
-    rc = run(["claude", "plugin", "uninstall", PLUGIN_ID, "--scope", scope])
-    steps.append(Step(argv=("claude", "plugin", "uninstall", PLUGIN_ID, "--scope", scope), rc=rc))
-    return Result(ok=True, steps=tuple(steps))
+    argv = ["claude", "plugin", "uninstall", PLUGIN_ID, "--scope", scope]
+    rc = run(argv)
+    reason = None if rc == 0 else f"`claude plugin uninstall` exited {rc}"
+    return Result(ok=rc == 0, reason=reason, steps=(Step(argv=tuple(argv), rc=rc),))
 
 
-def plan(scope: str = "user") -> list[list[str]]:
-    """The commands a real `install` would run, for a dry-run preview. Changes
-    nothing; mirrors the sequence in `install` without a `claude` on PATH.
+def plan(scope: str = "user", *, update: bool = True, remove: bool = False) -> list[list[str]]:
+    """The commands a real run would execute, for a dry-run preview. Changes
+    nothing; mirrors `install`/`remove` so the preview cannot drift from them.
     """
+    if remove:
+        return [["claude", "plugin", "uninstall", PLUGIN_ID, "--scope", scope]]
     d = mods_dir()
     root = str(d) if d is not None else "<no mods dir found>"
-    return [
+    steps = [
         ["claude", "plugin", "validate", root],
         ["claude", "plugin", "marketplace", "add", root],
         ["claude", "plugin", "install", PLUGIN_ID, "--scope", scope],
         ["claude", "plugin", "enable", PLUGIN_ID, "--scope", scope],
-        ["claude", "plugin", "update", PLUGIN_ID],
     ]
+    if update:
+        steps.append(["claude", "plugin", "update", PLUGIN_ID])
+    return steps

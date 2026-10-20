@@ -444,18 +444,20 @@ def cmd_plugin(args) -> int:
     `claude` is missing or the manifest fails to validate, it says so and the
     bus still works without it.
     """
+    import shlex
+
     from . import mods
 
     def run(argv: list[str]) -> int:
-        print(f"  {C.DIM}$ {' '.join(argv)}{C.OFF}")
+        print(f"  {C.DIM}$ {' '.join(shlex.quote(c) for c in argv)}{C.OFF}")
         return subprocess.call(argv)
 
     if args.print_only:
         where = mods.mods_dir()
         print(f"{C.DIM}mod marketplace root:{C.OFF} {where or '(none found on this install)'}")
         print(f"{C.DIM}would run (scope {args.scope}):{C.OFF}")
-        for argv in mods.plan(scope=args.scope):
-            print(f"    $ {' '.join(argv)}")
+        for argv in mods.plan(scope=args.scope, remove=args.remove):
+            print(f"    $ {' '.join(shlex.quote(c) for c in argv)}")
         return 0
 
     verb = "remove" if args.remove else "install"
@@ -464,6 +466,11 @@ def cmd_plugin(args) -> int:
     if not res.ok:
         print(f"{C.YELLOW}skipped:{C.OFF} {res.reason} {C.DIM}(the bus still works){C.OFF}")
         return 1
+    # install() tolerates a non-zero install/enable (e.g. "already installed"),
+    # but a step that actually failed should not hide behind the green line.
+    failed = [s for s in res.steps if s.rc != 0]
+    for s in failed:
+        print(f"  {C.YELLOW}! exit {s.rc}:{C.OFF} {' '.join(shlex.quote(c) for c in s.argv)}")
     if args.remove:
         print(f"{C.GREEN}removed{C.OFF} — restart Claude Code sessions to drop the doorbell")
     else:

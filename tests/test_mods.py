@@ -8,7 +8,18 @@ handed, so the tests pin the exact commands and their order without a real
 
 from __future__ import annotations
 
+import pytest
+
 from cabildo import cli, mods
+
+
+@pytest.fixture(autouse=True)
+def _clean_mods_env(monkeypatch):
+    """Pin `mods_dir()` to the real repo `mods/` by clearing any inherited
+    `CABILDO_MODS_DIR` — otherwise a value in the ambient environment points the
+    installer elsewhere and these tests' "mod found" assumption breaks.
+    """
+    monkeypatch.delenv("CABILDO_MODS_DIR", raising=False)
 
 
 class FakeRun:
@@ -129,9 +140,34 @@ def test_cli_plugin_remove(capsys, monkeypatch):
     assert "removed" in capsys.readouterr().out
 
 
-def test_cli_plugin_install_at_project_scope(capsys, monkeypatch):
+def test_cli_plugin_install_at_project_scope(monkeypatch):
     monkeypatch.setattr(mods.shutil, "which", lambda _c: "/usr/bin/claude")
     seen: list[list[str]] = []
     monkeypatch.setattr(mods.subprocess, "call", lambda argv: seen.append(argv) or 0)
     assert cli.main(["plugin", "--scope", "project"]) == 0
     assert ["claude", "plugin", "install", mods.PLUGIN_ID, "--scope", "project"] in seen
+
+
+def test_cli_plugin_remove_print_shows_uninstall_not_install(capsys, monkeypatch):
+    # A removal preview must not list the install plan (Fable review #3).
+    monkeypatch.setattr(mods.shutil, "which", lambda _c: "/usr/bin/claude")
+    assert cli.main(["plugin", "--remove", "--print"]) == 0
+    out = capsys.readouterr().out
+    assert "uninstall" in out
+    assert "marketplace add" not in out
+
+
+def test_cli_plugin_flags_a_failed_step(capsys, monkeypatch):
+    # install() tolerates a non-zero enable, but the failure must still surface
+    # rather than hide behind the green line (Fable review #1).
+    monkeypatch.setattr(mods.shutil, "which", lambda _c: "/usr/bin/claude")
+    monkeypatch.setattr(mods.subprocess, "call", lambda argv: 7 if argv[2] == "enable" else 0)
+    assert cli.main(["plugin"]) == 0
+    assert "exit 7" in capsys.readouterr().out
+
+
+def test_remove_reports_a_failed_uninstall(monkeypatch):
+    monkeypatch.setattr(mods.shutil, "which", lambda _c: "/usr/bin/claude")
+    res = mods.remove(FakeRun(codes={"uninstall": 3}))
+    assert res.ok is False
+    assert "3" in (res.reason or "")

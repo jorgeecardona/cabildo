@@ -38,13 +38,11 @@ HOOK_BIN = VENV / "bin" / "cabildo-hook"
 CABILDO_BIN = VENV / "bin" / "cabildo"
 SETTINGS = Path.home() / ".claude" / "settings.json"
 
-# The bundled Claude Code mod (push delivery, GitLab #30): a marketplace root
-# holding one plugin. Installed at user scope so every session on the machine
-# loads it; the mod shells the `cabildo` CLI, found via env.CABILDO_BIN below.
-MODS_DIR = REPO / "mods"
-MOD_MARKETPLACE = "cabildo-mods"
-MOD_PLUGIN = "cabildo-push"
-MOD_PLUGIN_ID = f"{MOD_PLUGIN}@{MOD_MARKETPLACE}"
+# The bundled Claude Code mod (push delivery, GitLab #30) is installed at user
+# scope so every session on the machine loads it; the mod shells the `cabildo`
+# CLI, found via env.CABILDO_BIN below. The marketplace root, the plugin id, and
+# the `claude plugin` sequence all live in `cabildo.mods` (single-sourced with
+# the `cabildo plugin` CLI verb); this script only drives it.
 
 CLIENTS = ("claude", "codex", "opencode", "both", "all")
 
@@ -198,19 +196,19 @@ def register_plugin() -> None:
     validate, is reported and skipped — messaging, presence and claims work
     without the mod; it only adds the idle-wake doorbell.
     """
-    if not MODS_DIR.exists():
-        return
     print("• installing the cabildo-push mod (user scope)")
-    src = str(REPO / "src")
-    if src not in sys.path:
-        sys.path.insert(0, src)
-    from cabildo import mods
-
+    mods = _mods()
     # The module runs the same commands `sh` would, echoing each; check=False
     # because its exit codes ride along in the Result, not as a hard failure.
+    # mods.install is the single check: no bundled mod, no `claude`, or a failed
+    # validate each come back as ok=False with a reason, honouring CABILDO_MODS_DIR.
     res = mods.install(lambda argv: sh(argv, check=False), scope="user")
     if not res.ok:
         print(f"  ! {res.reason} — skipping the mod (the bus still works)")
+    else:
+        failed = [s for s in res.steps if s.rc != 0]
+        for s in failed:
+            print(f"  ! exit {s.rc}: {' '.join(s.argv)}")
 
 
 def install_codex() -> None:
@@ -248,6 +246,18 @@ def _codex_config():
     return codex_config
 
 
+def _mods():
+    """Import cabildo.mods from the repo source — the single owner of the mod's
+    marketplace id and the `claude plugin` sequence, shared with the CLI verb.
+    """
+    src = str(REPO / "src")
+    if src not in sys.path:
+        sys.path.insert(0, src)
+    from cabildo import mods
+
+    return mods
+
+
 def _indent(text: str, prefix: str = "      ") -> str:
     return "\n".join(prefix + line if line else line for line in text.splitlines())
 
@@ -267,12 +277,11 @@ def preview(clients: tuple[str, ...]) -> None:
         for event, (event_arg, *_rest) in HOOKS.items():
             print(f"    {event}: {hook_command(event_arg)}")
         print(f"    env.CABILDO_BIN = {CABILDO_BIN}")
-        if MODS_DIR.exists():
+        mods = _mods()
+        if mods.mods_dir() is not None:
             print("• Claude: install the push-delivery mod (user scope):")
-            print(f"    $ claude plugin validate {MODS_DIR}")
-            print(f"    $ claude plugin marketplace add {MODS_DIR}")
-            print(f"    $ claude plugin install {MOD_PLUGIN_ID} --scope user")
-            print(f"    $ claude plugin enable {MOD_PLUGIN_ID} --scope user")
+            for argv in mods.plan(scope="user"):
+                print(f"    $ {' '.join(argv)}")
 
     if "codex" in clients:
         cc = _codex_config()
