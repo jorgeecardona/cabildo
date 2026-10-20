@@ -326,6 +326,77 @@ def read_decisions(
 
 
 @mcp.tool()
+def note_add(text: str, type: str = "topic") -> dict[str, Any]:
+    """Capture a loose end for THIS session (issue #34): a topic you just opened,
+    a follow-up you will not do now, something half-finished. Add one the moment a
+    new thread starts, so it is not lost when the conversation moves on — `/wrap-up`
+    reads these back instead of re-reading the whole conversation. `type` is
+    topic | need | bug | idea | unfinished. The note starts `open`; close it with
+    `note_done` when you finish it here, or `note_park` when you promote it to a
+    project issue/agenda item. List them with `notes`.
+    """
+    with store.connect() as conn:
+        sid = _me(conn)
+        nid = store.add_note(
+            conn,
+            text=text,
+            type=type,
+            session_id=sid,
+            handle=_handle(conn, sid),
+            project=_project(conn, sid),
+            project_name=_project_name(conn, sid),
+        )
+        return {"ok": True, "id": nid, "type": type, "text": text}
+
+
+@mcp.tool()
+def notes(
+    state: str = "open", all_sessions: bool = False, type: str | None = None, limit: int = 50
+) -> list[dict[str, Any]]:
+    """The session notes for THIS session, oldest first — the loose ends to walk
+    at `/wrap-up`. `state` filters open | done | parked (pass an empty string for
+    all); `all_sessions=True` widens to every session on this project (to pick up
+    another session's open threads); `type` narrows to one of
+    topic|need|bug|idea|unfinished. Added with `note_add`, triaged with
+    `note_done` / `note_park`.
+    """
+    with store.connect() as conn:
+        sid = _me(conn)
+        return store.list_notes(
+            conn,
+            session_id=None if all_sessions else sid,
+            project_name=_project_name(conn, sid) if all_sessions else None,
+            state=state or None,
+            type=type,
+            limit=limit,
+        )
+
+
+@mcp.tool()
+def note_done(id: int) -> dict[str, Any]:
+    """Mark a session note finished (state -> done): you completed it in this
+    session. See `notes` for the ids.
+    """
+    with store.connect() as conn:
+        _me(conn)
+        row = store.set_note_state(conn, id, state="done")
+        return {"ok": bool(row), "id": id, "note": row}
+
+
+@mcp.tool()
+def note_park(id: int, ref: str | None = None) -> dict[str, Any]:
+    """Park a session note (state -> parked): it leaves the session to live on as
+    a project issue or agenda item so a later session picks it up without
+    copy-paste. File that issue first (`file_issue` / `agenda_add`) and pass its
+    name as `ref` so the note records where it went. See `notes` for the ids.
+    """
+    with store.connect() as conn:
+        _me(conn)
+        row = store.set_note_state(conn, id, state="parked", parked_ref=ref)
+        return {"ok": bool(row), "id": id, "note": row}
+
+
+@mcp.tool()
 def list_agents(all_projects: bool = False) -> list[dict[str, Any]]:
     """List other active agents. By default only agents on the SAME project
     (git repo) as you; set all_projects=True to also see agents on projects

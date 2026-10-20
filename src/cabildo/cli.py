@@ -1641,6 +1641,54 @@ def cmd_decisions(args) -> int:
     return 0
 
 
+def cmd_notes(args) -> int:
+    """The human's seat at the session notes (issue #34): the loose ends agents
+    captured with `note_add`, scoped to the session that raised them. Lists this
+    session's open notes by default (resolve the session the way the git hook
+    does, or pass --session); --done/--park triage one by id from the terminal.
+    """
+    import datetime as _dt
+
+    conn = store.connect()
+    if args.done is not None or args.park is not None:
+        nid = args.done if args.done is not None else args.park
+        state = "done" if args.done is not None else "parked"
+        row = store.set_note_state(conn, nid, state=state, parked_ref=args.ref)
+        if row is None:
+            print(f"no note #{nid}", file=sys.stderr)
+            return 1
+        print(f"{C.GREEN}{state}{C.OFF} #{nid}: {row['text']}")
+        return 0
+
+    sid = _resolve_me(conn, args) if not args.all else None
+    if sid is None and not args.all:
+        return 1
+    rows = store.list_notes(
+        conn,
+        session_id=sid,
+        state=(args.state or None),
+        type=args.type,
+        limit=args.limit,
+    )
+    if not rows:
+        scope = "any session" if args.all else (sid or "this session")
+        print(
+            f"{C.DIM}no {args.state or ''} notes for {scope} — agents add them with note_add.{C.OFF}"
+        )
+        return 0
+    glyph = {"open": "○", "done": "✓", "parked": "→"}
+    for r in rows:
+        when = _dt.datetime.fromtimestamp(r["created_at"]).strftime("%m-%d %H:%M")
+        g = glyph.get(r["state"], "·")
+        who = f" {C.DIM}{r['handle']}{C.OFF}" if r["handle"] else ""
+        ref = f" {C.DIM}→ {r['parked_ref']}{C.OFF}" if r["parked_ref"] else ""
+        print(
+            f"{C.DIM}{when}{C.OFF} {g} {C.BOLD}#{r['id']}{C.OFF} "
+            f"{C.CYAN}{r['type']}{C.OFF}{who}: {r['text']}{ref}"
+        )
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # The project register
 # --------------------------------------------------------------------------- #
@@ -2488,6 +2536,30 @@ def main(argv: list[str] | None = None) -> int:
     ft.add_argument("--grep", help="substring to match in title/body/refs/tags")
     ft.add_argument("--limit", type=int, default=20, help="max rows (default 20)")
     ft.set_defaults(fn=cmd_decisions)
+
+    nt = sub.add_parser(
+        "notes", help="session loose ends (issue #34), added by agents via note_add"
+    )
+    nt.add_argument(
+        "--session", help="whose notes (default: resolve this session like the git hook)"
+    )
+    nt.add_argument("--all", action="store_true", help="every session's notes, not just one")
+    nt.add_argument(
+        "--state",
+        choices=["open", "done", "parked", ""],
+        default="open",
+        help="filter by state (default open; '' for all)",
+    )
+    nt.add_argument(
+        "--type",
+        choices=list(store.NOTE_TYPES),
+        help="filter by type (topic/need/bug/idea/unfinished)",
+    )
+    nt.add_argument("--limit", type=int, default=50, help="max rows (default 50)")
+    nt.add_argument("--done", type=int, metavar="ID", help="mark note ID done and exit")
+    nt.add_argument("--park", type=int, metavar="ID", help="mark note ID parked and exit")
+    nt.add_argument("--ref", help="with --park: where it went (issue name / agenda item)")
+    nt.set_defaults(fn=cmd_notes)
 
     iss = sub.add_parser(
         "issues", help="this project's docs/issues register: what's ready, what's blocked"

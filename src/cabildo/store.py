@@ -357,6 +357,33 @@ CREATE TABLE IF NOT EXISTS decisions (
 );
 CREATE INDEX IF NOT EXISTS idx_decisions_project ON decisions(project_name, created_at);
 
+-- Session notes (issue #34): loose ends scoped to the SESSION that raised them,
+-- not the whole project. Jorge opens many topics in one session and some get
+-- lost; an agent adds a note when a topic starts, and `/wrap-up` lists this
+-- session's open notes and triages them (finish now / hand off / park) rather
+-- than re-reading a long, maybe-summarised conversation. A note is mutable:
+-- `state` moves open -> done (finished here) or open -> parked (promoted to a
+-- project issue / agenda item, recorded in `parked_ref`), so a session can be
+-- closed once all of its notes are done or parked.
+--
+--   type       : topic | need | bug | idea | unfinished
+--   state      : open | done | parked
+--   parked_ref : where a parked note went (issue file name, agenda item, MR…)
+CREATE TABLE IF NOT EXISTS session_notes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at    REAL NOT NULL,
+    updated_at    REAL NOT NULL,
+    session_id    TEXT,
+    handle        TEXT,
+    project       TEXT,
+    project_name  TEXT,
+    type          TEXT NOT NULL DEFAULT 'topic',
+    text          TEXT NOT NULL,
+    state         TEXT NOT NULL DEFAULT 'open',
+    parked_ref    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_session_notes_session ON session_notes(session_id, state, id);
+
 -- Cross-project consent (issue #26). A grant is one DIRECTIONAL, SCOPED row:
 -- project `grantee` may, with `capability`, reach `resource`. It is the unit of
 -- deliberate interaction on an otherwise isolated bus — discovery (the
@@ -908,6 +935,92 @@ def list_decisions(
     q += " ORDER BY id DESC LIMIT ?"
     args.append(int(limit))
     return [dict(r) for r in conn.execute(q, args)]
+
+
+# Session notes (issue #34). The vocabularies live here so the store, the MCP
+# tools and the CLI all validate against one source.
+NOTE_TYPES = ("topic", "need", "bug", "idea", "unfinished")
+NOTE_STATES = ("open", "done", "parked")
+
+
+def add_note(
+    conn: sqlite3.Connection,
+    *,
+    text: str,
+    type: str = "topic",
+    session_id: str | None = None,
+    handle: str | None = None,
+    project: str | None = None,
+    project_name: str | None = None,
+) -> int:
+    """Record a session note (a loose end) and return its id. An unknown `type`
+    falls back to 'topic'; a new note is always 'open'.
+    """
+    note_type = type if type in NOTE_TYPES else "topic"
+    now = _now()
+    cur = conn.execute(
+        "INSERT INTO session_notes (created_at, updated_at, session_id, handle, project, "
+        "project_name, type, text, state, parked_ref) VALUES (?,?,?,?,?,?,?,?,'open',NULL)",
+        [now, now, session_id, handle, project, project_name, note_type, text],
+    )
+    conn.commit()
+    return int(cur.lastrowid or 0)
+
+
+def list_notes(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str | None = None,
+    project_name: str | None = None,
+    state: str | None = None,
+    type: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Session notes, OLDEST first — the order the loose ends arose, which is how
+    `/wrap-up` wants to walk them. Filter by `session_id` (one session's notes),
+    `project_name`, `state` (open/done/parked) and `type`.
+    """
+    q = "SELECT * FROM session_notes WHERE 1=1"
+    args: list[Any] = []
+    if session_id:
+        q += " AND session_id=?"
+        args.append(session_id)
+    if project_name:
+        q += " AND project_name=?"
+        args.append(project_name)
+    if state:
+        q += " AND state=?"
+        args.append(state)
+    if type:
+        q += " AND type=?"
+        args.append(type)
+    q += " ORDER BY id ASC LIMIT ?"
+    args.append(int(limit))
+    return [dict(r) for r in conn.execute(q, args)]
+
+
+def set_note_state(
+    conn: sqlite3.Connection,
+    note_id: int,
+    *,
+    state: str,
+    parked_ref: str | None = None,
+) -> dict[str, Any] | None:
+    """Move a note to `state` (open/done/parked), stamping `updated_at` and, when
+    parking, `parked_ref` (where it went). Returns the updated row, or None if no
+    note has that id or `state` is not a known state.
+    """
+    if state not in NOTE_STATES:
+        return None
+    cur = conn.execute(
+        "UPDATE session_notes SET state=?, parked_ref=?, updated_at=? WHERE id=?",
+        [state, parked_ref, _now(), note_id],
+    )
+    conn.commit()
+    if not cur.rowcount:
+        return None
+    row = conn.execute("SELECT * FROM session_notes WHERE id=?", [note_id]).fetchone()
+    return dict(row) if row else None
 
 
 def get_ingest_cursor(conn: sqlite3.Connection, session_id: str) -> int:
