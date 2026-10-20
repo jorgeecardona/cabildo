@@ -95,7 +95,7 @@ _GIT_OPT_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "-
 # show/branch-list/stash-list) is deliberately absent and never denied.
 _CHECKOUT_MUTATORS = {
     "add", "commit", "checkout", "switch", "restore", "reset", "clean", "stash",
-    "merge", "rebase", "cherry-pick", "revert", "am", "apply", "mv", "rm", "branch",
+    "merge", "rebase", "pull", "cherry-pick", "revert", "am", "apply", "mv", "rm", "branch",
 }  # fmt: skip
 
 
@@ -104,17 +104,24 @@ def _argvs(command: str) -> list[list[str]]:
 
     Tokenising is what keeps `git commit -m "add -A support"` out of the
     subcommand checks: the message is a single token, and a token is not a flag.
-    Unparseable input yields nothing — this guard catches the ordinary case, it
-    does not try to out-parse bash.
+    `punctuation_chars` makes the shell operators their own tokens even when
+    glued to a word (`git add x; git reset` splits into two commands, not one
+    argv with a `x;` token that hides the reset — #35 review). Unparseable input
+    yields nothing — this guard catches the ordinary case, it does not try to
+    out-parse bash.
     """
     try:
-        tokens = shlex.split(command, comments=True)
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>()")
+        lexer.whitespace_split = True
+        tokens = list(lexer)
     except ValueError:  # unbalanced quotes; not ours to fix
         return []
     out: list[list[str]] = []
     cur: list[str] = []
     for tok in tokens:
-        if tok in (";", "&&", "||", "|", "&"):
+        # punctuation_chars groups a run of operator chars into one token, so a
+        # separator token is any token made only of them (';', '&&', '||', '|').
+        if tok and all(ch in ";&|<>()" for ch in tok):
             if cur:
                 out.append(cur)
             cur = []
@@ -334,6 +341,105 @@ def _mutates_shared_checkout(argv: list[str]) -> str | None:
     return f"git {sub}"
 
 
+def _has_short_flag(args: list[str], ch: str, value_taking: str = "") -> bool:
+    """True if a short-flag cluster carries ``ch`` (so ``-am`` has ``a``), ignoring
+    long flags (``--amend`` is not ``-a``). ``value_taking`` names short options
+    that consume the rest of their cluster as a value, so scanning stops there:
+    with ``value_taking="m"``, ``-mabc`` ("-m abc") does not count as carrying
+    ``a`` — that ``a`` is inside the commit message, not a flag.
+    """
+    for a in args:
+        if not (len(a) > 1 and a[0] == "-" and a[1] != "-"):
+            continue
+        for c in a[1:]:
+            if c == ch:
+                return True
+            if c in value_taking:
+                break  # the rest of the cluster is this option's value, not flags
+    return False
+
+
+def _sweeps_tree(pathspec: str) -> bool:
+    """A pathspec that reaches past one named file — the whole tree, a parent, an
+    absolute root, or git's ``:`` magic — so it can touch another agent's files.
+
+    Normalised first so the trivially-equal spellings (``.``, ``./``, a trailing
+    slash) collapse together; an absolute path or a ``..`` escape counts as
+    sweeping because without the filesystem we cannot prove it names one file.
+    """
+    p = pathspec.strip()
+    if p.startswith(":"):  # git pathspec magic: ':/', ':(glob)…', etc.
+        return True
+    norm = os.path.normpath(p)
+    return norm in (".", "..", "*") or norm.startswith(("../", "/"))
+
+
+# Options that take a value, so the positional right of them is that value, not a
+# pathspec: `git commit -m .` has no pathspec — the `.` is the message.
+_COMMIT_VALUE_OPTS = {
+    "-m", "--message", "-F", "--file", "-C", "--reuse-message", "-c",
+    "--reedit-message", "-t", "--template", "--author", "--date", "--fixup", "--squash",
+}  # fmt: skip
+
+
+def _pathspecs(args: list[str], value_opts: frozenset[str] | set[str] = frozenset()) -> list[str]:
+    """The pathspecs in a subcommand's args: everything after a lone ``--``, else
+    the positionals with the values of ``value_opts`` removed (so a ``-m`` message
+    is not mistaken for a path).
+    """
+    if "--" in args:
+        return args[args.index("--") + 1 :]
+    out: list[str] = []
+    skip = False
+    for a in args:
+        if skip:
+            skip = False
+            continue
+        if a in value_opts:
+            skip = True
+            continue
+        if a.startswith("-"):
+            continue
+        out.append(a)
+    return out
+
+
+def _own_paths_only(argv: list[str]) -> bool:
+    """True if this mutating git op is confined to explicitly-named paths, so it
+    is safe to run beside a peer in a shared checkout under trunk-off: it cannot
+    stage, discard, or re-point another agent's work. A path-scoped
+    ``commit``/``add``/``mv``/``rm`` qualifies.
+
+    Does NOT qualify (denied whatever the trunk mode): anything that sweeps the
+    whole tree (``add -A``/``.``, ``commit -a``, a sweeping pathspec), rewrites the
+    branch tip (``commit --amend`` can orphan a peer's commit), moves HEAD or the
+    branch (checkout/switch/reset/rebase/merge/pull/cherry-pick/revert/am,
+    ``branch -f``), or discards the tree (stash/clean/restore). A directory
+    pathspec (``add src/``) can still stage a peer's files under it — not tellable
+    from a file without the filesystem, and accepted: the shared index is a known
+    soft spot the deny message's explicit-paths recipe narrows.
+    """
+    sub, args = _git_subcommand(argv)
+    if sub == "commit":
+        if _has_short_flag(args, "a", value_taking="mFCct") or "--all" in args or "--amend" in args:
+            return False
+        return not any(_sweeps_tree(p) for p in _pathspecs(args, _COMMIT_VALUE_OPTS))
+    if sub == "add":
+        if (
+            _has_short_flag(args, "A")
+            or _has_short_flag(args, "u")
+            or "--all" in args
+            or "--update" in args
+        ):
+            return False
+        paths = _pathspecs(args)
+        return bool(paths) and not any(_sweeps_tree(p) for p in paths)
+    if sub in ("mv", "rm"):
+        paths = _pathspecs(args)
+        return bool(paths) and not any(_sweeps_tree(p) for p in paths)
+    return False
+
+
 def _held_by_other(conn: sqlite3.Connection, resource: str, session_id: str) -> sqlite3.Row | None:
     row = conn.execute(
         "SELECT * FROM claims WHERE resource=? AND expires_at>? AND holder_session!=?",
@@ -466,24 +572,54 @@ def _deny_shared_checkout(conn: sqlite3.Connection, me: Actor, command: str) -> 
     files, or moves the branch under them so the next commit lands on a branch
     nobody chose — which happened three times in this repo's own fleet on
     2026-08-03, once pushing three commits of unrelated work onto someone else's
-    feature branch before anyone noticed. The fix is not to referee each
-    collision but to stop sharing the checkout: a worktree has its own index,
-    tree, and HEAD. So any mutating git here, while a peer shares the tree, is
-    denied and pointed at ``git worktree add``.
+    feature branch before anyone noticed.
+
+    How to avoid that depends on the project's trunk mode (#35):
+
+      * ``[trunk].mode = "guard"`` — the lane workflow: work belongs on a branch
+        in its own tree, so *any* mutating git in the shared checkout is denied
+        and pointed at ``git worktree add``.
+      * off (the default) — the trunk-based flow: everyone commits their own
+        files straight on the shared branch, so a path-scoped ``add``/``commit``/
+        ``mv``/``rm`` is exactly right and must be allowed. Only the ops that
+        reach *other* agents' work are denied — staging or discarding the whole
+        tree (``add -A``/``.``, ``commit -a``, ``stash``, ``clean``, ``restore``)
+        or moving HEAD/the branch under them (``checkout``/``switch``/``reset``/
+        ``rebase``/``merge``/``branch -f`` …).
     """
-    label = next((lbl for argv in _argvs(command) if (lbl := _mutates_shared_checkout(argv))), None)
-    if label is None:
+    mutators = [(argv, lbl) for argv in _argvs(command) if (lbl := _mutates_shared_checkout(argv))]
+    if not mutators:
         return None
     sharers = _sharers(conn, me)
     if not sharers:
         return None
     who = ", ".join(store.display_name(p) for p in sharers[:5])
+
+    if bool(me.cwd) and config.trunk_mode(me.cwd, me.project_name) == "guard":
+        label = mutators[0][1]
+        return (
+            f"cabildo: `{label}` writes the index, working tree, or HEAD that you share with "
+            f"{len(sharers)} other agent(s) ({who}) in this one checkout — it can stage their "
+            f"half-written files, wipe their uncommitted work, or move the branch under them. "
+            f"Work in your own tree instead:\n"
+            f"    git worktree add ../wt-<name> -b <name>\n"
+            f"then run it there (Claude Code: the EnterWorktree tool does this in one call)."
+        )
+
+    # trunk-off: a commit of your own explicit paths on the shared branch is the
+    # intended flow; deny only the ops that reach the other agents' work.
+    bad = next((lbl for (argv, lbl) in mutators if not _own_paths_only(argv)), None)
+    if bad is None:
+        return None
     return (
-        f"cabildo: `{label}` writes the index, working tree, or HEAD that you share with "
-        f"{len(sharers)} other agent(s) ({who}) in this one checkout — it can stage their "
-        f"half-written files, wipe their uncommitted work, or move the branch under them. "
-        f"Work in your own tree instead:\n"
-        f"    git worktree add ../wt-<name> -b <name>\n"
+        f"cabildo: `{bad}` reaches the index, working tree, or HEAD that you share with "
+        f"{len(sharers)} other agent(s) ({who}) in this one checkout — it stages or discards "
+        f"everyone's files, or moves the branch under them. With trunk mode off the flow here "
+        f"is to commit only your own files on this branch: stage explicit paths "
+        f"(never `git add -A` or `git add .`) and commit them —\n"
+        f"    git add <your paths> && git commit -m '…'\n"
+        f"For a branch switch, reset, rebase, or stash, take your own tree instead:\n"
+        f"    git worktree add ../wt-<name>\n"
         f"then run it there (Claude Code: the EnterWorktree tool does this in one call)."
     )
 

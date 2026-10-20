@@ -82,9 +82,22 @@ def test_pre_push_blocked_when_a_peer_is_live(conn, tmp_path, monkeypatch, capsy
     assert "@bob" in capsys.readouterr().err  # the reason reaches git's stderr
 
 
-def test_pre_commit_blocked_in_a_shared_checkout(conn, tmp_path, monkeypatch):
+def test_pre_commit_allowed_in_a_shared_checkout_under_trunk_off(conn, tmp_path, monkeypatch):
+    # #35: with trunk mode off (the default), committing your own paths on the
+    # shared branch is the intended flow — the pre-commit hook must not block it.
     repo = _repo(tmp_path / "repo")
     _add_peer(conn, repo)
+    monkeypatch.setenv("CABILDO_PROJECT_DIR", str(repo))
+    assert cli.cmd_githook(_args("pre-commit")) == 0
+
+
+def test_pre_commit_blocked_on_trunk_under_guard_mode(conn, tmp_path, home, monkeypatch):
+    # Under the lane workflow a commit straight on the trunk is denied (by the
+    # trunk guard), with or without a peer.
+    repo = _repo(tmp_path / "repo")
+    _add_peer(conn, repo)
+    _, name = git_project(str(repo))
+    (home / "config.toml").write_text(f'[project.{name}]\ntrunk = {{ mode = "guard" }}\n')
     monkeypatch.setenv("CABILDO_PROJECT_DIR", str(repo))
     assert cli.cmd_githook(_args("pre-commit")) == 1
 

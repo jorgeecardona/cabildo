@@ -485,24 +485,42 @@ def test_commit_off_a_repo_falls_through(conn, trunk_guard):
 # Mutating git in a shared checkout — the collapse of blanket-stage, branch
 # switch, and the peers side of destructive into one rule: get your own worktree
 # --------------------------------------------------------------------------- #
-SHARED_MUTATORS = [
+# Ops that reach the OTHER agents' work — staging/discarding the whole tree or
+# moving HEAD/the branch — are denied in a shared checkout whatever the trunk
+# mode (#35).
+SHARED_DANGEROUS = [
     "git add -A",
     "git add .",
-    "git add src/x.py",  # even a targeted add hits the one shared index
-    "git commit -m x",
-    "git commit -am x",
+    "git add ./",  # trivially equal to `add .`
+    "git add ..",  # escapes the subtree
+    "git add :/",  # git pathspec magic: the whole tree
+    "git add -u",
+    "git commit -am x",  # -a sweeps every tracked change, a peer's included
+    "git commit -m x .",  # a sweeping pathspec commits a peer's unstaged files
+    "git commit -m x -- .",
+    "git commit --amend --no-edit",  # rewrites the tip — can orphan a peer's commit
     "git checkout -b feature",
     "git checkout main",
     "git switch -c feature",
     "git branch -f main HEAD",  # force-moving a checked-out label
     "git merge origin/main",
     "git rebase main",
-    "git restore src/x.py",  # path-scoped: safe alone, shared index when not
+    "git pull",  # fetch + merge/rebase: a HEAD move under peers
+    "git restore src/x.py",  # a discard, even when path-scoped
     "git stash apply",
+    "git rm -r ./",  # removes every tracked file
+    "git -C /repo/alpha add -A",
+]
+
+# Ops confined to your own explicit paths — the trunk-off flow of committing your
+# own files on the shared branch. Denied under `[trunk].mode = "guard"` (lane
+# workflow), allowed under trunk-off (the default).
+SHARED_OWN_PATHS = [
+    "git add src/x.py",
+    "git commit -m x",
     "git mv a b",
     "git rm x",
     "cd /repo/alpha && git commit -m x",
-    "git -C /repo/alpha add -A",
 ]
 
 SHARED_READONLY = [
@@ -520,8 +538,9 @@ SHARED_READONLY = [
 ]
 
 
-@pytest.mark.parametrize("command", SHARED_MUTATORS)
-def test_mutating_git_denied_when_a_peer_shares_the_checkout(conn, command):
+@pytest.mark.parametrize("command", SHARED_DANGEROUS)
+def test_shared_dangerous_git_denied_when_a_peer_shares_the_checkout(conn, command):
+    # Default (trunk off): ops that reach a peer's work are still denied.
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
     make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
     reason = _bash(conn, "a", command)
@@ -530,7 +549,46 @@ def test_mutating_git_denied_when_a_peer_shares_the_checkout(conn, command):
     assert "worktree add" in reason  # names the way out
 
 
-@pytest.mark.parametrize("command", SHARED_MUTATORS)
+def test_glued_separator_does_not_hide_a_dangerous_op(conn):
+    # #35 review: `;`/`&&` glued to a token must still split, or an allowed `add`
+    # would smuggle a denied op (reset/checkout) past the guard in a shared tree.
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    assert _bash(conn, "a", "git add x; git reset --hard") is not None
+    assert _bash(conn, "a", "git add x;git checkout main") is not None
+    assert _bash(conn, "a", "git add file.py && git commit -m x") is None  # both own-paths
+
+
+def test_commit_message_that_looks_like_a_flag_is_not_misread(conn):
+    # `-m "add -A ..."` must not be read as `-a`/`-A`; a plain commit stays allowed.
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    assert _bash(conn, "a", 'git commit -m "add -A support"') is None
+    assert _bash(conn, "a", "git commit -mWIP") is None  # glued message, not `-m` + `-W`…
+
+
+@pytest.mark.parametrize("command", SHARED_OWN_PATHS)
+def test_own_paths_git_allowed_in_a_shared_checkout_under_trunk_off(conn, command):
+    # #35: with trunk mode off (the default), committing your own explicit paths
+    # on the shared branch is the intended flow — it must NOT be pushed to a
+    # worktree.
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    assert _bash(conn, "a", command) is None, command
+
+
+@pytest.mark.parametrize("command", SHARED_OWN_PATHS)
+def test_own_paths_git_denied_in_a_shared_checkout_under_trunk_guard(conn, command, trunk_guard):
+    # Under the lane workflow every mutating op belongs in the agent's own tree,
+    # so even a path-scoped add/commit in the shared checkout is denied.
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    reason = _bash(conn, "a", command)
+    assert reason is not None, command
+    assert "worktree add" in reason
+
+
+@pytest.mark.parametrize("command", SHARED_DANGEROUS + SHARED_OWN_PATHS)
 def test_mutating_git_allowed_when_alone(conn, command):
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
     assert _bash(conn, "a", command) is None, command
