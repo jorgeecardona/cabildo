@@ -191,31 +191,26 @@ def patch_settings() -> None:
 
 
 def register_plugin() -> None:
-    """Install and enable the bundled push-delivery mod at user scope. Uses the
-    `claude plugin` CLI (which also writes the marketplace/enable records), so a
-    future session loads it without an interactive `/plugin` step. Non-fatal:
-    an older `claude` without `plugin` subcommands, or a validate warning, must
-    not abort the rest of the install — messaging, presence and claims work
+    """Install and enable the bundled push-delivery mod at user scope, reusing
+    the package's own `cabildo.mods.install` so the `claude plugin` sequence
+    lives in one place (the `cabildo plugin` CLI verb runs the same code).
+    Non-fatal: an older `claude` without `plugin` subcommands, or a failed
+    validate, is reported and skipped — messaging, presence and claims work
     without the mod; it only adds the idle-wake doorbell.
     """
     if not MODS_DIR.exists():
         return
     print("• installing the cabildo-push mod (user scope)")
-    try:
-        require("claude")
-        if sh(["claude", "plugin", "validate", str(MODS_DIR)], check=False) != 0:
-            print("  ! plugin validate failed — skipping the mod (the bus still works)")
-            return
-        # `marketplace add` / `install` are idempotent in practice (a second run
-        # reports 'already …' and we tolerate a non-zero exit either way).
-        sh(["claude", "plugin", "marketplace", "add", str(MODS_DIR)], check=False)
-        sh(["claude", "plugin", "install", MOD_PLUGIN_ID, "--scope", "user"], check=False)
-        sh(["claude", "plugin", "enable", MOD_PLUGIN_ID, "--scope", "user"], check=False)
-        # Re-running after editing the mod: refresh the installed copy in case
-        # the marketplace snapshotted the local path at add time.
-        sh(["claude", "plugin", "update", MOD_PLUGIN_ID], check=False)
-    except InstallError as e:
-        print(f"  ! {e} — skipping the mod (the bus still works)")
+    src = str(REPO / "src")
+    if src not in sys.path:
+        sys.path.insert(0, src)
+    from cabildo import mods
+
+    # The module runs the same commands `sh` would, echoing each; check=False
+    # because its exit codes ride along in the Result, not as a hard failure.
+    res = mods.install(lambda argv: sh(argv, check=False), scope="user")
+    if not res.ok:
+        print(f"  ! {res.reason} — skipping the mod (the bus still works)")
 
 
 def install_codex() -> None:

@@ -436,6 +436,45 @@ def cmd_meter(args) -> int:
     return 0
 
 
+def cmd_plugin(args) -> int:
+    """Install (or remove) the bundled Claude Code mod — push delivery, #30 —
+    at user scope via `claude plugin`, the same steps `make install` runs. The
+    MCP server and hooks give an agent cabildo inside a turn; this mod adds the
+    doorbell that wakes an idle session when a message lands. Non-fatal: if
+    `claude` is missing or the manifest fails to validate, it says so and the
+    bus still works without it.
+    """
+    from . import mods
+
+    def run(argv: list[str]) -> int:
+        print(f"  {C.DIM}$ {' '.join(argv)}{C.OFF}")
+        return subprocess.call(argv)
+
+    if args.print_only:
+        where = mods.mods_dir()
+        print(f"{C.DIM}mod marketplace root:{C.OFF} {where or '(none found on this install)'}")
+        print(f"{C.DIM}would run (scope {args.scope}):{C.OFF}")
+        for argv in mods.plan(scope=args.scope):
+            print(f"    $ {' '.join(argv)}")
+        return 0
+
+    verb = "remove" if args.remove else "install"
+    print(f"{C.BOLD}{verb} {mods.PLUGIN_ID}{C.OFF} {C.DIM}(scope {args.scope}){C.OFF}")
+    res = mods.remove(run, scope=args.scope) if args.remove else mods.install(run, scope=args.scope)
+    if not res.ok:
+        print(f"{C.YELLOW}skipped:{C.OFF} {res.reason} {C.DIM}(the bus still works){C.OFF}")
+        return 1
+    if args.remove:
+        print(f"{C.GREEN}removed{C.OFF} — restart Claude Code sessions to drop the doorbell")
+    else:
+        print(
+            f"{C.GREEN}installed + enabled{C.OFF} — new sessions load it; restart a running "
+            f"session to pick it up. It shells {C.BOLD}cabildo{C.OFF}, so set "
+            f"{C.DIM}env.CABILDO_BIN{C.OFF} if cabildo is not on the session's PATH."
+        )
+    return 0
+
+
 def cmd_agents(args) -> int:
     conn = store.connect()
     rows = store.active_sessions(conn)
@@ -2158,6 +2197,24 @@ def main(argv: list[str] | None = None) -> int:
     mt.add_argument("--session", help="act as this session id (default: resolve from the pid walk)")
     mt.add_argument("--json", action="store_true", help="machine-readable output")
     mt.set_defaults(fn=cmd_meter)
+
+    pg = sub.add_parser(
+        "plugin", help="install the bundled Claude Code mod (push delivery) via `claude plugin`"
+    )
+    pg.add_argument("--remove", action="store_true", help="uninstall the mod instead of installing")
+    pg.add_argument(
+        "--scope",
+        choices=("user", "project", "local"),
+        default="user",
+        help="install scope (default: user — every session on this machine)",
+    )
+    pg.add_argument(
+        "--print",
+        dest="print_only",
+        action="store_true",
+        help="show the commands and change nothing",
+    )
+    pg.set_defaults(fn=cmd_plugin)
 
     a = sub.add_parser("agents", help="who is on the bus")
     a.set_defaults(fn=cmd_agents)
