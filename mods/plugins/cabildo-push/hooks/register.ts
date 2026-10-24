@@ -8,9 +8,10 @@
 // starts a turn and tells the model to drain its inbox. Bodies never ride the
 // prompt; the model reads them through the existing `inbox` tool.
 //
-// Tier 1 means zero broker changes: the doorbell polls. The feed is the
-// repo's own `cabildo pull --json` (an id cursor), so the inbox definition
-// stays single-sourced in Python and the mod never touches the schema.
+// The feed is the repo's own `cabildo wait --json` (an id cursor): one child
+// process that blocks until a row lands past the cursor, prints it in `pull`'s
+// shape and exits (#37). The inbox definition stays single-sourced in Python
+// and the mod never touches the schema.
 
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
@@ -19,10 +20,9 @@ import type { PushAsk } from '../types'
 
 const PLUGIN = 'cabildo-push'
 
-// How often the idle doorbell looks. Each tick spawns one `cabildo` process,
-// so this is deliberately gentle rather than the ~500 ms the issue allows;
-// Tier 2 replaces the poll with a blocking `cabildo wait`.
-const POLL_MS = 1000
+// Pause before respawning `cabildo wait` after it failed or printed nothing,
+// and after a batch that could not move the cursor (an active ask holds it).
+const RESPAWN_MS = 1000
 // Token bucket: at most BUCKET_CAP auto-turns held, one refilled per REFILL_MS.
 const BUCKET_CAP = 10
 const REFILL_MS = 120_000
@@ -39,9 +39,6 @@ const ASK_PREVIEW = 100_000
 // An ask whose reply never comes is pruned after this, so a stale entry cannot
 // linger as a permanent accept-list bypass.
 const ASK_TTL_MS = 600_000
-// Re-learn the session id every N ticks, so a /clear (new session id, same pid,
-// no session.start) does not leave us polling the wrong inbox.
-const WHOAMI_EVERY = 30
 
 const sessionIdA = atom({ plugin: 'cabildo-push', key: 'sessionId' } as const, null)
 const cursorA = atom({ plugin: 'cabildo-push', key: 'cursor' } as const, 0)
@@ -52,11 +49,9 @@ const bucketA = atom({ plugin: 'cabildo-push', key: 'bucket' } as const, {
 const lastHumanA = atom({ plugin: 'cabildo-push', key: 'lastHumanAt' } as const, 0)
 const awaitingA = atom({ plugin: 'cabildo-push', key: 'awaiting' } as const, {})
 
-// Module-level, reset on hot reload (fine): a re-entrancy guard so two slow
-// polls never read the same cursor and double-wake, and a tick counter for the
-// periodic whoami refresh.
-let inFlight = false
-let tickCount = 0
+// Module-level, reset on hot reload (fine): one doorbell loop per module, so a
+// second session.start never runs two loops on the same cursor.
+let doorbellRunning = false
 
 // --------------------------------------------------------------------------- //
 // Shelling the cabildo CLI
@@ -175,26 +170,11 @@ async function ensureSession($: EngineInterface): Promise<string | null> {
   const me = await whoami($)
   const sid = me?.session_id ?? null
   // The pid walk can resolve to the human before this session's row is bound;
-  // don't latch onto that — retry next tick.
+  // don't latch onto that; the doorbell retries after RESPAWN_MS.
   if (!sid || me?.is_human) return null
   await update($, sessionIdA, () => sid)
   await update($, cursorA, (c) => (c > 0 ? c : (me?.cursor ?? 0)))
   return sid
-}
-
-// A /clear keeps the pid but mints a new session id and fires no session.start;
-// cabildo's SessionStart hook binds a new row to the same pid. Periodically
-// re-check so we don't keep polling/sending as the retired session.
-async function maybeRefreshSession($: EngineInterface): Promise<void> {
-  tickCount += 1
-  if (tickCount % WHOAMI_EVERY !== 0) return
-  const me = await whoami($)
-  if (!me?.session_id || me.is_human) return
-  if (me.session_id !== (await read($, sessionIdA))) {
-    await update($, sessionIdA, () => me.session_id as string)
-    await update($, cursorA, () => me.cursor ?? 0)
-    await update($, awaitingA, () => ({})) // the old session's asks are moot
-  }
 }
 
 async function spendToken($: EngineInterface, now: number): Promise<boolean> {
@@ -219,32 +199,84 @@ async function spendToken($: EngineInterface, now: number): Promise<boolean> {
 // --------------------------------------------------------------------------- //
 // The doorbell
 // --------------------------------------------------------------------------- //
-async function poll($: EngineInterface): Promise<void> {
-  if (inFlight) return // a slow previous tick is still running; don't double-read
-  inFlight = true
+type WaitOut =
+  | { rebound: true; session_id: string; cursor: number }
+  | { rebound?: undefined; cursor: number; messages: PullRow[] }
+
+// One `cabildo wait` child, run to its exit; its last stdout line, parsed.
+// Pieces are not lines, so the whole output is collected first. Null when it
+// printed nothing (it failed, or its parent check fired).
+async function waitOnce($: EngineInterface, sid: string, after: number): Promise<WaitOut | null> {
+  const bin = (await $.env.get('CABILDO_BIN')) || 'cabildo'
+  const child = $.process.spawn({
+    argv: [bin, 'wait', `--session=${sid}`, `--after=${after}`, '--json'],
+  })
+  let out = ''
+  for await (const { stream, text } of child) {
+    if (stream === 'stdout') out += text
+  }
+  const line = out.trim().split('\n').pop()
+  return line ? (JSON.parse(line) as WaitOut) : null
+}
+
+// The doorbell: for the session's life, block in `cabildo wait`, handle what
+// it returns, start the next one. Idle costs one sleeping process, not a spawn
+// per second (#37). Ends when a $ call throws, which is the module unloading.
+async function runDoorbell($: EngineInterface): Promise<void> {
+  if (doorbellRunning) return
+  doorbellRunning = true
   try {
-    await doPoll($)
-  } catch (err) {
-    $.ui.log(`${PLUGIN}: poll failed: ${String(err)}`, { to: 'debug' })
+    for (;;) {
+      const sid = await ensureSession($)
+      if (!sid) {
+        await $.clock.sleep(RESPAWN_MS)
+        continue
+      }
+      const after = await read($, cursorA)
+      let r: WaitOut | null = null
+      try {
+        r = await waitOnce($, sid, after)
+      } catch (err) {
+        $.ui.log(`${PLUGIN}: wait failed: ${String(err)}`, { to: 'debug' })
+      }
+      if (r === null) {
+        // Unknown session (a retired id) also lands here: re-learn it.
+        await update($, sessionIdA, () => null)
+        await $.clock.sleep(RESPAWN_MS)
+        continue
+      }
+      if (r.rebound) {
+        // A /clear: new session id, same pid, no session.start.
+        const next = r
+        await update($, sessionIdA, () => next.session_id)
+        await update($, cursorA, () => next.cursor)
+        await update($, awaitingA, () => ({})) // the old session's asks are moot
+        continue
+      }
+      let moved = true
+      try {
+        moved = await handleBatch($, sid, after, r.messages)
+      } catch (err) {
+        $.ui.log(`${PLUGIN}: doorbell failed: ${String(err)}`, { to: 'debug' })
+      }
+      if (!moved) await $.clock.sleep(RESPAWN_MS)
+    }
+  } catch {
+    // the module is unloading; a reload starts a fresh loop
   } finally {
-    inFlight = false
+    doorbellRunning = false
   }
 }
 
-async function doPoll($: EngineInterface): Promise<void> {
-  const sid = await ensureSession($)
-  if (!sid) return
-  await maybeRefreshSession($)
-
-  const after = await read($, cursorA)
-  const pulled = (await cab($, [
-    'pull',
-    `--session=${sid}`,
-    `--after=${after}`,
-    '--json',
-  ])) as { cursor: number; messages: PullRow[] } | null
-  const msgs = pulled?.messages ?? []
-  if (msgs.length === 0) return
+// Gates one batch and maybe starts a turn. False when the cursor could not
+// move (an active ask owns the first row), so the caller paces the respawn.
+async function handleBatch(
+  $: EngineInterface,
+  sid: string,
+  after: number,
+  msgs: readonly PullRow[],
+): Promise<boolean> {
+  if (msgs.length === 0) return true
 
   const now = await $.clock.now()
   await pruneAwaiting($, now)
@@ -263,7 +295,7 @@ async function doPoll($: EngineInterface): Promise<void> {
     // An active (not handed-off) ask owns a reply from this target: stop here
     // and do NOT advance the cursor past it, so the reply is re-pulled (and,
     // once the ask hands off, woken on) rather than swallowed. Everything from
-    // here on is reprocessed next tick — cheap and idempotent.
+    // here on is reprocessed by the next wait, cheap and idempotent.
     if (isReply && aw && !aw.handoff) break
     advanceTo = m.id
     if (m.read) continue
@@ -276,6 +308,7 @@ async function doPoll($: EngineInterface): Promise<void> {
     else toasts.push(m)
   }
   await update($, cursorA, () => advanceTo)
+  const moved = advanceTo !== after
 
   if (wakers.length && !dnd && !humanActive && (await spendToken($, now))) {
     const who = uniq(wakers.map(safeLabel)).join(', ')
@@ -292,14 +325,15 @@ async function doPoll($: EngineInterface): Promise<void> {
     }
     if (toasts.length) notifyPending($, toasts)
     else $.ui.status(undefined)
-    return
+    return moved
   }
 
   // Suppressed (DND / human present / bucket empty): coalesce everything into a
   // badge + toast and start no turn. Handed-off ask entries are intentionally
-  // left in place so the interrupt grant survives to a later, un-suppressed tick.
+  // left in place so the interrupt grant survives to a later, un-suppressed wake.
   const pending = [...wakers, ...toasts]
   if (pending.length) notifyPending($, pending)
+  return moved
 }
 
 async function pruneAwaiting($: EngineInterface, now: number): Promise<void> {
@@ -364,9 +398,7 @@ export const register: Register = (on) => {
     // Bind the session id and seed the cursor to "now" so we wake on what
     // arrives after start, not on the backlog.
     await ensureSession($)
-    $.clock.every(POLL_MS, () => {
-      void poll($)
-    })
+    void runDoorbell($)
     return next(e)
   })
 
