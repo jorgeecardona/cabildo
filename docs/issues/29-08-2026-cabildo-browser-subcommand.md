@@ -64,6 +64,8 @@ On 2026-08-29, before any change:
   the cookie export runs under the user's own hand, which is what the classifier requires.
 - `cabildo browser doctor` — assert the `cabildo-browser` entry in `~/.claude.json` still carries
   `--isolated`, and warn loudly if a `--user-data-dir` has come back.
+  Also fail if the entry carries `--headless`: the browser must always run headed (rule set
+  by Jorge on 2026-10-24).
 
 `verify: probe` because the load-bearing claim cannot be tested in isolation: closing this means
 watching a real agent open a real page **logged in**, from a storage state produced by
