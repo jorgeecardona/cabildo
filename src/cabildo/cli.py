@@ -351,6 +351,62 @@ def cmd_pull(args) -> int:
     return 0
 
 
+# How often `wait` re-resolves the acting session, so a /clear (new session id,
+# same pid) is reported to the mod instead of leaving it on the retired inbox.
+WAIT_REBIND_S = 30.0
+
+
+def cmd_wait(args) -> int:
+    """Block until the inbox has a row with ``id > --after``, then print it in
+    `pull`'s JSON shape and exit (#37).
+
+    One process per wake instead of one ``pull`` spawn per second. It watches
+    ``PRAGMA data_version`` (a cheap per-connection counter that moves when any
+    other connection commits) and queries only when it moves. It exits 0 with
+    no messages at ``--timeout``, so the caller respawns with a fresh binary;
+    exits 0 silently when its parent dies, so a killed client leaves no orphan;
+    and prints ``{"rebound": true, "session_id", "cursor"}`` when the pid walk
+    resolves to a different session than ``--session`` (a /clear).
+    """
+    conn = store.connect()
+    sid = _resolve_me(conn, args)
+    if sid is None:
+        return 1
+    from . import guard
+
+    parent = os.getppid()
+    start = time.monotonic()
+    next_rebind = start + WAIT_REBIND_S
+    seen: int | None = None
+    msgs: list[dict] = []
+    while True:
+        version = conn.execute("PRAGMA data_version").fetchone()[0]
+        if version != seen:
+            seen = version
+            msgs = store.inbox_after(
+                conn, sid, after_id=args.after, urgent_only=args.urgent_only, limit=args.limit
+            )
+            if msgs:
+                break
+        now = time.monotonic()
+        if os.getppid() != parent:
+            return 0
+        if args.session and now >= next_rebind:
+            next_rebind = now + WAIT_REBIND_S
+            actor = guard.resolve_actor(conn).session_id
+            if actor not in (sid, HUMAN_SESSION) and store.get_session(conn, actor) is not None:
+                out = {"rebound": True, "session_id": actor, "cursor": store.max_message_id(conn)}
+                print(json.dumps(out), flush=True)
+                return 0
+        if now - start >= args.timeout:
+            break
+        time.sleep(args.interval)
+    cursor = msgs[-1]["id"] if msgs else args.after
+    rows = [_pull_row(m, args.preview_chars) for m in msgs]
+    print(json.dumps({"session_id": sid, "cursor": cursor, "messages": rows}), flush=True)
+    return 0
+
+
 def cmd_send(args) -> int:
     body = " ".join(args.text).strip()
     if not body:
@@ -2228,6 +2284,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     pl.add_argument("--json", action="store_true", help="machine-readable output")
     pl.set_defaults(fn=cmd_pull)
+
+    wt = sub.add_parser(
+        "wait", help="block until the inbox has a message with id > --after, then print it (JSON)"
+    )
+    wt.add_argument("--after", type=int, default=0, help="cursor: only messages with a greater id")
+    wt.add_argument("--session", help="act as this session id (default: resolve from the pid walk)")
+    wt.add_argument("--urgent-only", action="store_true", help="only urgent messages")
+    wt.add_argument("--limit", type=int, default=50, help="max rows (default: 50)")
+    wt.add_argument(
+        "--preview-chars", type=int, default=200, help="body preview length (default: 200)"
+    )
+    wt.add_argument(
+        "--timeout", type=float, default=300.0, help="exit with no messages after this (s)"
+    )
+    wt.add_argument("--interval", type=float, default=0.25, help="data_version check interval (s)")
+    wt.add_argument("--json", action="store_true", help="accepted for symmetry; output is JSON")
+    wt.set_defaults(fn=cmd_wait)
 
     sd = sub.add_parser("send", help="post as the acting session (unlike `say`, which is @jorge)")
     sd.add_argument("text", nargs="+")
