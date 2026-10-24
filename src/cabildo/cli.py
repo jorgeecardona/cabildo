@@ -674,7 +674,9 @@ def _parse_stop_time(s: str) -> float | None:
         hour = 0
     if not (0 <= hour <= 23 and 0 <= minute <= 59):
         return None
-    now = datetime.now().astimezone()
+    # Naive local time: a fixed-offset aware datetime keeps today's UTC offset,
+    # so "tomorrow 23:00" across a DST change would land an hour off.
+    now = datetime.now()
     target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if target <= now:
         target += timedelta(days=1)
