@@ -32,6 +32,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Changed
 
+- **cabildo-push no longer spawns `cabildo pull` every second** (issue #37). The doorbell now
+  blocks in one `cabildo wait` per session, which exits when a message lands, after 300 s, or
+  when its parent dies. An idle session costs one sleeping process instead of a Python start
+  per second. Reinstall the mod (`cabildo plugin`) to pick it up.
 - **Mode-aware spawn prompt**: the git-flow paragraph a spawned agent receives is
   now chosen from the repo's `[push].mode`. A `push` repo is told to `push` and,
   crucially, that `push` moves work to `origin/<target>` and does NOT touch its
