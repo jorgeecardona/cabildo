@@ -1,3 +1,3 @@
 """cabildo: a shared IPC bus / chat room for parallel Claude Code sessions."""
 
-__version__ = "0.1.105"
+__version__ = "0.1.106"

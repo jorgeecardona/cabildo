@@ -1,15 +1,18 @@
-"""Model-driven check of the intents queue: serialized draining, no starvation.
+"""Model-driven check of one lane of the intents queue: serialized draining, no starvation.
 
-The daemon is a single worker that drains the intents queue one at a time
-(take_next_intent flips pending->running atomically; the action runs; finish_intent
-sets a terminal status; then the loop takes the next). Two properties matter:
+The daemon runs intents on worker threads, but take_next_intent never hands out
+a second intent from a lane that has one running (a lane is the repo a push
+comes from; spawn and ask share one lane). So within a lane the daemon behaves
+as a single worker: take flips pending->running atomically, the action runs,
+finish_intent sets a terminal status, then the next is taken. Two properties
+matter, per lane:
 
-  * serialization -- never two intents running at once (why push can't race push).
+  * serialization -- never two intents of a lane running at once (why push can't race push).
   * no starvation -- every queued intent is eventually processed.
 
 The single-worker model proves both. A hypothetical concurrent-worker variant (take
 ignoring whether one is already running) is shown to break serialization, which is
-why the daemon is single-threaded by design.
+why take_next_intent checks the lane. tests/test_intent_lanes.py covers lanes against the DB.
 """
 
 from __future__ import annotations

@@ -14,6 +14,7 @@ import json
 import os
 import socket
 import sqlite3
+import subprocess
 import time
 import uuid
 from collections.abc import Iterable
@@ -206,7 +207,8 @@ CREATE TABLE IF NOT EXISTS intents (
     worker        TEXT,                            -- daemon instance that took it
     started_at    REAL,
     finished_at   REAL,
-    result        TEXT                             -- JSON object
+    result        TEXT,                            -- JSON object
+    lane          TEXT                             -- intents of one lane run one at a time
 );
 CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status, id);
 
@@ -515,6 +517,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # the ALTERs above), and this is the only place it is safe to index them.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_tag ON sessions(tag)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_owner_pid ON sessions(owner_pid)")
+
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(intents)")}
+    if "lane" not in have:
+        conn.execute("ALTER TABLE intents ADD COLUMN lane TEXT")
 
     have = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
     if "origin" in have and "provenance" not in have:
@@ -1854,6 +1860,37 @@ def list_spawns(conn: sqlite3.Connection, *, limit: int = 30) -> list[dict[str, 
 # --------------------------------------------------------------------------- #
 # Intents (the control plane)
 # --------------------------------------------------------------------------- #
+def _git_common_dir(cwd: str) -> str | None:
+    """Return the absolute git common dir of ``cwd``, shared by all its worktrees."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() or None if out.returncode == 0 else None
+
+
+def intent_lane(action: str, project: str | None, params: dict[str, Any]) -> str:
+    """Return the lane an intent runs in; one lane runs one intent at a time.
+
+    A push's lane is the git repo it pushes from, not the project name: two
+    pinned packages of one monorepo, and agent worktrees of one repo, share a
+    working tree or a remote branch, so their pushes must not run together.
+    Every other action shares one lane: spawn checks a single ``max_agents`` cap.
+    """
+    if action != "push":
+        return "*"
+    cwd = params.get("cwd")
+    repo = _git_common_dir(str(cwd)) if cwd else None
+    return f"push:{repo or project or ''}"
+
+
 def request_intent(
     conn: sqlite3.Connection,
     *,
@@ -1865,17 +1902,26 @@ def request_intent(
 ) -> int:
     cur = conn.execute(
         "INSERT INTO intents(created_at, from_session, from_handle, project, action, "
-        "params) VALUES (?,?,?,?,?,?)",
-        (_now(), from_session, from_handle, project, action, json.dumps(params)),
+        "params, lane) VALUES (?,?,?,?,?,?,?)",
+        (
+            _now(),
+            from_session,
+            from_handle,
+            project,
+            action,
+            json.dumps(params),
+            intent_lane(action, project, params),
+        ),
     )
     conn.commit()
     return int(cur.lastrowid or 0)
 
 
-# Which intents must run one after another. Pushes to one project race each other;
-# pushes to different projects do not, so each project is its own lane. Every
-# other action shares one lane: spawn counts live agents against a single cap.
-_INTENT_LANE = "CASE WHEN {t}.action='push' THEN 'push:' || COALESCE({t}.project, '') ELSE '*' END"
+# Rows queued before the lane column existed fall back to a lane per project.
+_INTENT_LANE = (
+    "COALESCE({t}.lane, CASE WHEN {t}.action='push' "
+    "THEN 'push:' || COALESCE({t}.project, '') ELSE '*' END)"
+)
 
 
 def take_next_intent(conn: sqlite3.Connection, worker: str) -> dict[str, Any] | None:
@@ -2059,16 +2105,25 @@ def count_pending_intents(conn: sqlite3.Connection, *, older_than: float = 0.0) 
     return int(conn.execute(q, a).fetchone()["n"])
 
 
-def reap_stale_intents(conn: sqlite3.Connection, older_than: float) -> int:
+def reap_stale_intents(
+    conn: sqlite3.Connection, older_than: float, *, worker: str | None = None
+) -> int:
     """A daemon killed mid-action leaves rows stuck in 'running' forever. Fail
-    them loudly rather than leaving a queue that silently never drains.
+    them loudly rather than leaving a queue that silently never drains: a stuck
+    row blocks every later intent of its lane.
+
+    With ``worker``, fail that worker's running rows whatever their age (a
+    daemon exiting with actions it will never finish).
     """
-    cutoff = _now() - older_than
+    if worker is not None:
+        where, args = "status='running' AND worker=?", (worker,)
+    else:
+        where, args = "status='running' AND started_at < ?", (_now() - older_than,)
     cur = conn.execute(
         "UPDATE intents SET status='failed', finished_at=?, "
         "result=json_object('error', 'daemon died while running this intent') "
-        "WHERE status='running' AND started_at < ?",
-        (_now(), cutoff),
+        f"WHERE {where}",
+        (_now(), *args),
     )
     conn.commit()
     return cur.rowcount

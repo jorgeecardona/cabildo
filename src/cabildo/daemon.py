@@ -1,9 +1,10 @@
-"""The deterministic entity: drains the intents queue, one action at a time.
+"""The deterministic entity: drains the intents queue, one action per lane at a time.
 
-Why this is single-threaded and unapologetic about it: pushing is a serial
-operation, and the strongest lock is not needing one. A single worker draining a
-queue cannot race itself, so there is no lease to expire, no lock to leak, and
-no rebase-under-you. Concurrency here would buy nothing and cost correctness.
+Pushing is a serial operation per repo: two pushes from one repo race (rebase
+under rebase, index.lock). Pushes from different repos cannot conflict, so each
+repo is its own lane and lanes run in parallel on worker threads.
+``store.take_next_intent`` never hands out a second intent from a busy lane,
+in one atomic UPDATE, so there is no lease to expire.
 
     python -m cabildo.daemon                 # dry run: everything but the push
     python -m cabildo.daemon --allow-push    # actually push
@@ -27,6 +28,8 @@ from . import actions, broker, desktop, monitor, names, record, store
 
 # A 'running' intent older than this means the daemon died holding it.
 STALE_AFTER = actions.GATE_TIMEOUT + 300
+# How long exit waits for running actions before failing them.
+WORKER_JOIN_TIMEOUT = 30.0
 # How often the poll loop sweeps for sessions whose owning claude died without
 # firing the SessionEnd hook. Cheap (one os.kill per active session) but not
 # worth doing on every 2s tick.
@@ -177,12 +180,36 @@ def handle(conn, intent: dict, ctx: actions.Ctx) -> None:
 
 
 def _handle_on_thread(intent: dict, ctx: actions.Ctx) -> None:
-    """Run one intent on a worker thread; sqlite connections are per-thread."""
-    conn = store.connect()
+    """Run one intent on a worker thread; sqlite connections are per-thread.
+
+    Any error before ``handle`` finishes the row (opening the DB can time out
+    under write load) fails the intent here: a row left 'running' blocks its lane.
+    """
     try:
-        handle(conn, intent, ctx)
-    finally:
-        conn.close()
+        conn = store.connect()
+        try:
+            handle(conn, intent, ctx)
+        finally:
+            conn.close()
+    except Exception as e:
+        _log(f"■ #{intent['id']} failed outside the action: {type(e).__name__}: {e}")
+        try:
+            conn = store.connect()
+            try:
+                row = conn.execute(
+                    "SELECT status FROM intents WHERE id=?", (intent["id"],)
+                ).fetchone()
+                if row is not None and row["status"] == "running":
+                    store.finish_intent(
+                        conn,
+                        intent["id"],
+                        status="failed",
+                        result={"ok": False, "reason": f"{type(e).__name__}: {e}"},
+                    )
+            finally:
+                conn.close()
+        except Exception as e2:
+            _log(f"■ #{intent['id']} could not be marked failed: {e2}")
 
 
 def _run_broker(address: str, stop: threading.Event, ready: threading.Event) -> None:
@@ -296,6 +323,8 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
         help="unix socket path for the broker (default: <home>/bus.sock)",
     )
     args = p.parse_args(argv)
+    if args.workers < 1:
+        p.error("--workers must be at least 1")
 
     worker = _worker_name()
     conn = store.connect()
@@ -396,6 +425,9 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
             now = time.monotonic()
             if now - last_reap >= REAP_SESSIONS_EVERY:
                 last_reap = now
+                stale = store.reap_stale_intents(conn, STALE_AFTER)
+                if stale:
+                    _log(f"failed {stale} intent(s) stuck in 'running' past {STALE_AFTER}s")
                 dead = store.reap_dead_sessions(conn)
                 if dead:
                     _log(f"reaped {dead} session(s) whose claude process is gone")
@@ -425,6 +457,15 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
         _log("bye")
         return 0
     finally:
+        # Let running actions finish, then fail what is still running: a row
+        # left 'running' blocks its lane until a reaper sees it.
+        deadline = time.monotonic() + WORKER_JOIN_TIMEOUT
+        for t in workers:
+            t.join(timeout=max(0.0, deadline - time.monotonic()))
+        if any(t.is_alive() for t in workers):
+            n = store.reap_stale_intents(conn, 0, worker=worker)
+            if n:
+                _log(f"failed {n} intent(s) still running at exit")
         broker_stop.set()
         if broker_thread is not None:
             broker_thread.join(timeout=2)
