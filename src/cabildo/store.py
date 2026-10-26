@@ -1872,16 +1872,25 @@ def request_intent(
     return int(cur.lastrowid or 0)
 
 
+# Which intents must run one after another. Pushes to one project race each other;
+# pushes to different projects do not, so each project is its own lane. Every
+# other action shares one lane: spawn counts live agents against a single cap.
+_INTENT_LANE = "CASE WHEN {t}.action='push' THEN 'push:' || COALESCE({t}.project, '') ELSE '*' END"
+
+
 def take_next_intent(conn: sqlite3.Connection, worker: str) -> dict[str, Any] | None:
-    """Atomically claim the oldest pending intent.
+    """Atomically claim the oldest pending intent whose lane has nothing running.
 
     One UPDATE..RETURNING rather than SELECT-then-UPDATE: the read and the write
-    are a single statement, so two daemons can never hand the same row to two
-    workers. Pushing being serialised is the entire point of this table.
+    are a single statement, so two workers can never take the same row, nor two
+    rows of the same lane. Intents in different lanes may run at the same time.
     """
     row = conn.execute(
         "UPDATE intents SET status='running', worker=?, started_at=?, attempts=attempts+1 "
-        "WHERE id = (SELECT id FROM intents WHERE status='pending' ORDER BY id LIMIT 1) "
+        "WHERE id = (SELECT p.id FROM intents p WHERE p.status='pending' AND NOT EXISTS ("
+        "SELECT 1 FROM intents r WHERE r.status='running' "
+        f"AND {_INTENT_LANE.format(t='r')} = {_INTENT_LANE.format(t='p')}) "
+        "ORDER BY p.id LIMIT 1) "
         "RETURNING *",
         (worker, _now()),
     ).fetchone()

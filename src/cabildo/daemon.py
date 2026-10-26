@@ -176,6 +176,15 @@ def handle(conn, intent: dict, ctx: actions.Ctx) -> None:
     _report(conn, intent, status, result)
 
 
+def _handle_on_thread(intent: dict, ctx: actions.Ctx) -> None:
+    """Run one intent on a worker thread; sqlite connections are per-thread."""
+    conn = store.connect()
+    try:
+        handle(conn, intent, ctx)
+    finally:
+        conn.close()
+
+
 def _run_broker(address: str, stop: threading.Event, ready: threading.Event) -> None:
     """Serve the broker socket, logging a bind failure instead of dying silently."""
     try:
@@ -269,6 +278,12 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
         help="ignore leftover processes smaller than this",
     )
     p.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="intents run at the same time, at most one per lane (a push per project)",
+    )
+    p.add_argument(
         "--broker",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -355,6 +370,7 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
             else f"broker: not yet listening on {args.broker_socket}"
         )
 
+    workers: list[threading.Thread] = []
     last_reap = 0.0
     last_monitor = 0.0
     last_record = 0.0
@@ -362,10 +378,16 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
         while True:
             if stop is not None and stop.is_set():
                 return 0
-            intent = store.take_next_intent(conn, worker)
-            if intent is not None:
-                handle(conn, intent, ctx)
-                continue
+            # Intents in different lanes (a push per project) run in parallel;
+            # take_next_intent never hands out a second one from a busy lane.
+            workers = [t for t in workers if t.is_alive()]
+            if len(workers) < args.workers:
+                intent = store.take_next_intent(conn, worker)
+                if intent is not None:
+                    t = threading.Thread(target=_handle_on_thread, args=(intent, ctx), daemon=True)
+                    t.start()
+                    workers.append(t)
+                    continue
             if notifying:
                 for m in _pending_for_human(conn, last_msg, everything=args.notify_all):
                     last_msg = m["id"]
@@ -391,6 +413,10 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
                 last_record = now
                 record.ingest(conn, log=_log)
             if args.once:
+                if workers:
+                    for t in workers:
+                        t.join()
+                    continue
                 _log("queue empty — exiting")
                 return 0
             store.touch(conn, DAEMON_SESSION)
