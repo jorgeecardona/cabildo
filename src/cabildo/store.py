@@ -157,7 +157,10 @@ CREATE TABLE IF NOT EXISTS messages (
     -- it; `guid` is what lets two peers dedup the same message instead of
     -- re-inserting it, so a message that hops A->B->C merges once. Unique index
     -- lives in _migrate (added to existing rows there too).
-    guid          TEXT
+    guid          TEXT,
+    -- When THIS machine stored the row. created_at is the sender's clock, which a
+    -- paired machine may run seconds apart; deliver-after-join compares this one.
+    received_at   REAL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_topic ON messages(topic);
 CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_session);
@@ -536,6 +539,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # time, guarded by "not in have"; a fresh DB has no rows and skips it.
         for r in conn.execute("SELECT id FROM messages WHERE guid IS NULL").fetchall():
             conn.execute("UPDATE messages SET guid=? WHERE id=?", (uuid.uuid4().hex, r["id"]))
+    if "received_at" not in have:
+        conn.execute("ALTER TABLE messages ADD COLUMN received_at REAL")
     # Unconditional (fresh via SCHEMA, old via the ALTER above): the only safe
     # place to index the column. UNIQUE is what makes post_message idempotent by
     # guid; SQLite treats NULLs as distinct, so it tolerates any un-backfilled row.
@@ -1306,7 +1311,7 @@ def post_message(
     ts = _now() if created_at is None else created_at
     cur = conn.execute(
         "INSERT INTO messages(created_at, from_session, from_handle, topic, to_session, "
-        "project, body, urgent, provenance, guid) VALUES (?,?,?,?,?,?,?,?,?,?) "
+        "project, body, urgent, provenance, guid, received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(guid) DO NOTHING",
         (
             ts,
@@ -1319,6 +1324,7 @@ def post_message(
             1 if urgent else 0,
             provenance,
             guid,
+            _now(),
         ),
     )
     conn.commit()
@@ -1340,7 +1346,7 @@ def _inbox_where(session_id: str) -> tuple[str, list[Any]]:
     """
     return (
         "(m.to_session=? OR EXISTS (SELECT 1 FROM subscriptions s "
-        "WHERE s.session_id=? AND s.topic=m.topic AND m.created_at >= s.joined_at)) "
+        "WHERE s.session_id=? AND s.topic=m.topic AND COALESCE(m.received_at, m.created_at) >= s.joined_at)) "
         "AND m.from_session!=?",
         [session_id, session_id, session_id],
     )

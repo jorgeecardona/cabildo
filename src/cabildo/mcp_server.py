@@ -439,6 +439,14 @@ def list_agents(all_projects: bool = False) -> list[dict[str, Any]]:
         rows = store.active_sessions(conn, project=project, exclude=sid)
         if visible is not None:
             rows = [r for r in rows if (r["project_name"] or "").strip().lower() in visible]
+        # A paired machine's agents are always listed: the pairing is the consent,
+        # and their project need not exist here (a project is a local notion).
+        have = {r["session_id"] for r in rows}
+        rows += [
+            r
+            for r in store.active_sessions(conn, exclude=sid)
+            if _node(r) and r["session_id"] not in have
+        ]
         return [
             {
                 "session_id": r["session_id"],
@@ -777,7 +785,10 @@ def send(
         if to_session is not None:
             trow = store.get_session(conn, to_session)
             tname = (trow["project_name"] if trow else None) or ""
-            if not _may_reach_project(conn, my_project, tname, "send"):
+            # A paired machine's agent is reachable from anywhere: the pairing is
+            # the consent, and its project name means nothing on this machine.
+            remote = trow is not None and _node(trow) is not None
+            if not remote and not _may_reach_project(conn, my_project, tname, "send"):
                 return {
                     "ok": False,
                     "error": f"'{to}' is on project '{tname.strip().lower()}', not "

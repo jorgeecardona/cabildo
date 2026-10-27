@@ -22,6 +22,15 @@ from cabildo import lan, pair, store
 pytestmark = pytest.mark.skipif(not pair.openssl_available(), reason="needs openssl")
 
 
+@pytest.fixture(autouse=True)
+def _bus_exists(home):
+    """Create the bus before any service thread opens it: two connections creating a
+    brand-new WAL database at the same moment can get 'database is locked'. A real
+    daemon always finds the bus already there.
+    """
+    store.connect().close()
+
+
 def test_tag_binds_role_and_fingerprints():
     t = pair.tag("123456", "b", "fa", "fb", "na", "nb")
     assert t == pair.tag("123456", "b", "fa", "fb", "na", "nb")
@@ -57,6 +66,7 @@ def _free_port() -> int:
 _MACHINE_A = """
 import json, sys, time
 from cabildo import lan, store
+store.connect().close()  # create the bus before threads race to
 svc = lan.start_service(lambda m: print(m, file=sys.stderr, flush=True))
 w = svc.pairing.open()
 print(json.dumps({"pin": w.pin, "node": svc.me.node}), flush=True)

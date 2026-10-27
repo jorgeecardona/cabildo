@@ -59,6 +59,16 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   `room = ""` turns the auto-join off. `[lan] exclude` keeps project channels and DMs home but
   never drops a room post.
 
+- **Agents on a paired machine are always listed and reachable**: `list_agents` shows them even
+  when their project does not exist on this machine, and a DM to one skips the project check (the
+  pairing is the consent). Local agents of an unlinked project stay refused.
+
+### Fixed
+
+- A room or channel post from a paired machine whose clock runs behind this one is no longer
+  hidden as "older than your join": delivery after a join compares the time this machine stored
+  the message, not the sender's clock.
+
 ### Removed
 
 - **`cabildo lan`**: the daemon now syncs paired machines (see LAN pairing). The old

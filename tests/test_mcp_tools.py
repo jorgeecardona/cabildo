@@ -424,3 +424,51 @@ def test_version_reports_the_server_and_the_daemon(two_agents):
     assert srv.version() == {"version": __version__, "exe": sys.executable, "daemon": None}
     info_path().write_text(json.dumps({"pid": 7, "version": "0.0.1", "exe": "/x/python"}))
     assert srv.version()["daemon"] == {"version": "0.0.1", "pid": 7, "exe": "/x/python"}
+
+
+# --------------------------------------------------------------------------- #
+# Agents on a paired machine, in a project this machine does not have
+# --------------------------------------------------------------------------- #
+def _remote(conn, sid="R", handle="rita", project="gamma"):
+    store.replace_remote_sessions(
+        conn, "nodeB", [{"session_id": sid, "handle": handle, "project_name": project}]
+    )
+
+
+def test_list_agents_shows_a_remote_agent_of_an_unknown_project(conn, two_agents):
+    _remote(conn)
+    ids = {a["session_id"]: a for a in srv.list_agents()}
+    assert "R" in ids and ids["R"]["node"] == "nodeB"[:8]
+    assert "R" in {a["session_id"] for a in srv.list_agents(all_projects=True)}
+
+
+def test_dm_to_a_remote_agent_of_another_project_is_allowed(conn, two_agents):
+    _remote(conn)
+    out = srv.send(body="hello", to="@rita")
+    assert out["ok"] is True
+    row = conn.execute("SELECT to_session FROM messages WHERE body='hello'").fetchone()
+    assert row["to_session"] == "R"
+
+
+def test_dm_to_a_local_agent_of_an_unlinked_project_is_still_refused(conn, two_agents):
+    store.register_session(
+        conn, "L", cwd="/repo/zeta", project="/repo/zeta", project_name="zeta", claude_pid=333
+    )
+    store.set_handle(conn, "L", "lena")
+    assert srv.send(body="hi", to="@lena")["ok"] is False
+
+
+def test_a_room_post_stamped_before_the_join_is_delivered_when_it_arrives_after(conn):
+    store.register_session(conn, "S", cwd="/r/a", project="/r/a", project_name="a", claude_pid=9)
+    store.subscribe(conn, "S", "den")
+    skewed = store._now() - 30  # the sender's clock runs 30 s behind this one
+    store.post_message(
+        conn,
+        from_session="x",
+        from_handle=None,
+        body="late clock",
+        topic="den",
+        created_at=skewed,
+        provenance="lan",
+    )
+    assert [m["body"] for m in store.inbox(conn, "S")] == ["late clock"]
