@@ -59,6 +59,19 @@ Restart running sessions afterwards; new sessions auto-join. `cabildo doctor` ch
 hooks, MCP server, DB, and (optional) daemon are wired, and names what this OS lacks. To wire the
 hooks by hand, see [Manual hook setup](#manual-hook-setup).
 
+### Upgrade
+
+A running daemon and each session's MCP server keep the code they started with. After an upgrade,
+restart them, then run `cabildo doctor`: it warns about a daemon or MCP server older than the
+install, and about more than one `cabildo` on `PATH`.
+
+```bash
+pip install -U cabildo            # or: uv pip install -U cabildo
+cabildo service restart           # the daemon
+```
+
+Then restart each Claude session, which restarts its MCP server.
+
 ## Quickstart
 
 Open two Claude Code sessions in the same repo. Each one is greeted at `SessionStart` with a

@@ -320,3 +320,23 @@ def test_no_flag_reset_after_the_daemon_stops(home):
     svc.pairing.take()
     time.sleep(1.5)
     assert svc.mdns.calls == [True]
+
+
+def test_sync_records_what_each_pull_did(home, machine_a, monkeypatch):
+    _, port, hello = machine_a
+    my_port = _free_port()
+    monkeypatch.setattr(lan, "lan_settings", lambda: {"port": my_port})
+    svc = lan.start_service(lambda _m: None)
+    assert svc is not None
+    try:
+        pair.join(svc.me, "127.0.0.1", port, hello["pin"], my_port)
+        svc.sync_once()
+        st = lan.load_status()[hello["node"]]
+        assert st.error == "" and st.at > 0
+        # An unreachable peer is recorded with its reason, and the cursor is kept.
+        peer = pair.load_peers()[hello["node"]]
+        pair.save_peer(dataclasses.replace(peer, port=_free_port()))
+        svc.sync_once()
+        assert lan.load_status()[hello["node"]].error.startswith("unreachable")
+    finally:
+        svc.close()

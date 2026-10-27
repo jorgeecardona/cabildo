@@ -43,6 +43,12 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   channel. `[uplink]`, `[notify]`, `[push]`, and `[spawn]` are recognised and
   read generically; wiring follows. See `.cabildo/config.example.toml`.
 
+- **`cabildo doctor` checks for drift and paired machines**: the running daemon's version
+  against the installed one (and which install it runs from), MCP servers started before the last
+  upgrade, more than one `cabildo` on `PATH`, and each paired machine with its last pull (rows
+  sent, rows new, errors). The daemon logs `pulled N, merged M` when a peer sends rows. The
+  README has an Upgrade section with the restart step.
+
 ### Removed
 
 - **`cabildo lan`**: the daemon now syncs paired machines (see LAN pairing). The old

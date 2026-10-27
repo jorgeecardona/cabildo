@@ -18,11 +18,13 @@ without polling).
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import socket
 import sys
 import threading
 import time
+from pathlib import Path
 
 from . import actions, broker, desktop, lan, monitor, names, record, store
 
@@ -220,6 +222,26 @@ def _run_broker(address: str, stop: threading.Event, ready: threading.Event) -> 
         _log(f"broker: cannot serve on {address}: {type(e).__name__}: {e}")
 
 
+def info_path() -> Path:
+    """Where the running daemon records which build it is, for ``cabildo doctor``."""
+    return store.home() / "daemon.json"
+
+
+def _write_info() -> None:
+    from . import __version__
+
+    info = {
+        "pid": os.getpid(),
+        "version": __version__,
+        "exe": sys.executable,
+        "started_at": time.time(),
+    }
+    try:
+        info_path().write_text(json.dumps(info))
+    except OSError as e:  # doctor then says "unknown"; the daemon does not need this
+        _log(f"cannot write {info_path()}: {e}")
+
+
 def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) -> int:
     p = argparse.ArgumentParser(prog="cabildo-daemon", description=(__doc__ or "").split("\n")[0])
     p.add_argument(
@@ -399,6 +421,8 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
             else f"broker: not yet listening on {args.broker_socket}"
         )
 
+    if not args.once:
+        _write_info()
     lan_service = None if args.once else lan.start_service(_log)
 
     workers: list[threading.Thread] = []

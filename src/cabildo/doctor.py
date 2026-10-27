@@ -34,11 +34,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import desktop, mcp_config, service, store
+from . import desktop, mcp_config, procs, service, store
 
 # Verdicts. `na` is "not applicable / nothing to fix here" — an issues server
 # with no docs/issues/ to back it, or a daemon that has simply never run. It is
@@ -298,6 +300,131 @@ def check_daemon_push() -> Check:
     )
 
 
+def _alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def check_daemon_build() -> Check:
+    """Whether the running daemon is the build installed here. A daemon keeps the
+    code it started with, so after an upgrade it lacks new actions until it is
+    restarted (issue #42).
+    """
+    from . import __version__
+    from .daemon import info_path
+
+    try:
+        info = json.loads(info_path().read_text())
+        pid, ran, exe = int(info["pid"]), str(info["version"]), str(info["exe"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return Check("daemon.build", NA, "no running daemon has recorded its build")
+    if not _alive(pid):
+        return Check("daemon.build", NA, f"the recorded daemon (pid {pid}) is not running")
+    if ran != __version__:
+        return Check(
+            "daemon.build",
+            WARN,
+            f"daemon runs {ran}, installed here is {__version__} (pid {pid})",
+            "restart it: `cabildo service restart`",
+        )
+    if os.path.realpath(exe) != os.path.realpath(sys.executable):
+        return Check(
+            "daemon.build",
+            WARN,
+            f"daemon runs from {exe}, this cabildo from {sys.executable}",
+            "two installs: remove one, or restart the service from the one you want",
+        )
+    return Check("daemon.build", OK, f"daemon runs {ran}, same as installed")
+
+
+def check_mcp_fresh() -> Check:
+    """MCP servers started before the last upgrade of this install. A session
+    keeps the server it started with, so it lacks new tools and actions until
+    that session is restarted (issue #42).
+    """
+    import cabildo
+
+    if not os.path.isdir("/proc"):
+        return Check("mcp.fresh", NA, "needs /proc to list running MCP servers")
+    try:
+        built = Path(cabildo.__file__).stat().st_mtime
+    except OSError:
+        return Check("mcp.fresh", NA, "cannot read the installed package")
+    old = [
+        p
+        for p in procs.processes()
+        if any(a.endswith("cabildo-mcp") for a in p.cmdline.split(" ")[:3]) and p.started_at < built
+    ]
+    if not old:
+        return Check("mcp.fresh", OK, "no MCP server predates the installed build")
+    pids = ", ".join(str(p.pid) for p in old[:6])
+    return Check(
+        "mcp.fresh",
+        WARN,
+        f"{len(old)} MCP server(s) started before the last upgrade (pid {pids})",
+        "restart those Claude sessions, or run `/mcp` in them",
+    )
+
+
+def check_installs() -> Check:
+    """More than one ``cabildo`` on PATH: the MCP, hooks and daemon may each pick
+    a different one (issue #42).
+    """
+    found: dict[str, str] = {}
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        exe = shutil.which("cabildo", path=d) if d else None
+        if exe:
+            found.setdefault(os.path.realpath(exe), exe)
+    if len(found) <= 1:
+        return Check("installs", OK, "one `cabildo` on PATH")
+    return Check(
+        "installs",
+        WARN,
+        "several `cabildo` on PATH: " + ", ".join(found.values()),
+        "keep one (`uv pip uninstall cabildo` in the others) so the MCP, hooks and daemon agree",
+    )
+
+
+def check_lan() -> list[Check]:
+    """Paired machines and how the last pull from each went."""
+    from . import lan, pair
+
+    peers = pair.load_peers()
+    if not peers:
+        return [Check("lan", NA, 'no paired machines (pair with `request("pair")`)')]
+    status = lan.load_status()
+    checks: list[Check] = []
+    for node, peer in peers.items():
+        name = f"lan.{node[:8]}"
+        st = status.get(node)
+        where = f"{peer.host}:{peer.port}"
+        if st is None:
+            checks.append(
+                Check(name, WARN, f"{where} · not pulled yet", "is the daemon running new code?")
+            )
+        elif st.error:
+            checks.append(
+                Check(name, WARN, f"{where} · {_ago(time.time() - st.at)} ago · {st.error}", "")
+            )
+        else:
+            checks.append(
+                Check(
+                    name,
+                    OK,
+                    f"{where} · last pull {_ago(time.time() - st.at)} ago: "
+                    f"{st.pulled} sent, {st.merged} new · cursor {st.cursor}",
+                )
+            )
+    return checks
+
+
 # --------------------------------------------------------------------------- #
 # Platform support — the checks that would have surfaced the macOS gaps
 # --------------------------------------------------------------------------- #
@@ -361,6 +488,10 @@ def run(cwd: str | os.PathLike | None = None) -> list[Check]:
     checks = [check_hooks(), check_mcp_bus(cwd), check_mcp_issues(cwd), check_db()]
     checks.append(check_daemon())
     checks.append(check_daemon_push())
+    checks.append(check_daemon_build())
+    checks.append(check_mcp_fresh())
+    checks.append(check_installs())
+    checks.extend(check_lan())
     checks.extend(check_platform())
     return checks
 

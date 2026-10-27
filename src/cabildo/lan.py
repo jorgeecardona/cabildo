@@ -20,6 +20,7 @@ import dataclasses
 import json
 import socket
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -306,6 +307,39 @@ def select_all(
     return out, max_id
 
 
+@dataclasses.dataclass(frozen=True)
+class SyncStatus:
+    """The last pull from one paired peer, kept for ``cabildo doctor``."""
+
+    at: float
+    pulled: int  # rows the peer sent
+    merged: int  # rows that were new here (the rest were already known)
+    cursor: int  # the peer's last message id we have consumed
+    error: str = ""
+
+
+def _status_path() -> Path:
+    return store.home() / "lan" / "status.json"
+
+
+def load_status() -> dict[str, SyncStatus]:
+    try:
+        raw = json.loads(_status_path().read_text())
+        return {node: SyncStatus(**v) for node, v in raw.items()}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def save_status(status: dict[str, SyncStatus]) -> None:
+    path = _status_path()
+    tmp = path.with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps({n: dataclasses.asdict(v) for n, v in status.items()}))
+        tmp.replace(path)
+    except OSError:
+        pass
+
+
 class Service:
     """TLS server + pull loop for paired peers, run inside the daemon."""
 
@@ -474,6 +508,7 @@ class Service:
             cur: dict[str, int] = json.loads(self._cursor_path().read_text())
         except (OSError, ValueError):
             cur = {}
+        status = load_status()
         merged = 0
         for peer in pair.load_peers().values():
             since = int(cur.get(peer.node, 0))
@@ -481,26 +516,37 @@ class Service:
                 with pair.connect(self.me, peer.host, peer.port, peer) as s:
                     pair.send_line(s, {"op": "pull", "proto": pair.PROTO, "since": since})
                     resp = pair.recv_line(s) or {}
-            except (OSError, ValueError):
+            except (OSError, ValueError) as e:
+                status[peer.node] = SyncStatus(time.time(), 0, 0, since, f"unreachable: {e}")
                 continue
             if not resp.get("ok"):
+                err = str(resp.get("error") or "refused")
+                status[peer.node] = SyncStatus(time.time(), 0, 0, since, err)
                 continue
             if int(resp.get("top") or 0) < since:
                 cur[peer.node] = 0  # the peer's bus was reset; start over, guid dedup
+                status[peer.node] = SyncStatus(time.time(), 0, 0, 0, "peer bus was reset")
                 continue
             rows = resp.get("messages") or []
+            got = 0
             conn = store.connect()
             try:
                 if rows:
-                    merged += merge_incoming(conn, rows)
+                    got = merge_incoming(conn, rows)
                 # Only an answer that carries the key replaces the list: an older
                 # peer without it must not wipe what we know.
                 if isinstance(resp.get("sessions"), list):
                     store.replace_remote_sessions(conn, peer.node, resp["sessions"])
             finally:
                 conn.close()
+            merged += got
             cur[peer.node] = int(resp.get("max_id") or since)
+            status[peer.node] = SyncStatus(time.time(), len(rows), got, cur[peer.node])
+            if rows:
+                note = "" if got else " (all already known)"
+                self.log(f"lan: {peer.node[:8]}: pulled {len(rows)}, merged {got}{note}")
         self._cursor_path().write_text(json.dumps(cur))
+        save_status(status)
         conn = store.connect()
         try:
             store.prune_remote_sessions(conn)

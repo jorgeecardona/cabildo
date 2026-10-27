@@ -284,3 +284,119 @@ def test_daemon_push_check_reports_dry_run_posture(tmp_path, monkeypatch):
     # Installed with --allow-push: it really pushes.
     unit_path.write_text("ExecStart=/x -m cabildo.daemon --allow-push\n")
     assert doctor.check_daemon_push().status == doctor.OK
+
+
+# --------------------------------------------------------------------------- #
+# Install drift (#42) and paired machines (#43)
+# --------------------------------------------------------------------------- #
+def _write_daemon_info(*, pid=None, version=None, exe=None):
+    import sys
+
+    from cabildo import __version__
+    from cabildo.daemon import info_path
+
+    info_path().parent.mkdir(parents=True, exist_ok=True)
+    info_path().write_text(
+        json.dumps(
+            {
+                "pid": os.getpid() if pid is None else pid,
+                "version": version or __version__,
+                "exe": exe or sys.executable,
+            }
+        )
+    )
+
+
+def test_daemon_build_is_na_without_a_record(env):
+    assert doctor.check_daemon_build().status == doctor.NA
+
+
+def test_daemon_build_ok_when_same_version_and_exe(env):
+    _write_daemon_info()
+    assert doctor.check_daemon_build().status == doctor.OK
+
+
+def test_daemon_build_warns_on_an_older_version(env):
+    _write_daemon_info(version="0.0.1")
+    c = doctor.check_daemon_build()
+    assert c.status == doctor.WARN and "0.0.1" in c.detail and "restart" in c.fix
+
+
+def test_daemon_build_warns_when_it_runs_from_another_install(env):
+    _write_daemon_info(exe="/elsewhere/.venv/bin/python")
+    c = doctor.check_daemon_build()
+    assert c.status == doctor.WARN and "/elsewhere" in c.detail
+
+
+def test_daemon_build_na_when_the_recorded_process_is_gone(env):
+    _write_daemon_info(pid=2**22 + 12345)
+    assert doctor.check_daemon_build().status == doctor.NA
+
+
+def _proc(cmdline, started_at):
+    from cabildo.procs import Proc
+
+    return Proc(pid=4242, ppid=1, comm="python", rss_kb=1, started_at=started_at, cmdline=cmdline)
+
+
+def test_mcp_fresh_warns_for_a_server_older_than_the_package(env, monkeypatch):
+    import cabildo
+
+    built = os.stat(cabildo.__file__).st_mtime
+    monkeypatch.setattr(
+        doctor.procs,
+        "processes",
+        lambda: [_proc("/x/bin/python /x/bin/cabildo-mcp", built - 100)],
+    )
+    c = doctor.check_mcp_fresh()
+    assert c.status == doctor.WARN and "4242" in c.detail
+
+
+def test_mcp_fresh_ok_for_a_newer_server_and_ignores_other_processes(env, monkeypatch):
+    import cabildo
+
+    built = os.stat(cabildo.__file__).st_mtime
+    monkeypatch.setattr(
+        doctor.procs,
+        "processes",
+        lambda: [
+            _proc("/x/bin/python /x/bin/cabildo-mcp", built + 100),
+            _proc("vim cabildo-mcp.md", built - 100),
+        ],
+    )
+    assert doctor.check_mcp_fresh().status == doctor.OK
+
+
+def test_installs_warns_when_two_cabildo_are_on_path(tmp_path, monkeypatch):
+    dirs = []
+    for name in ("a", "b"):
+        d = tmp_path / name
+        d.mkdir()
+        exe = d / "cabildo"
+        exe.write_text("#!/bin/sh\n")
+        exe.chmod(0o755)
+        dirs.append(str(d))
+    monkeypatch.setenv("PATH", os.pathsep.join(dirs))
+    c = doctor.check_installs()
+    assert c.status == doctor.WARN and all(d in c.detail for d in dirs)
+    monkeypatch.setenv("PATH", dirs[0])
+    assert doctor.check_installs().status == doctor.OK
+
+
+def test_lan_reports_each_paired_machine_and_its_last_pull(env):
+    import time
+
+    from cabildo import lan, pair
+
+    assert doctor.check_lan()[0].status == doctor.NA
+    pair.save_peer(pair.PairedPeer("n1" * 16, "10.0.0.1", 1111, "pem", 0))
+    pair.save_peer(pair.PairedPeer("n2" * 16, "10.0.0.2", 2222, "pem", 0))
+    lan.save_status(
+        {
+            "n1" * 16: lan.SyncStatus(time.time(), pulled=7, merged=0, cursor=50),
+            "n2" * 16: lan.SyncStatus(time.time(), 0, 0, 0, "unreachable: timed out"),
+        }
+    )
+    ok, bad = doctor.check_lan()
+    assert ok.status == doctor.OK and "7 sent, 0 new" in ok.detail
+    assert bad.status == doctor.WARN and "unreachable" in bad.detail
