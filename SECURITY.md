@@ -30,7 +30,7 @@ scripts that enforce advisory locks and gate pushes. Reports that matter most:
 - a spawned agent escaping its worktree, its tool allowlist, or the fleet
   depth/budget limits,
 - data exfiltration through the optional cloud uplink (`cabildo sync`) or LAN
-  sync (`cabildo lan`) beyond the configured `[uplink].level`.
+  sync (the daemon's paired LAN service) beyond the configured `[uplink].level`.
 
 ## Trust model
 

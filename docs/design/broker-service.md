@@ -46,7 +46,8 @@ symmetric: both are just clients of a service.
   (push / spawn / ask), one action at a time, plus periodic sweeps (reap dead
   sessions, ingest opted-in transcripts, sample machine conditions). Started with
   `cabildo service`. It is the natural home for the broker.
-- `lan.py` already syncs messages between machines on one subnet: UDP-broadcast
+- (Superseded: `cabildo lan` was replaced by PIN pairing in `pair.py` and the
+  daemon's `lan.Service`.) `lan.py` already syncs messages between machines on one subnet: UDP-broadcast
   discovery, TCP pull, `guid` dedup, `origin='lan'` tagging, optional shared
   `secret` on the pull handshake, no transport encryption. Stdlib only. It is the
   basis for the WAN transport.

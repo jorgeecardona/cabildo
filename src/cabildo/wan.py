@@ -1,14 +1,14 @@
 """wan.py: sync a cabildo bus with explicit remote peers over a tunnel.
 
-lan.py finds peers by UDP broadcast on the local subnet. wan.py is the same
-pull-and-dedup machinery pointed at explicit peer addresses from config, for
+pair.py pairs machines on the local subnet. wan.py points the plain pull-and-dedup
+machinery in lan.py at explicit peer addresses from config, for
 peers reached over a tunnel -- a WireGuard/Tailscale mesh IP, or an SSH
 port-forward pushing on loopback -- rather than the local wire. It reuses lan.py
 wholesale: ``pull_from_peer`` (client), ``run_server`` + ``handle_pull``
 (server), ``select_outbound`` and ``merge_incoming`` (the sync core). The only
 differences are:
 
-  * explicit addresses instead of a beacon (broadcast does not cross subnets),
+  * explicit addresses (broadcast does not cross subnets),
   * a shared bus token on the pull handshake (lan's ``secret`` slot), which is
     authorization on top of the already-encrypted tunnel,
   * rows stamped ``provenance='wan'`` so they are dedup-merged and, like ``'lan'``,
@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import cloud, lan, store
+from . import cloud, lan, pair, store
 
 # Addresses that expose the server beyond the intended tunnel/loopback interface.
 _WILDCARD_HOSTS = {"0.0.0.0", "::", "*", ""}  # noqa: S104
@@ -55,7 +55,7 @@ class Peer:
         return f"{self.host}:{self.port}"
 
 
-def parse_peer(spec: str, *, default_port: int = lan.BEACON_PORT) -> Peer:
+def parse_peer(spec: str, *, default_port: int = pair.DEFAULT_PORT) -> Peer:
     """``"host:port"`` or bare ``"host"`` (falling back to ``default_port``)."""
     host, sep, port = spec.rpartition(":")
     if not sep:

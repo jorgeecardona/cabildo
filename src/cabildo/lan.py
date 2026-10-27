@@ -26,12 +26,9 @@ from typing import Any
 
 from . import cloud, store
 
-# Wire version. Bumped only on an incompatible change to the beacon or the pull
-# request/response shape; peers ignore beacons and refuse pulls at other protos.
+# Wire version of the plain TCP pull wan.py uses. Bumped only on an incompatible
+# change to the pull request/response shape; servers refuse pulls at other protos.
 PROTO = 1
-# The well-known UDP port peers broadcast their presence on. TCP is ephemeral
-# (advertised in the beacon), so only this one port is fixed.
-BEACON_PORT = 48653
 PULL_LIMIT = 300
 _CONN_TIMEOUT = 5.0
 _RECV_CAP = 16 * 1024 * 1024  # a pull response is bounded by PULL_LIMIT rows
@@ -180,7 +177,7 @@ def handle_pull(conn, req: dict, project: str, secret: str | None) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# Sockets — server (serves rows), client (pulls rows), UDP beacon + discovery.
+# Sockets — server (serves rows), client (pulls rows).
 # --------------------------------------------------------------------------- #
 def open_server_socket(port: int = 0) -> socket.socket:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
