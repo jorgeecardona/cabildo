@@ -71,3 +71,61 @@ def test_node_label_only_for_remote_rows(conn):
     store.replace_remote_sessions(conn, "abcdef1234", [{"session_id": "r1"}])
     assert mcp_server._node(store.get_session(conn, "r1")) == "abcdef12"
     assert mcp_server._node(store.get_session(conn, "s-local")) is None
+
+
+# --------------------------------------------------------------------------- #
+# The chatroom: #general, joined by every session, paired or not
+# --------------------------------------------------------------------------- #
+def _topics(conn, sid):
+    return store.subscriptions_of(conn, sid)
+
+
+def test_every_session_joins_the_room_without_any_pairing(conn):
+    _local(conn, "s1", "ana")
+    assert {"general", "proj:alpha"} <= set(_topics(conn, "s1"))
+
+
+def test_the_room_can_be_renamed_or_turned_off(conn, home):
+    (home / "config.toml").write_text('[chat]\nroom = "den"\n')
+    _local(conn, "s1", "ana")
+    assert "den" in _topics(conn, "s1") and "general" not in _topics(conn, "s1")
+    (home / "config.toml").write_text('[chat]\nroom = ""\n')
+    _local(conn, "s2", "bob", pid=4343)
+    assert "den" not in _topics(conn, "s2") and "general" not in _topics(conn, "s2")
+
+
+def test_an_isolated_project_joins_the_room_but_not_a_project_channel(conn, home):
+    (home / "config.toml").write_text("[project.alpha]\nisolated = true\n")
+    _local(conn, "s1", "ana")
+    assert "general" in _topics(conn, "s1") and "proj:alpha" not in _topics(conn, "s1")
+
+
+def test_join_room_all_brings_in_sessions_that_were_already_open(conn):
+    _local(conn, "s1", "ana")
+    store.replace_remote_sessions(conn, "nodeB", [{"session_id": "r1", "project_name": "alpha"}])
+    store.unsubscribe(conn, "s1", "general")
+    assert store.join_room_all(conn) == 1  # the local session, not the remote row
+    assert "general" in _topics(conn, "s1") and "general" not in _topics(conn, "r1")
+
+
+def test_a_room_post_leaves_the_machine_even_from_an_excluded_project(conn):
+    from cabildo import lan
+
+    store.post_message(
+        conn,
+        from_session="s1",
+        from_handle=None,
+        body="hi room",
+        topic="general",
+        project="/repo/secret",
+    )
+    store.post_message(
+        conn,
+        from_session="s1",
+        from_handle=None,
+        body="private",
+        topic="proj:secret",
+        project="/repo/secret",
+    )
+    rows, _ = lan.select_all(conn, 0, {"secret"})
+    assert [r["body"] for r in rows] == ["hi room"]

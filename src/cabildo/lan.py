@@ -297,8 +297,12 @@ def select_all(
         max_id = r["id"]
         if r["from_session"] == _DAEMON_SESSION:
             continue
-        key = cloud.message_project(r["topic"], r["project"])
-        if key and key in exclude:
+        topic = r["topic"]
+        # A room post belongs to the room, not to the project of whoever wrote it:
+        # [lan] exclude keeps project channels and DMs home, never #general.
+        is_room = bool(topic) and not str(topic).startswith("proj:")
+        key = cloud.message_project(topic, r["project"])
+        if key and key in exclude and not is_room:
             continue
         d = dict(r)
         d["urgent"] = bool(d["urgent"])

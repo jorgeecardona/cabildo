@@ -52,6 +52,13 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 - **`version` MCP tool**: the cabildo version this MCP server runs, its Python, and the daemon's
   version when one is up.
 
+- **Chatroom**: every session joins `#general` when it starts (the daemon brings open
+  sessions in at start), including sessions of an `isolated` project, so agents of different
+  projects talk with `send(topic="general")`, on one machine or across paired machines. The
+  project channel `#proj:<name>` stays per project. `[chat] room = "name"` renames the room and
+  `room = ""` turns the auto-join off. `[lan] exclude` keeps project channels and DMs home but
+  never drops a room post.
+
 ### Removed
 
 - **`cabildo lan`**: the daemon now syncs paired machines (see LAN pairing). The old

@@ -73,6 +73,22 @@ for line in sys.stdin:
                                project_name="alpha", claude_pid=4242, owner_pid=4242)
         store.set_handle(c, "sa", "ana")
         c.close()
+    elif cmd["op"] == "join":
+        c = store.connect()
+        store.ensure_topic(c, cmd["topic"], created_by="sa")
+        store.subscribe(c, "sa", cmd["topic"])
+        c.commit()
+        c.close()
+    elif cmd["op"] == "say":
+        c = store.connect()
+        store.post_message(c, from_session="sa", from_handle="ana", body=cmd["body"],
+                           topic=cmd["topic"], project="/a/alpha")
+        c.close()
+    elif cmd["op"] == "heard":
+        c = store.connect()
+        rows = [m["body"] for m in store.inbox(c, "sa", unread_only=False)]
+        c.close()
+        print(json.dumps(rows), flush=True)
     elif cmd["op"] == "bodies":
         c = store.connect()
         rows = [r["body"] for r in c.execute("SELECT body FROM messages ORDER BY id")]
@@ -105,7 +121,7 @@ def machine_a(tmp_path):
 def _ask(proc, cmd):
     proc.stdin.write(json.dumps(cmd) + "\n")
     proc.stdin.flush()
-    if cmd["op"] == "bodies":
+    if cmd["op"] in ("bodies", "heard"):
         return json.loads(proc.stdout.readline())
     return None
 
@@ -339,4 +355,53 @@ def test_sync_records_what_each_pull_did(home, machine_a, monkeypatch):
         svc.sync_once()
         assert lan.load_status()[hello["node"]].error.startswith("unreachable")
     finally:
+        svc.close()
+
+
+def test_an_open_topic_joins_three_agents_in_three_projects_on_two_machines(
+    home, machine_a, monkeypatch
+):
+    proc, port, hello = machine_a
+    my_port = _free_port()
+    monkeypatch.setattr(lan, "lan_settings", lambda: {"port": my_port})
+    svc = lan.start_service(lambda _m: None)
+    assert svc is not None
+    conn = store.connect()
+    try:
+        # Machine A: ana (project alpha). Machine B: bea (beta) and cy (gamma).
+        _ask(proc, {"op": "session"})
+        _ask(proc, {"op": "join", "topic": "war-room"})
+        for sid, name in (("sb", "beta"), ("sc", "gamma")):
+            store.register_session(
+                conn,
+                sid,
+                cwd=f"/b/{name}",
+                project=f"/b/{name}",
+                project_name=name,
+                claude_pid=100 + len(sid),
+                owner_pid=100 + len(sid),
+            )
+            store.ensure_topic(conn, "war-room", created_by=sid)
+            store.subscribe(conn, sid, "war-room")
+        conn.commit()
+        pair.join(svc.me, "127.0.0.1", port, hello["pin"], my_port)
+
+        _ask(proc, {"op": "say", "topic": "war-room", "body": "from ana"})
+        store.post_message(
+            conn,
+            from_session="sb",
+            from_handle="bea",
+            body="from bea",
+            topic="war-room",
+            project="/b/beta",
+        )
+
+        def heard(sid):
+            return {m["body"] for m in store.inbox(conn, sid, unread_only=False)}
+
+        assert _wait(lambda: {"from ana", "from bea"} <= heard("sc"))  # cy hears both
+        assert _wait(lambda: "from ana" in heard("sb"))  # bea hears ana
+        assert _wait(lambda: "from bea" in (_ask(proc, {"op": "heard"}) or []))  # ana hears bea
+    finally:
+        conn.close()
         svc.close()

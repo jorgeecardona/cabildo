@@ -1252,9 +1252,10 @@ def pair(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     return {
         "ok": True,
         "peer": peer.node,
-        "reason": f"paired with {peer.host}:{peer.port}. Messages sync both ways, but an "
-        "agent only sees those on a channel it shares (same project name) or sent "
-        "to it directly. Run `cabildo doctor` to see the last sync.",
+        "reason": f"paired with {peer.host}:{peer.port}. Every agent on both machines is "
+        'in the chatroom #general: `send(topic="general")`. Project channels '
+        "(#proj:x) only reach agents of that project. Run `cabildo doctor` to see "
+        "the last sync.",
     }
 
 

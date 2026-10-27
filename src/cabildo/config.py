@@ -139,6 +139,15 @@ def repo_project_name(tree_root: str | None) -> str | None:
     return None
 
 
+def chat_room() -> str | None:
+    """The chatroom every session joins at start: ``[chat] room`` in the machine-wide
+    config, ``general`` by default. An empty string turns the auto-join off.
+    """
+    t = _read(_global_path()).get("chat")
+    name = t.get("room", store.DEFAULT_TOPIC) if isinstance(t, dict) else store.DEFAULT_TOPIC
+    return str(name or "").lstrip("#").strip() or None
+
+
 def project_isolated(cwd: str | None = None, project_name: str | None = None) -> bool:
     """``[project.<name>].isolated`` for this project: default False.
 

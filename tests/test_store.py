@@ -30,9 +30,8 @@ def test_spawn_index_maps_registered_sub_agents(conn):
 def test_register_creates_default_subscriptions(conn):
     make_session(conn, "s1", project_name="alpha")
     subs = set(store.subscriptions_of(conn, "s1"))
-    # Isolation by default: an agent's only default home is its own project
-    # channel. #general exists but is opt-in via join_topic.
-    assert subs == {store.project_topic("alpha")}
+    # An agent's home is its own project channel plus the chatroom, #general.
+    assert subs == {store.project_topic("alpha"), store.DEFAULT_TOPIC}
     assert store.DEFAULT_TOPIC in {t["name"] for t in store.list_topics(conn)}
 
 
@@ -55,10 +54,11 @@ def test_project_change_drops_the_old_channel(conn):
     assert store.project_topic("alpha") not in subs
 
 
-def test_general_is_opt_in(conn):
+def test_general_is_joined_by_default_and_can_be_left(conn):
     make_session(conn, "s1", project_name="alpha")
-    store.subscribe(conn, "s1", store.DEFAULT_TOPIC)
     assert store.DEFAULT_TOPIC in set(store.subscriptions_of(conn, "s1"))
+    store.unsubscribe(conn, "s1", store.DEFAULT_TOPIC)
+    assert store.DEFAULT_TOPIC not in set(store.subscriptions_of(conn, "s1"))
 
 
 def test_pid_rendezvous_lookup(conn):

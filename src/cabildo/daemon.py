@@ -356,6 +356,7 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
     n = store.reap_stale_intents(conn, STALE_AFTER)
     if n:
         _log(f"failed {n} stale intent(s) left 'running' by a dead daemon")
+    store.join_room_all(conn)
 
     ctx = actions.Ctx(
         worker=worker,

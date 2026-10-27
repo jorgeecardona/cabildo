@@ -652,11 +652,12 @@ def register_session(
             "WHERE tag=? AND session_id IS NULL",
             (session_id, tag),
         )
-    # An agent's default home is its OWN project channel — nothing else. #general
-    # still exists as a fleet-wide room, but it is opt-in (join_topic): a CRM
-    # agent must never receive paas chatter just by starting up. Isolation by
-    # default; broadcasting on purpose.
+    # An agent's home is its OWN project channel (isolation by default) plus one
+    # chatroom, #general, which every session joins: the project channel is for
+    # the repo, the room is for the swarm, across projects and across paired
+    # machines. [chat] room renames it; an empty room turns the auto-join off.
     ensure_topic(conn, DEFAULT_TOPIC)  # keep the room available to join
+    _join_room(conn, session_id)
     # The effective name after this upsert: a caller that didn't pass one leaves
     # the stored value in place (COALESCE above), so fall back to the old name.
     new_pname = project_name or old_pname
@@ -680,6 +681,37 @@ def register_session(
             ensure_topic(conn, pt, project=project, created_by=session_id)
             subscribe(conn, session_id, pt)
     conn.commit()
+
+
+def _join_room(conn: sqlite3.Connection, session_id: str) -> None:
+    """Put a session in the chatroom. Best-effort: it never blocks a session starting.
+    Isolated projects join too: a catch-all folder like a home directory is exactly
+    where the room is the only way to be reached.
+    """
+    try:
+        from . import config
+
+        name = config.chat_room()
+        if name:
+            ensure_topic(conn, name, created_by=session_id)
+            subscribe(conn, session_id, name)
+    except Exception:
+        pass
+
+
+def join_room_all(conn: sqlite3.Connection) -> int:
+    """Subscribe this machine's live sessions to the chatroom, so sessions that were
+    open before an upgrade are in it. Returns how many sessions were subscribed.
+    """
+    rows = conn.execute(
+        "SELECT session_id FROM sessions WHERE status='active' AND owner_pid IS NOT NULL "
+        "AND client NOT LIKE ? AND last_seen_at>=?",
+        (REMOTE_PREFIX + "%", _now() - ACTIVE_WINDOW),
+    ).fetchall()
+    for r in rows:
+        _join_room(conn, r["session_id"])
+    conn.commit()
+    return len(rows)
 
 
 def touch(conn: sqlite3.Connection, session_id: str) -> None:
