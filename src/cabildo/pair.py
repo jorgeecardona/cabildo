@@ -4,17 +4,17 @@ mutual TLS with each other's pinned certificate.
 Flow:
 
 1. Machine A: ``request("pair")``. The daemon mints a PIN, opens a 120 s pairing
-   window, and announces it with a UDP beacon.
-2. Machine B: ``request("pair", {"pin": "482913"})``. The daemon hears the one
-   machine announcing a pairing (or uses ``host`` + ``port`` if given), connects
+   window, and marks its mDNS announcement (``mdns.py``) as pairing.
+2. Machine B: ``request("pair", {"pin": "482913"})``. The daemon finds the one
+   machine announcing a pairing over mDNS (or uses ``host`` + ``port`` if given), connects
    over TLS, and both sides prove the PIN with an HMAC over both certificate
    fingerprints and both nonces.
 3. Each side stores the other's certificate. Every later sync is mutual TLS
    against the stored certificates. The PIN is never used again.
 
 The PIN allows one attempt: a wrong tag closes the window. A recorded exchange
-only reveals a PIN that is already dead. The beacon carries no hash of the PIN,
-since a 6-digit PIN behind a hash is guessed in milliseconds.
+only reveals a PIN that is already dead. The announcement carries no hash of the
+PIN, since a 6-digit PIN behind a hash is guessed in milliseconds.
 
 Certificates are made once with the ``openssl`` CLI (stdlib ``ssl`` cannot make
 them). Without ``openssl`` the LAN service stays off.
@@ -39,10 +39,7 @@ from typing import Any
 from . import store
 
 PROTO = 2
-BEACON_PORT = 48653
-DEFAULT_PORT = 48653
 PAIR_WINDOW = 120.0
-LISTEN_FOR = 20.0
 _TIMEOUT = 10.0
 _RECV_CAP = 16 * 1024 * 1024
 
@@ -307,7 +304,7 @@ def answer_pair(
         fp_b = fingerprint(cert_b)
     except ValueError:
         fp_b = ""
-    if not (fp_b and nonce_b and node_b):
+    if not (fp_b and nonce_b and node_b and int(req.get("port") or 0) > 0):
         send_line(sock, {"ok": False, "error": "malformed pair request"})
         return None
     w = pairing.take()
@@ -323,7 +320,7 @@ def answer_pair(
     peer = PairedPeer(
         node=node_b,
         host=host,
-        port=int(req.get("port") or DEFAULT_PORT),
+        port=int(req.get("port") or 0),
         cert_pem=cert_b,
         paired_at=time.time(),
     )
@@ -338,7 +335,7 @@ def join(me: Identity, host: str, port: int, pin: str, my_port: int) -> PairedPe
     try:
         s = connect(me, host, port, None)
     except OSError as e:
-        raise PairError(f"cannot reach {host}:{port}: {e}") from e
+        raise Unreachable(f"cannot reach {host}:{port}: {e}") from e
     with s:
         fp_a_seen = peer_fingerprint(s) or ""
         send_line(
@@ -377,73 +374,5 @@ class PairError(Exception):
     """Pairing failed; the message says why, in words for the user."""
 
 
-# --------------------------------------------------------------------------- #
-# Beacon: only while a pairing window is open
-# --------------------------------------------------------------------------- #
-def beacon_payload(node: str, port: int) -> bytes:
-    return json.dumps({"cabildo": PROTO, "node": node, "port": port, "pairing": True}).encode()
-
-
-def announce(node: str, port: int, pairing: Pairing, interval: float = 2.0) -> None:
-    """Broadcast the pairing beacon until the window closes."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    try:
-        while pairing.live() is not None:
-            try:
-                s.sendto(beacon_payload(node, port), ("255.255.255.255", BEACON_PORT))
-            except OSError:
-                pass
-            time.sleep(interval)
-    finally:
-        s.close()
-
-
-def hear(me: str, timeout: float = LISTEN_FOR) -> list[tuple[str, str, int]]:
-    """Listen for pairing beacons. Returns distinct ``(node, host, port)``; stops
-    early once one is heard and no other arrives within 3 more seconds.
-    """
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    if hasattr(socket, "SO_REUSEPORT"):
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-    found: dict[str, tuple[str, str, int]] = {}
-    try:
-        s.bind(("", BEACON_PORT))
-        s.settimeout(0.5)
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            try:
-                data, addr = s.recvfrom(4096)
-            except TimeoutError:
-                continue
-            try:
-                m = json.loads(data.decode())
-            except ValueError:
-                continue
-            if not isinstance(m, dict) or m.get("cabildo") != PROTO or not m.get("pairing"):
-                continue
-            node = str(m.get("node") or "")
-            if not node or node == me or node in found:
-                continue
-            found[node] = (node, addr[0], int(m.get("port") or DEFAULT_PORT))
-            deadline = min(deadline, time.time() + 3.0)
-    except OSError:
-        pass
-    finally:
-        s.close()
-    return list(found.values())
-
-
-def local_addresses() -> list[str]:
-    """This machine's LAN addresses, for the fallback line shown to the user."""
-    out: list[str] = []
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("10.255.255.255", 1))  # no packet is sent; picks the outgoing address
-        out.append(s.getsockname()[0])
-    except OSError:
-        pass
-    finally:
-        s.close()
-    return [a for a in out if not a.startswith("127.")]
+class Unreachable(PairError):
+    """Nothing answered at that address; the PIN was not used."""

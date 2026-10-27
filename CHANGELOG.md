@@ -8,9 +8,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 - **LAN pairing** (`request("pair")`): two machines on one network pair once with
   a 6-digit PIN, then the daemon syncs all messages both ways over mutual TLS with
-  each other's pinned certificate. The other machine is found by broadcast, or by
-  `host` + `port` when broadcast is blocked. The PIN allows one attempt within
-  120 s. A new local message nudges the peer, so it arrives in about a second.
+  each other's pinned certificate. The other machine is found over mDNS
+  (`_cabildo._tcp`, via the `zeroconf` package), or by `host` + `port` when
+  multicast is blocked. The TCP port is picked by the system unless `[lan] port`
+  is set, and a paired machine's new address or port is picked up from mDNS. The
+  PIN allows one attempt within 120 s. A new local message nudges the peer, so it arrives in about a second.
   `[lan] enabled = false`, `port`, and `exclude = ["project"]` in
   `~/.cabildo/config.toml`. Needs the `openssl` command.
 - **Agents on a paired machine** show up in `list_agents` as `name (node)`, and

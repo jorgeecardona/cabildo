@@ -16,6 +16,7 @@ TCP pull used by ``wan.py`` over a tunnel. Stdlib only.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import socket
 import threading
@@ -318,6 +319,7 @@ class Service:
         self.stop = threading.Event()
         self.wake = threading.Event()
         self._sock: socket.socket | None = None
+        self.mdns: Any = None
 
     def exclude(self) -> set[str]:
         return {cloud.project_key(p) for p in lan_settings().get("exclude") or []}
@@ -328,13 +330,59 @@ class Service:
         except OSError as e:
             self.log(f"lan: cannot listen on tcp/{self.port}: {e}")
             return False
+        # Port 0 lets the system pick; mDNS tells the peers which one it is.
+        self.port = self._sock.getsockname()[1]
+        try:
+            from . import mdns
+
+            self.mdns = mdns.Mdns(self.me.node, self.port, on_seen=self._on_seen)
+        except Exception as e:  # discovery is a convenience; sync works without it
+            self.log(f"lan: mDNS off: {type(e).__name__}: {e}")
         for fn in (self._serve, self._pull_loop, self._watch):
             threading.Thread(target=fn, daemon=True).start()
         return True
 
+    def _on_seen(self, seen: Any) -> None:
+        """A paired machine announced a new address or port: store it."""
+        from . import pair
+
+        peer = pair.load_peers().get(seen.node)
+        if peer is None or (peer.host, peer.port) in {(h, seen.port) for h in seen.hosts}:
+            return
+        # Anyone can announce a paired node id. Save the address only after the
+        # pinned certificate answers there, so a forged one cannot break the sync.
+        for host in seen.hosts:
+            try:
+                with pair.connect(self.me, host, seen.port, peer):
+                    pass
+            except (OSError, ValueError):
+                continue
+            pair.save_peer(dataclasses.replace(peer, host=host, port=seen.port))
+            self.log(f"lan: {seen.node[:8]} moved to {host}:{seen.port}")
+            self.wake.set()
+            return
+
+    def open_pairing(self) -> Any:
+        """Open a pairing window and announce it until it closes."""
+        w = self.pairing.open()
+        if self.mdns is not None:
+            self.mdns.set_pairing(True)
+
+            def close_when_done() -> None:
+                while self.pairing.live() is w and not self.stop.wait(1.0):
+                    pass
+                # A newer window owns the flag now; a stopped daemon has no zeroconf.
+                if self.pairing.live() is None and not self.stop.is_set():
+                    self.mdns.set_pairing(False)
+
+            threading.Thread(target=close_when_done, daemon=True).start()
+        return w
+
     def close(self) -> None:
         self.stop.set()
         self.wake.set()
+        if self.mdns is not None:
+            self.mdns.close()
         if self._sock is not None:
             self._sock.close()
 
@@ -503,7 +551,7 @@ def start_service(log: Callable[[str], None]) -> Service | None:
     if me is None:
         log("lan: off (no openssl to make a certificate)")
         return None
-    svc = Service(me, int(cfg.get("port") or pair.DEFAULT_PORT), log)
+    svc = Service(me, int(cfg.get("port") or 0), log)
     if not svc.start():
         return None
     SERVICE = svc

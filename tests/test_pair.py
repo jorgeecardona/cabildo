@@ -6,6 +6,7 @@ test process. Both talk over loopback TLS, so this is the real wire.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import socket
@@ -258,3 +259,64 @@ def test_paired_peer_agents_show_up_as_remote_sessions(home, machine_a, monkeypa
         assert (row["handle"], row["client"]) == ("ana", f"lan:{hello['node']}")
     finally:
         svc.close()
+
+
+def test_a_new_address_is_saved_only_where_the_pinned_cert_answers(home, machine_a):
+    from cabildo import mdns
+
+    _, port, hello = machine_a
+    me = pair.load_identity()
+    assert me is not None
+    pair.join(me, "127.0.0.1", port, hello["pin"], _free_port())
+    real = pair.load_peers()[hello["node"]]
+    pair.save_peer(dataclasses.replace(real, host="127.0.0.2", port=1))
+    svc = lan.Service(me, 0, lambda _m: None)
+
+    def seen(p: int) -> mdns.Seen:
+        return mdns.Seen(node=real.node, hosts=("127.0.0.1",), port=p, pairing=False, at=0)
+
+    svc._on_seen(seen(_free_port()))  # forged: nothing with that cert listens there
+    assert pair.load_peers()[real.node].port == 1
+    svc._on_seen(seen(port))  # the real machine
+    assert (pair.load_peers()[real.node].host, pair.load_peers()[real.node].port) == (
+        "127.0.0.1",
+        port,
+    )
+
+
+class _FakeMdns:
+    def __init__(self) -> None:
+        self.calls: list[bool] = []
+
+    def set_pairing(self, flag: bool) -> None:
+        self.calls.append(flag)
+
+    def close(self) -> None:
+        pass
+
+
+def test_a_newer_window_keeps_its_pairing_flag(home):
+    me = pair.load_identity()
+    assert me is not None
+    svc = lan.Service(me, 0, lambda _m: None)
+    svc.mdns = _FakeMdns()
+    svc.open_pairing()
+    svc.pairing.take()  # the first window is used...
+    svc.open_pairing()  # ...and a second opens before the first closer looks
+    time.sleep(1.5)
+    assert svc.mdns.calls == [True, True]
+    svc.pairing.take()
+    time.sleep(1.5)
+    assert svc.mdns.calls == [True, True, False]
+
+
+def test_no_flag_reset_after_the_daemon_stops(home):
+    me = pair.load_identity()
+    assert me is not None
+    svc = lan.Service(me, 0, lambda _m: None)
+    svc.mdns = _FakeMdns()
+    svc.open_pairing()
+    svc.stop.set()
+    svc.pairing.take()
+    time.sleep(1.5)
+    assert svc.mdns.calls == [True]

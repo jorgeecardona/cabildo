@@ -35,12 +35,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import cloud, lan, pair, store
+from . import cloud, lan, store
 
 # Addresses that expose the server beyond the intended tunnel/loopback interface.
 _WILDCARD_HOSTS = {"0.0.0.0", "::", "*", ""}  # noqa: S104
 
 ORIGIN = "wan"
+
+
+# The port a peer spec without ``:port`` points at.
+DEFAULT_PORT = 48653
 
 
 @dataclass(frozen=True)
@@ -55,7 +59,7 @@ class Peer:
         return f"{self.host}:{self.port}"
 
 
-def parse_peer(spec: str, *, default_port: int = pair.DEFAULT_PORT) -> Peer:
+def parse_peer(spec: str, *, default_port: int = DEFAULT_PORT) -> Peer:
     """``"host:port"`` or bare ``"host"`` (falling back to ``default_port``)."""
     host, sep, port = spec.rpartition(":")
     if not sep:

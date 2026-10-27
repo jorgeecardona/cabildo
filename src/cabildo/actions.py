@@ -1169,6 +1169,21 @@ def ask(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     }
 
 
+def _wait_for_pairing(svc: Any, timeout: float = 20.0) -> list[Any]:
+    """Machines announcing a pairing, waiting up to ``timeout`` for the first, then
+    3 s more in case a second one shows up.
+    """
+    if svc.mdns is None:
+        return []
+    end = time.time() + timeout
+    while time.time() < end:
+        if svc.mdns.pairing_peers():
+            time.sleep(3.0)
+            break
+        time.sleep(0.5)
+    return svc.mdns.pairing_peers()
+
+
 def pair(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     """Pair this machine with another one on the LAN (see pair.py).
 
@@ -1176,7 +1191,7 @@ def pair(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     user. With ``pin``: join the machine that is announcing a pairing, or the one
     at ``host`` + ``port`` when given.
     """
-    from . import lan
+    from . import lan, mdns
     from . import pair as lanpair  # local: actions.py stays importable headless
 
     svc = lan.SERVICE
@@ -1189,43 +1204,50 @@ def pair(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         }
     pin = str(params.get("pin") or "").strip()
     if not pin:
-        w = svc.pairing.open()
-        threading.Thread(
-            target=lanpair.announce, args=(svc.me.node, svc.port, svc.pairing), daemon=True
-        ).start()
-        where = " or ".join(f"{a}:{svc.port}" for a in lanpair.local_addresses()) or "?"
+        w = svc.open_pairing()
+        where = " or ".join(f"{a}:{svc.port}" for a in mdns.local_addresses())
         return {
             "ok": True,
             "pin": w.pin,
             "reason": f"PIN {w.pin} (valid 120 s, one attempt). On the other machine: "
-            f'request("pair", {{"pin": "{w.pin}"}}). If it hears nothing, add '
+            f'request("pair", {{"pin": "{w.pin}"}}). If it finds nothing, add '
             f'"host" and "port": {where}',
         }
     if not re.fullmatch(r"\d{6}", pin):
         raise Reject("params.pin must be the 6 digits shown on the other machine")
     host = params.get("host")
     if host:
-        port = int(params.get("port") or lanpair.DEFAULT_PORT)
+        port = int(params.get("port") or 0)
+        if port <= 0:
+            raise Reject('params.port is required with "host" (shown on the other machine)')
+        hosts = [str(host)]
     else:
-        heard = lanpair.hear(svc.me.node)
+        heard = _wait_for_pairing(svc)
         if not heard:
             return {
                 "ok": False,
-                "reason": "no machine is announcing a pairing on this network (broadcast "
-                'may be blocked). Retry with "host" and "port" from the other machine.',
+                "reason": "no machine is announcing a pairing on this network (mDNS may "
+                'be blocked). Retry with "host" and "port" from the other machine.',
             }
         if len(heard) > 1:
-            found = ", ".join(f"{h}:{p}" for _, h, p in heard)
+            found = ", ".join(f"{s.hosts[0]}:{s.port}" for s in heard)
             return {
                 "ok": False,
                 "reason": f"more than one machine is pairing ({found}). Retry with "
                 '"host" and "port".',
             }
-        _, host, port = heard[0]
-    try:
-        peer = lanpair.join(svc.me, str(host), port, pin, svc.port)
-    except lanpair.PairError as e:
-        return {"ok": False, "reason": f"pairing failed: {e}. Ask for a new PIN."}
+        hosts, port = list(heard[0].hosts), heard[0].port
+    peer = None
+    for h in hosts:
+        try:
+            peer = lanpair.join(svc.me, h, port, pin, svc.port)
+            break
+        except lanpair.Unreachable:
+            continue  # the other machine has several addresses; try the next
+        except lanpair.PairError as e:
+            return {"ok": False, "reason": f"pairing failed: {e}. Ask for a new PIN."}
+    if peer is None:
+        return {"ok": False, "reason": f"cannot reach {', '.join(hosts)} on port {port}."}
     svc.wake.set()
     return {
         "ok": True,
