@@ -118,9 +118,9 @@ def test_wrong_pin_burns_the_window(home, machine_a):
     assert me is not None
     wrong = "000000" if hello["pin"] != "000000" else "111111"
     with pytest.raises(pair.PairError, match="wrong PIN"):
-        pair.join(me, "127.0.0.1", port, wrong, 0)
+        pair.join(me, "127.0.0.1", port, wrong, _free_port())
     with pytest.raises(pair.PairError, match="no pairing window"):
-        pair.join(me, "127.0.0.1", port, hello["pin"], 0)
+        pair.join(me, "127.0.0.1", port, hello["pin"], _free_port())
     assert pair.load_peers() == {}
 
 
@@ -186,7 +186,7 @@ def test_malformed_pair_request_does_not_burn_the_window(home, machine_a):
     with pair.connect(me, "127.0.0.1", port, None) as s:
         pair.send_line(s, {"op": "pair", "proto": pair.PROTO})
         assert "malformed" in str((pair.recv_line(s) or {}).get("error"))
-    pair.join(me, "127.0.0.1", port, hello["pin"], 0)
+    pair.join(me, "127.0.0.1", port, hello["pin"], _free_port())
     assert hello["node"] in pair.load_peers()
 
 
@@ -194,7 +194,7 @@ def test_server_refuses_a_pull_from_an_unpaired_client(home, machine_a):
     _, port, hello = machine_a
     me = pair.load_identity()
     assert me is not None
-    pair.join(me, "127.0.0.1", port, hello["pin"], 0)  # A now has one paired cert
+    pair.join(me, "127.0.0.1", port, hello["pin"], _free_port())  # A now has one paired cert
     other = Path(str(home)) / "other"
     other.mkdir()
     subprocess.run(
