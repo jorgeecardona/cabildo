@@ -1,28 +1,17 @@
-"""Peer-to-peer LAN sync: share a cabildo bus between machines on one network,
-with nothing leaving the local subnet.
+"""Message sync between machines: the daemon's LAN service and the pull pieces
+``wan.py`` shares.
 
-The default bus is a single machine's SQLite file. This module adds a
-cross-machine transport that keeps the traffic on the LAN:
+The daemon runs ``Service`` (see ``start_service``): a TLS server and a pull loop
+over the machines paired with ``request("pair")`` (pairing and TLS live in
+``pair.py``). Each side pulls the other's messages; nothing writes to a peer's
+bus directly.
 
-  * discovery   — each peer periodically UDP-broadcasts a small beacon on the
-                  local subnet (255.255.255.255, so it never routes off-LAN)
-                  announcing "cabildo peer here, project X, pull me on tcp/<p>".
-  * transport   — a peer that hears a matching beacon opens a TCP connection and
-                  PULLS the other's messages. Both peers run both halves, so the
-                  sync is bidirectional by each side pulling the other. The
-                  serving side only ever READS its database; a peer never writes
-                  to another peer's bus directly.
-  * dedup       — messages carry a global `guid` (see store.post_message). A
-                  pulled row is inserted only if its guid is new, stamped
-                  provenance='lan', keeping the original guid + created_at so a
-                  message that hops A->B->C keeps one identity and merges once.
+Messages carry a global ``guid`` (see ``store.post_message``). A pulled row is
+inserted only if its guid is new, stamped with its provenance, keeping the
+original guid and ``created_at`` so a message that hops A->B->C merges once.
 
-Scope of this first increment: MESSAGES for one project. Presence and claim
-sync across the LAN, and encryption/authenticated pairing, are the follow-up
-(the RTC-over-backbone transport). LAN v1 is trusted-LAN: an optional shared
-`secret` gates the pull handshake, but there is no transport encryption. Stdlib
-only (socket / json / uuid / threading), like the rest of the package — no new
-runtime dependency.
+``run_server``, ``pull_from_peer`` and ``select_outbound`` are the older plain
+TCP pull used by ``wan.py`` over a tunnel. Stdlib only.
 """
 
 from __future__ import annotations
@@ -30,10 +19,8 @@ from __future__ import annotations
 import json
 import socket
 import threading
-import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -45,7 +32,6 @@ PROTO = 1
 # The well-known UDP port peers broadcast their presence on. TCP is ephemeral
 # (advertised in the beacon), so only this one port is fixed.
 BEACON_PORT = 48653
-BEACON_INTERVAL = 5.0
 PULL_LIMIT = 300
 _CONN_TIMEOUT = 5.0
 _RECV_CAP = 16 * 1024 * 1024  # a pull response is bounded by PULL_LIMIT rows
@@ -74,39 +60,6 @@ def node_id() -> str:
     except Exception:
         pass
     return nid
-
-
-@dataclass
-class Peer:
-    node: str
-    host: str
-    port: int
-    project: str
-
-
-# --------------------------------------------------------------------------- #
-# Per-peer cursor: the highest remote row-id we have consumed from each peer.
-# The peer's local `id` is monotonic on that peer, so "give me rows with id >
-# cursor" is a stable incremental read, and guid dedup covers the rest.
-# Restart-safe: a lost cursor just re-pulls and re-dedups by guid rather than
-# double-inserting.
-# --------------------------------------------------------------------------- #
-def _cursor_file() -> Path:
-    return store.home() / "lan_sync.json"
-
-
-def _load_cursor() -> dict:
-    try:
-        return json.loads(_cursor_file().read_text())
-    except Exception:
-        return {"peers": {}}
-
-
-def _save_cursor(cur: dict) -> None:
-    try:
-        _cursor_file().write_text(json.dumps(cur))
-    except Exception:
-        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -305,140 +258,6 @@ def pull_from_peer(
     return resp.get("messages") or [], int(resp.get("max_id") or since), resp.get("node")
 
 
-def broadcast_once(node: str, port: int, project: str) -> None:
-    payload = json.dumps(
-        {"cabildo": PROTO, "node": node, "port": port, "project": cloud.project_key(project)}
-    ).encode()
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    try:
-        s.sendto(payload, ("255.255.255.255", BEACON_PORT))
-    except OSError:
-        pass
-    finally:
-        s.close()
-
-
-def run_beacon(
-    node: str, port: int, project: str, stop: threading.Event, interval: float = BEACON_INTERVAL
-) -> None:
-    while not stop.is_set():
-        broadcast_once(node, port, project)
-        stop.wait(interval)
-
-
-def discover(project: str, timeout: float, node: str) -> dict[str, Peer]:
-    """Listen for matching-project beacons on the LAN for `timeout` seconds.
-    Ignores our own beacon and any other project. One listener per host: this
-    binds BEACON_PORT, so two `cabildo lan` processes on the same machine is not
-    supported (real use is two machines).
-    """
-    key = cloud.project_key(project)
-    peers: dict[str, Peer] = {}
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        s.bind(("", BEACON_PORT))
-    except OSError:
-        s.close()
-        return peers
-    s.settimeout(0.5)
-    deadline = time.time() + timeout
-    try:
-        while time.time() < deadline:
-            try:
-                data, addr = s.recvfrom(65536)
-            except TimeoutError:
-                continue
-            except OSError:
-                break
-            try:
-                m = json.loads(data.decode())
-            except Exception:
-                continue
-            if m.get("cabildo") != PROTO or m.get("node") == node:
-                continue
-            if cloud.project_key(m.get("project") or "") != key:
-                continue
-            peers[m["node"]] = Peer(
-                node=str(m["node"]),
-                host=addr[0],
-                port=int(m.get("port") or 0),
-                project=key,
-            )
-    finally:
-        s.close()
-    return peers
-
-
-def sync_round(
-    project: str, peers: dict[str, Peer], secret: str | None, node: str
-) -> dict[str, int]:
-    """Pull from every known peer, merge, and advance each peer's cursor."""
-    cur = _load_cursor()
-    pc = cur.setdefault("peers", {})
-    pulled = merged = 0
-    conn = store.connect()
-    try:
-        for peer in peers.values():
-            if not peer.port:
-                continue
-            since = int(pc.get(peer.node, 0))
-            # LAN already keys the cursor by the peer's node id (from discovery),
-            # so the returned node is not needed here.
-            rows, max_id, _ = pull_from_peer(peer.host, peer.port, project, since, secret, node)
-            if rows:
-                merged += merge_incoming(conn, rows)
-            pc[peer.node] = max_id
-            pulled += len(rows)
-    finally:
-        conn.close()
-    _save_cursor(cur)
-    return {"peers": len(peers), "pulled": pulled, "merged": merged}
-
-
-def run(
-    project: str,
-    *,
-    port: int = 0,
-    loop: bool = False,
-    interval: float = BEACON_INTERVAL,
-    secret: str | None = None,
-) -> int:
-    """Serve this bus and pull from LAN peers. One round by default; `loop`
-    keeps beaconing, discovering and syncing until interrupted.
-    """
-    node = node_id()
-    key = cloud.project_key(project)
-    srv = open_server_socket(port)
-    actual_port = srv.getsockname()[1]
-    stop = threading.Event()
-    st = threading.Thread(
-        target=run_server, args=(srv, project, store.connect, secret, stop), daemon=True
-    )
-    bt = threading.Thread(
-        target=run_beacon, args=(node, actual_port, project, stop, interval), daemon=True
-    )
-    st.start()
-    bt.start()
-    lock = " (secret set)" if secret else ""
-    print(f"cabildo lan: sharing '{key}' on tcp/{actual_port}, beacon udp/{BEACON_PORT}{lock}")
-    try:
-        while True:
-            peers = discover(project, timeout=interval, node=node)
-            r = sync_round(project, peers, secret, node)
-            stamp = time.strftime("%H:%M:%S")
-            print(f"{stamp} {r['peers']} peer(s) · pulled {r['pulled']} · merged {r['merged']} new")
-            if not loop:
-                break
-    except KeyboardInterrupt:
-        print("\nstopped")
-    finally:
-        stop.set()
-        srv.close()
-    return 0
-
-
 # --------------------------------------------------------------------------- #
 # Paired sync: the daemon's LAN service (see pair.py for pairing and TLS).
 # Whole bus, every paired peer, mutual TLS. A peer pulls on a 5 s floor, and
@@ -501,7 +320,6 @@ class Service:
         self.pairing = pair.Pairing()
         self.stop = threading.Event()
         self.wake = threading.Event()
-        self.last_sync: dict[str, float] = {}
         self._sock: socket.socket | None = None
 
     def exclude(self) -> set[str]:
@@ -624,7 +442,6 @@ class Service:
                 finally:
                     conn.close()
             cur[peer.node] = int(resp.get("max_id") or since)
-            self.last_sync[peer.node] = time.time()
         self._cursor_path().write_text(json.dumps(cur))
         return merged
 

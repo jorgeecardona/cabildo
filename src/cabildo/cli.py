@@ -1176,30 +1176,6 @@ def cmd_branches(args) -> int:
     return 0
 
 
-def cmd_lan(args) -> int:
-    """Share this project's bus with peers on the local network — no cloud.
-
-    Beacons on the LAN, discovers peers sharing the same project, and pulls
-    their messages into the local bus (deduped by guid, stamped provenance='lan' so
-    they never leak up to the hosted mirror). One round by default; --loop keeps
-    serving and syncing. Single-machine SQLite stays the default; this is opt-in.
-    """
-    from . import lan
-    from .context import git_project
-
-    project = args.project or git_project(os.getcwd())[1]
-    if not project:
-        print(f"{C.DIM}no project here; pass --project <name>{C.OFF}", file=sys.stderr)
-        return 2
-    return lan.run(
-        project,
-        port=args.port,
-        loop=args.loop,
-        interval=args.interval,
-        secret=args.secret,
-    )
-
-
 def cmd_wan(args) -> int:
     """Sync this project's bus with explicit remote peers over a tunnel — no cloud.
 
@@ -2433,20 +2409,6 @@ def main(argv: list[str] | None = None) -> int:
     co.add_argument("--session", help="scope to one session id")
     co.add_argument("--rate", type=float, help="€ per 1M tokens, for a rough € estimate")
     co.set_defaults(fn=cmd_cost)
-
-    ln = sub.add_parser("lan", help="share this bus with peers on the local network (no cloud)")
-    ln.add_argument(
-        "-l", "--loop", action="store_true", help="keep serving + syncing (default: one round)"
-    )
-    ln.add_argument(
-        "--interval", type=float, default=5.0, help="loop/discovery seconds (default: 5)"
-    )
-    ln.add_argument("--port", type=int, default=0, help="TCP port to serve on (default: ephemeral)")
-    ln.add_argument("--project", help="project to share (default: the current git project)")
-    ln.add_argument(
-        "--secret", help="shared secret both peers must present (default: open on the LAN)"
-    )
-    ln.set_defaults(fn=cmd_lan)
 
     wn = sub.add_parser(
         "wan", help="sync this bus with explicit remote peers over a tunnel (no cloud)"

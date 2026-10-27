@@ -38,6 +38,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   channel. `[uplink]`, `[notify]`, `[push]`, and `[spawn]` are recognised and
   read generically; wiring follows. See `.cabildo/config.example.toml`.
 
+### Removed
+
+- **`cabildo lan`**: the daemon now syncs paired machines (see LAN pairing). The old
+  command sent its `--secret` in plain text and had no encryption.
+
 ### Changed
 
 - **cabildo-push no longer spawns `cabildo pull` every second** (issue #37). The doorbell now

@@ -158,14 +158,6 @@ def save_peer(peer: PairedPeer) -> None:
     _write_peers(peers)
 
 
-def forget_peer(node: str) -> bool:
-    peers = load_peers()
-    if peers.pop(node, None) is None:
-        return False
-    _write_peers(peers)
-    return True
-
-
 def _write_peers(peers: dict[str, PairedPeer]) -> None:
     lan_dir().mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = _peers_file().with_suffix(".tmp")
