@@ -235,6 +235,27 @@ def whoami() -> dict[str, Any]:
 
 
 @mcp.tool()
+def version() -> dict[str, Any]:
+    """The cabildo version this MCP server is running, and the daemon's if one is
+    up. A server keeps the code it started with, so after an upgrade the two can
+    differ from what is installed: compare them, then restart the older one.
+    """
+    import json
+    import sys
+
+    from . import __version__
+    from .daemon import info_path
+
+    daemon = None
+    try:
+        info = json.loads(info_path().read_text())
+        daemon = {"version": info["version"], "pid": info["pid"], "exe": info["exe"]}
+    except (OSError, ValueError, KeyError):
+        pass
+    return {"version": __version__, "exe": sys.executable, "daemon": daemon}
+
+
+@mcp.tool()
 def set_handle(handle: str) -> dict[str, Any]:
     """Set a friendly handle for this session (e.g. 'backend-refactor') so other
     agents can address and recognize you instead of a raw session id.

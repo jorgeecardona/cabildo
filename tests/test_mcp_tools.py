@@ -412,3 +412,15 @@ def test_gated_topic_requires_listen_grant(two_projects):
     assert srv.grant(req["grant_id"])["ok"] is True
     two_projects(111)
     assert srv.join_topic("war-room")["ok"] is True
+
+
+def test_version_reports_the_server_and_the_daemon(two_agents):
+    import json
+    import sys
+
+    from cabildo import __version__
+    from cabildo.daemon import info_path
+
+    assert srv.version() == {"version": __version__, "exe": sys.executable, "daemon": None}
+    info_path().write_text(json.dumps({"pid": 7, "version": "0.0.1", "exe": "/x/python"}))
+    assert srv.version()["daemon"] == {"version": "0.0.1", "pid": 7, "exe": "/x/python"}

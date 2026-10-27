@@ -49,6 +49,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   sent, rows new, errors). The daemon logs `pulled N, merged M` when a peer sends rows. The
   README has an Upgrade section with the restart step.
 
+- **`version` MCP tool**: the cabildo version this MCP server runs, its Python, and the daemon's
+  version when one is up.
+
 ### Removed
 
 - **`cabildo lan`**: the daemon now syncs paired machines (see LAN pairing). The old
