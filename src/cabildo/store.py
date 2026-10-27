@@ -1884,6 +1884,8 @@ def intent_lane(action: str, project: str | None, params: dict[str, Any]) -> str
     working tree or a remote branch, so their pushes must not run together.
     Every other action shares one lane: spawn checks a single ``max_agents`` cap.
     """
+    if action == "pair":
+        return "lan"  # waits up to 20 s for a beacon; must not hold up spawn
     if action != "push":
         return "*"
     cwd = params.get("cwd")

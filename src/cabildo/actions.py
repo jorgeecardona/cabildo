@@ -1169,6 +1169,71 @@ def ask(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     }
 
 
+def pair(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
+    """Pair this machine with another one on the LAN (see pair.py).
+
+    Without ``pin``: open a 120 s pairing window and return the PIN to show the
+    user. With ``pin``: join the machine that is announcing a pairing, or the one
+    at ``host`` + ``port`` when given.
+    """
+    from . import lan
+    from . import pair as lanpair  # local: actions.py stays importable headless
+
+    svc = lan.SERVICE
+    if svc is None:
+        return {
+            "ok": False,
+            "reason": "the LAN service is not running in this daemon: it needs openssl, "
+            "[lan] enabled not set to false, a free [lan] port, and a daemon not "
+            "started with --once. Check the daemon log.",
+        }
+    pin = str(params.get("pin") or "").strip()
+    if not pin:
+        w = svc.pairing.open()
+        threading.Thread(
+            target=lanpair.announce, args=(svc.me.node, svc.port, svc.pairing), daemon=True
+        ).start()
+        where = " or ".join(f"{a}:{svc.port}" for a in lanpair.local_addresses()) or "?"
+        return {
+            "ok": True,
+            "pin": w.pin,
+            "reason": f"PIN {w.pin} (valid 120 s, one attempt). On the other machine: "
+            f'request("pair", {{"pin": "{w.pin}"}}). If it hears nothing, add '
+            f'"host" and "port": {where}',
+        }
+    if not re.fullmatch(r"\d{6}", pin):
+        raise Reject("params.pin must be the 6 digits shown on the other machine")
+    host = params.get("host")
+    if host:
+        port = int(params.get("port") or lanpair.DEFAULT_PORT)
+    else:
+        heard = lanpair.hear(svc.me.node)
+        if not heard:
+            return {
+                "ok": False,
+                "reason": "no machine is announcing a pairing on this network (broadcast "
+                'may be blocked). Retry with "host" and "port" from the other machine.',
+            }
+        if len(heard) > 1:
+            found = ", ".join(f"{h}:{p}" for _, h, p in heard)
+            return {
+                "ok": False,
+                "reason": f"more than one machine is pairing ({found}). Retry with "
+                '"host" and "port".',
+            }
+        _, host, port = heard[0]
+    try:
+        peer = lanpair.join(svc.me, str(host), port, pin, svc.port)
+    except lanpair.PairError as e:
+        return {"ok": False, "reason": f"pairing failed: {e}. Ask for a new PIN."}
+    svc.wake.set()
+    return {
+        "ok": True,
+        "peer": peer.node,
+        "reason": f"paired with {peer.host}:{peer.port}. Messages now sync both ways.",
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Registry
 # --------------------------------------------------------------------------- #
@@ -1176,4 +1241,5 @@ ACTIONS: dict[str, Callable[[dict[str, Any], Ctx], dict[str, Any]]] = {
     "push": push,
     "spawn": spawn,
     "ask": ask,
+    "pair": pair,
 }

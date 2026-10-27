@@ -437,3 +437,243 @@ def run(
         stop.set()
         srv.close()
     return 0
+
+
+# --------------------------------------------------------------------------- #
+# Paired sync: the daemon's LAN service (see pair.py for pairing and TLS).
+# Whole bus, every paired peer, mutual TLS. A peer pulls on a 5 s floor, and
+# right away when the other side sends a nudge after a new local message.
+# --------------------------------------------------------------------------- #
+SYNC_INTERVAL = 5.0
+_WATCH_INTERVAL = 0.5
+# The daemon's own session (daemon.DAEMON_SESSION). Its DMs are results for
+# local agents, and a pair result holds a live PIN: never served to a peer.
+_DAEMON_SESSION = "daemon"
+
+
+def lan_settings() -> dict[str, Any]:
+    """The ``[lan]`` table of the machine-wide ``~/.cabildo/config.toml``."""
+    from . import config
+
+    t = config._read(config._global_path()).get("lan")
+    return t if isinstance(t, dict) else {}
+
+
+def select_all(
+    conn, since: int, exclude: set[str], limit: int = PULL_LIMIT
+) -> tuple[list[dict[str, Any]], int]:
+    """Rows with id > since, minus excluded projects, plus the highest id scanned.
+
+    Excluded projects are filtered here, on the serving side, so they never leave
+    this machine, as are the daemon's own DMs (a pair result holds a live PIN).
+    The stored ``project`` path becomes its project key: paths differ between
+    machines, repo names do not.
+    """
+    rows = conn.execute(
+        f"SELECT {_MSG_COLS} FROM messages WHERE id>? ORDER BY id LIMIT ?",
+        (since, limit),
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    max_id = since
+    for r in rows:
+        max_id = r["id"]
+        if r["from_session"] == _DAEMON_SESSION:
+            continue
+        key = cloud.message_project(r["topic"], r["project"])
+        if key and key in exclude:
+            continue
+        d = dict(r)
+        d["urgent"] = bool(d["urgent"])
+        d["project"] = key
+        out.append(d)
+    return out, max_id
+
+
+class Service:
+    """TLS server + pull loop for paired peers, run inside the daemon."""
+
+    def __init__(self, me: Any, port: int, log: Callable[[str], None]) -> None:
+        from . import pair
+
+        self.me = me
+        self.port = port
+        self.log = log
+        self.pairing = pair.Pairing()
+        self.stop = threading.Event()
+        self.wake = threading.Event()
+        self.last_sync: dict[str, float] = {}
+        self._sock: socket.socket | None = None
+
+    def exclude(self) -> set[str]:
+        return {cloud.project_key(p) for p in lan_settings().get("exclude") or []}
+
+    def start(self) -> bool:
+        try:
+            self._sock = open_server_socket(self.port)
+        except OSError as e:
+            self.log(f"lan: cannot listen on tcp/{self.port}: {e}")
+            return False
+        for fn in (self._serve, self._pull_loop, self._watch):
+            threading.Thread(target=fn, daemon=True).start()
+        return True
+
+    def close(self) -> None:
+        self.stop.set()
+        self.wake.set()
+        if self._sock is not None:
+            self._sock.close()
+
+    # server ------------------------------------------------------------- #
+    def _serve(self) -> None:
+        sock = self._sock
+        if sock is None:
+            return
+        sock.settimeout(0.5)
+        while not self.stop.is_set():
+            try:
+                raw, addr = sock.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                break
+            threading.Thread(target=self._one, args=(raw, addr[0]), daemon=True).start()
+
+    def _one(self, raw: socket.socket, host: str) -> None:
+        from . import pair
+
+        try:
+            raw.settimeout(_CONN_TIMEOUT)
+            peers = pair.load_peers()
+            with pair.server_context(self.me, peers).wrap_socket(raw, server_side=True) as s:
+                req = pair.recv_line(s) or {}
+                op = req.get("op")
+                if op == "pair":
+                    peer = pair.answer_pair(self.me, self.pairing, s, req, host)
+                    if peer is not None:
+                        self.log(f"lan: paired with {peer.node[:8]} at {host}")
+                        self.wake.set()
+                    return
+                fp = pair.peer_fingerprint(s)
+                known = {p.fingerprint: p for p in peers.values()}
+                if fp not in known:
+                    pair.send_line(s, {"ok": False, "error": "not paired"})
+                    return
+                if op == "pull":
+                    since = int(req.get("since") or 0)
+                    conn = store.connect()
+                    try:
+                        msgs, max_id = select_all(conn, since, self.exclude())
+                        top = conn.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()
+                    finally:
+                        conn.close()
+                    pair.send_line(
+                        s, {"ok": True, "messages": msgs, "max_id": max_id, "top": int(top[0])}
+                    )
+                elif op == "nudge":
+                    self.wake.set()
+                    pair.send_line(s, {"ok": True})
+        except Exception as e:
+            self.log(f"lan: connection from {host}: {type(e).__name__}: {e}")
+        finally:
+            raw.close()
+
+    # client ------------------------------------------------------------- #
+    def _cursor_path(self) -> Path:
+        from . import pair
+
+        return pair.lan_dir() / "cursor.json"
+
+    def _pull_loop(self) -> None:
+        while not self.stop.is_set():
+            self.wake.wait(SYNC_INTERVAL)
+            self.wake.clear()
+            if self.stop.is_set():
+                break
+            try:
+                self.sync_once()
+            except Exception as e:
+                self.log(f"lan: sync: {type(e).__name__}: {e}")
+
+    def sync_once(self) -> int:
+        """Pull from every paired peer once. Returns messages merged."""
+        from . import pair
+
+        try:
+            cur: dict[str, int] = json.loads(self._cursor_path().read_text())
+        except (OSError, ValueError):
+            cur = {}
+        merged = 0
+        for peer in pair.load_peers().values():
+            since = int(cur.get(peer.node, 0))
+            try:
+                with pair.connect(self.me, peer.host, peer.port, peer) as s:
+                    pair.send_line(s, {"op": "pull", "proto": pair.PROTO, "since": since})
+                    resp = pair.recv_line(s) or {}
+            except (OSError, ValueError):
+                continue
+            if not resp.get("ok"):
+                continue
+            if int(resp.get("top") or 0) < since:
+                cur[peer.node] = 0  # the peer's bus was reset; start over, guid dedup
+                continue
+            rows = resp.get("messages") or []
+            if rows:
+                conn = store.connect()
+                try:
+                    merged += merge_incoming(conn, rows)
+                finally:
+                    conn.close()
+            cur[peer.node] = int(resp.get("max_id") or since)
+            self.last_sync[peer.node] = time.time()
+        self._cursor_path().write_text(json.dumps(cur))
+        return merged
+
+    def _watch(self) -> None:
+        """Nudge paired peers when a local message is written."""
+        from . import pair
+
+        conn = store.connect()
+        try:
+            last = conn.execute(
+                "SELECT COALESCE(MAX(id),0) FROM messages WHERE provenance='local'"
+            ).fetchone()[0]
+            while not self.stop.wait(_WATCH_INTERVAL):
+                top = conn.execute(
+                    "SELECT COALESCE(MAX(id),0) FROM messages WHERE provenance='local'"
+                ).fetchone()[0]
+                if top <= last:
+                    continue
+                last = top
+                for peer in pair.load_peers().values():
+                    try:
+                        with pair.connect(self.me, peer.host, peer.port, peer) as s:
+                            pair.send_line(s, {"op": "nudge", "proto": pair.PROTO})
+                            pair.recv_line(s)
+                    except (OSError, ValueError):
+                        pass
+        finally:
+            conn.close()
+
+
+# The daemon's running service, for the ``pair`` action. None outside the daemon.
+SERVICE: Service | None = None
+
+
+def start_service(log: Callable[[str], None]) -> Service | None:
+    """Start the LAN service unless ``[lan] enabled = false`` or there is no openssl."""
+    global SERVICE
+    from . import pair
+
+    cfg = lan_settings()
+    if cfg.get("enabled") is False:
+        return None
+    me = pair.load_identity()
+    if me is None:
+        log("lan: off (no openssl to make a certificate)")
+        return None
+    svc = Service(me, int(cfg.get("port") or pair.DEFAULT_PORT), log)
+    if not svc.start():
+        return None
+    SERVICE = svc
+    log(f"lan: node {me.node[:8]} on tcp/{svc.port}, {len(pair.load_peers())} paired peer(s)")
+    return svc

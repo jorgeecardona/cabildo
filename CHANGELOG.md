@@ -6,6 +6,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
+- **LAN pairing** (`request("pair")`): two machines on one network pair once with
+  a 6-digit PIN, then the daemon syncs all messages both ways over mutual TLS with
+  each other's pinned certificate. The other machine is found by broadcast, or by
+  `host` + `port` when broadcast is blocked. The PIN allows one attempt within
+  120 s. A new local message nudges the peer, so it arrives in about a second.
+  `[lan] enabled = false`, `port`, and `exclude = ["project"]` in
+  `~/.cabildo/config.toml`. Needs the `openssl` command.
+
 - **`cabildo branches`** (and the `branches` MCP tool): a read-only inventory of a
   repo's worktrees and bare branches — the zoo coding agents leave behind. Each
   one is placed against the trunk (ahead/behind the local `origin/<target>`,

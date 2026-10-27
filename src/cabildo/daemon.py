@@ -24,7 +24,7 @@ import sys
 import threading
 import time
 
-from . import actions, broker, desktop, monitor, names, record, store
+from . import actions, broker, desktop, lan, monitor, names, record, store
 
 # A 'running' intent older than this means the daemon died holding it.
 STALE_AFTER = actions.GATE_TIMEOUT + 300
@@ -399,6 +399,8 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
             else f"broker: not yet listening on {args.broker_socket}"
         )
 
+    lan_service = None if args.once else lan.start_service(_log)
+
     workers: list[threading.Thread] = []
     last_reap = 0.0
     last_monitor = 0.0
@@ -466,6 +468,8 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
             n = store.reap_stale_intents(conn, 0, worker=worker)
             if n:
                 _log(f"failed {n} intent(s) still running at exit")
+        if lan_service is not None:
+            lan_service.close()
         broker_stop.set()
         if broker_thread is not None:
             broker_thread.join(timeout=2)
