@@ -66,6 +66,12 @@ for line in sys.stdin:
         store.post_message(c, from_session="sa", from_handle=None, body=cmd["body"],
                            topic="proj:alpha", project="/a/path/alpha")
         c.close()
+    elif cmd["op"] == "session":
+        c = store.connect()
+        store.register_session(c, "sa", cwd="/a/alpha", project="/a/alpha",
+                               project_name="alpha", claude_pid=4242, owner_pid=4242)
+        store.set_handle(c, "sa", "ana")
+        c.close()
     elif cmd["op"] == "bodies":
         c = store.connect()
         rows = [r["body"] for r in c.execute("SELECT body FROM messages ORDER BY id")]
@@ -231,3 +237,24 @@ def test_server_refuses_a_pull_from_an_unpaired_client(home, machine_a):
         resp = pair.recv_line(s)
         if resp is None or not resp.get("ok"):
             raise OSError("refused")
+
+
+def test_paired_peer_agents_show_up_as_remote_sessions(home, machine_a, monkeypatch):
+    proc, port, hello = machine_a
+    _ask(proc, {"op": "session"})
+    my_port = _free_port()
+    monkeypatch.setattr(lan, "lan_settings", lambda: {"port": my_port})
+    svc = lan.start_service(lambda _m: None)
+    assert svc is not None
+    try:
+        pair.join(svc.me, "127.0.0.1", port, hello["pin"], my_port)
+        svc.sync_once()
+        conn = store.connect()
+        try:
+            row = store.get_session(conn, "sa")
+        finally:
+            conn.close()
+        assert row is not None
+        assert (row["handle"], row["client"]) == ("ana", f"lan:{hello['node']}")
+    finally:
+        svc.close()

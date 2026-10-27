@@ -836,6 +836,78 @@ def session_for_owner(conn: sqlite3.Connection, owner_pid: int, client: str) -> 
     return row["session_id"] if row else None
 
 
+# --------------------------------------------------------------------------- #
+# Remote sessions: agents on a paired machine (see lan.Service). Stored as
+# sessions rows with client='lan:<node>' and no pid, so the reaper, ``_me`` and
+# the guard skip them, while list_agents and send resolve them unchanged.
+# --------------------------------------------------------------------------- #
+REMOTE_PREFIX = "lan:"
+_REMOTE_COLS = ("session_id", "handle", "project_name", "model", "role", "last_seen_at")
+
+
+def export_sessions(conn: sqlite3.Connection, exclude: set[str]) -> list[dict[str, Any]]:
+    """This machine's own live agents, for a paired peer. Never re-exports remote
+    rows, and leaves out projects in ``exclude``.
+    """
+    cutoff = _now() - ACTIVE_WINDOW
+    rows = conn.execute(
+        f"SELECT {', '.join(_REMOTE_COLS)} FROM sessions WHERE status='active' "
+        "AND last_seen_at>=? AND client NOT LIKE ? AND owner_pid IS NOT NULL",
+        (cutoff, REMOTE_PREFIX + "%"),
+    ).fetchall()
+    return [dict(r) for r in rows if (r["project_name"] or "").lower() not in exclude]
+
+
+def replace_remote_sessions(conn: sqlite3.Connection, node: str, rows: list[dict[str, Any]]) -> int:
+    """Make ``node``'s remote rows exactly ``rows``. A local row with the same id is
+    never touched. Returns how many rows were stored.
+    """
+    client = REMOTE_PREFIX + node
+    conn.execute("DELETE FROM sessions WHERE client=?", (client,))
+    n = 0
+    for r in rows:
+        sid, name = str(r.get("session_id") or ""), r.get("project_name")
+        if not sid:
+            continue
+        # list_agents filters on the local project path: borrow it from a local
+        # session of the same project, so remote agents show up by default.
+        local = conn.execute(
+            "SELECT project FROM sessions WHERE project_name=? AND client NOT LIKE ? "
+            "AND project IS NOT NULL ORDER BY last_seen_at DESC LIMIT 1",
+            (name, REMOTE_PREFIX + "%"),
+        ).fetchone()
+        seen = float(r.get("last_seen_at") or _now())
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO sessions(session_id, handle, project, project_name, "
+            "client, model, role, status, created_at, last_seen_at) "
+            "VALUES (?,?,?,?,?,?,?,'active',?,?)",
+            (
+                sid,
+                r.get("handle"),
+                local["project"] if local else None,
+                name,
+                client,
+                r.get("model"),
+                r.get("role"),
+                seen,
+                seen,
+            ),
+        )
+        n += cur.rowcount
+    conn.commit()
+    return n
+
+
+def prune_remote_sessions(conn: sqlite3.Connection) -> int:
+    """Delete remote rows not seen for ``ACTIVE_WINDOW`` (the peer stopped answering)."""
+    cur = conn.execute(
+        "DELETE FROM sessions WHERE client LIKE ? AND last_seen_at<?",
+        (REMOTE_PREFIX + "%", _now() - ACTIVE_WINDOW),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def active_sessions(
     conn: sqlite3.Connection, project: str | None = None, exclude: str | None = None
 ) -> list[sqlite3.Row]:

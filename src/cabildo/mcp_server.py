@@ -396,6 +396,14 @@ def note_park(id: int, ref: str | None = None) -> dict[str, Any]:
         return {"ok": bool(row), "id": id, "note": row}
 
 
+def _node(row: Any) -> str | None:
+    """The short node id of a paired machine's agent, or None for a local one."""
+    client = str(row["client"] or "")
+    return (
+        client[len(store.REMOTE_PREFIX) :][:8] if client.startswith(store.REMOTE_PREFIX) else None
+    )
+
+
 @mcp.tool()
 def list_agents(all_projects: bool = False) -> list[dict[str, Any]]:
     """List other active agents. By default only agents on the SAME project
@@ -414,9 +422,11 @@ def list_agents(all_projects: bool = False) -> list[dict[str, Any]]:
             {
                 "session_id": r["session_id"],
                 "handle": r["handle"],
-                "name": store.display_name(r),
+                "name": store.display_name(r) + (f" ({_node(r)})" if _node(r) else ""),
                 # SELECT * over a migrated sessions table: the column is always present.
                 "client": r["client"] or "claude",
+                # The paired machine this agent runs on (short node id); None if local.
+                "node": _node(r),
                 # Agent-card field: the peer's model, when known (filled by `record`
                 # ingest for opted-in projects; NULL otherwise). Route by it, e.g.
                 # ask a stronger model to review.
@@ -832,8 +842,9 @@ def _resolve_recipient(conn, to: str) -> str | None:
     if row is not None:
         return to
     match = conn.execute(
+        # A local agent wins over a paired machine's agent with the same handle.
         "SELECT session_id FROM sessions WHERE handle=? AND status='active' "
-        "ORDER BY last_seen_at DESC LIMIT 1",
+        "ORDER BY client LIKE 'lan:%', last_seen_at DESC LIMIT 1",
         (to,),
     ).fetchone()
     if match:

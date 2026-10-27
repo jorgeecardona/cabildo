@@ -377,12 +377,21 @@ class Service:
                     since = int(req.get("since") or 0)
                     conn = store.connect()
                     try:
-                        msgs, max_id = select_all(conn, since, self.exclude())
+                        exclude = self.exclude()
+                        msgs, max_id = select_all(conn, since, exclude)
                         top = conn.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()
+                        sessions = store.export_sessions(conn, exclude)
                     finally:
                         conn.close()
                     pair.send_line(
-                        s, {"ok": True, "messages": msgs, "max_id": max_id, "top": int(top[0])}
+                        s,
+                        {
+                            "ok": True,
+                            "messages": msgs,
+                            "max_id": max_id,
+                            "top": int(top[0]),
+                            "sessions": sessions,
+                        },
                     )
                 elif op == "nudge":
                     self.wake.set()
@@ -432,14 +441,23 @@ class Service:
                 cur[peer.node] = 0  # the peer's bus was reset; start over, guid dedup
                 continue
             rows = resp.get("messages") or []
-            if rows:
-                conn = store.connect()
-                try:
+            conn = store.connect()
+            try:
+                if rows:
                     merged += merge_incoming(conn, rows)
-                finally:
-                    conn.close()
+                # Only an answer that carries the key replaces the list: an older
+                # peer without it must not wipe what we know.
+                if isinstance(resp.get("sessions"), list):
+                    store.replace_remote_sessions(conn, peer.node, resp["sessions"])
+            finally:
+                conn.close()
             cur[peer.node] = int(resp.get("max_id") or since)
         self._cursor_path().write_text(json.dumps(cur))
+        conn = store.connect()
+        try:
+            store.prune_remote_sessions(conn)
+        finally:
+            conn.close()
         return merged
 
     def _watch(self) -> None:

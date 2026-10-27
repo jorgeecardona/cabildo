@@ -13,6 +13,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   120 s. A new local message nudges the peer, so it arrives in about a second.
   `[lan] enabled = false`, `port`, and `exclude = ["project"]` in
   `~/.cabildo/config.toml`. Needs the `openssl` command.
+- **Agents on a paired machine** show up in `list_agents` as `name (node)`, and
+  `send(to="@handle")` reaches them. A local agent with the same handle wins. They
+  disappear 30 minutes after the other machine stops answering.
 
 - **`cabildo branches`** (and the `branches` MCP tool): a read-only inventory of a
   repo's worktrees and bare branches — the zoo coding agents leave behind. Each
