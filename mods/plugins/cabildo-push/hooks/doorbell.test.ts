@@ -106,3 +106,40 @@ test('a wait that prints nothing re-learns the session after a pause', async ($,
   await w.clock.advance(1_000)
   expect(w.spawned.length).toBe(2)
 })
+
+const roommateDm = (wakes: boolean) =>
+  JSON.stringify({
+    session_id: 'S1',
+    cursor: 9,
+    messages: [
+      {
+        id: 9,
+        from_session: 'S2',
+        from_display: '@ana',
+        from_robot: 'sparky-ana-12345',
+        from_human: false,
+        wakes,
+        to_session: 'S1',
+        topic: null,
+        urgent: false,
+        read: false,
+        created_at: 0,
+        preview: 'hi',
+        truncated: false,
+      },
+    ],
+  })
+
+test('a DM cabildo marks wakes starts a turn with no push-accept file', async ($, on) => {
+  const w = world(on, [roommateDm(true)])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  expect(w.prompts.length).toBe(1)
+})
+
+test('a DM not marked wakes only toasts', async ($, on) => {
+  const w = world(on, [roommateDm(false)])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  expect(w.prompts.length).toBe(0)
+})

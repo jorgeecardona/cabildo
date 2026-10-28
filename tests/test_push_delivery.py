@@ -203,3 +203,38 @@ def test_cli_send_between_roommates_of_different_projects_is_allowed(conn):
     make_session(conn, "A", handle="alice", project="/repo/alpha", project_name="alpha")
     make_session(conn, "B", handle="bob", project="/repo/beta", project_name="beta")
     assert cli.main(["send", "--session", "A", "--to", "bob", "--json", "--", "hi"]) == 0
+
+
+def _pull_rows(capsys, sid):
+    cli.main(["pull", "--session", sid, "--json"])
+    return {m["preview"]: m for m in json.loads(capsys.readouterr().out)["messages"]}
+
+
+def test_pull_marks_a_roommates_dm_as_waking(conn, capsys):
+    make_session(conn, "A", handle="alice", project="/repo/alpha", project_name="alpha")
+    make_session(conn, "B", handle="bob", project="/repo/beta", project_name="beta")
+    store.post_message(conn, from_session="A", from_handle="alice", body="dm", to_session="B")
+    store.post_message(conn, from_session="A", from_handle="alice", body="chat", topic="general")
+    store.post_message(
+        conn, from_session="A", from_handle="alice", body="loud", topic="general", urgent=True
+    )
+    rows = _pull_rows(capsys, "B")
+    assert rows["dm"]["wakes"] is True  # both are in #general
+    assert rows["chat"]["wakes"] is False  # a plain room post only toasts
+    assert rows["loud"]["wakes"] is True  # an urgent room post wakes
+
+
+def test_pull_does_not_wake_for_a_stranger_with_no_room_in_common(conn, capsys):
+    make_session(conn, "A", handle="alice", project="/repo/alpha", project_name="alpha")
+    make_session(conn, "B", handle="bob", project="/repo/beta", project_name="beta")
+    store.unsubscribe(conn, "B", "general")
+    conn.commit()
+    store.post_message(conn, from_session="A", from_handle="alice", body="dm", to_session="B")
+    assert _pull_rows(capsys, "B")["dm"]["wakes"] is False
+
+
+def test_pull_wakes_for_a_paired_machines_agent(conn, capsys):
+    make_session(conn, "B", handle="bob", project="/repo/beta", project_name="beta")
+    store.replace_remote_sessions(conn, "nodeA", [{"session_id": "R", "project_name": "x"}])
+    store.post_message(conn, from_session="R", from_handle=None, body="dm", to_session="B")
+    assert _pull_rows(capsys, "B")["dm"]["wakes"] is True

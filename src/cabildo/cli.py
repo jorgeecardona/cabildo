@@ -286,7 +286,22 @@ def cmd_whoami(args) -> int:
     return 0
 
 
-def _pull_row(m: dict, preview_chars: int) -> dict:
+def _wakes(conn, sid: str, m: dict) -> bool:
+    """Whether this message may start a turn in an idle session by default: a DM
+    from an agent that shares a chatroom with ``sid`` or runs on a paired machine,
+    or an urgent post in a chatroom. Joining a room is the opt-in to talk; the
+    mod's token bucket still caps how often anything wakes it.
+    """
+    sender = m["from_session"]
+    if m["to_session"] == sid:
+        row = store.get_session(conn, sender)
+        remote = row is not None and str(row["client"] or "").startswith(store.REMOTE_PREFIX)
+        return remote or store.share_a_room(conn, sid, sender)
+    topic = str(m["topic"] or "")
+    return bool(m["urgent"]) and bool(topic) and not topic.startswith("proj:")
+
+
+def _pull_row(m: dict, preview_chars: int, *, wakes: bool = False) -> dict:
     """The projection the mod gates on. Bodies are previewed, never shipped
     whole: the mod decides whether to wake, then the model reads full bodies
     through the `inbox` tool inside the drain turn.
@@ -302,6 +317,7 @@ def _pull_row(m: dict, preview_chars: int) -> dict:
         # push allow-list on this, not on from_display.
         "from_robot": names.robot_name(m["from_session"]),
         "from_human": m["from_session"] == HUMAN_SESSION,
+        "wakes": wakes,
         "to_session": m["to_session"],
         "topic": m["topic"],
         "urgent": m["urgent"],
@@ -339,7 +355,9 @@ def cmd_pull(args) -> int:
                 {
                     "session_id": sid,
                     "cursor": cursor,
-                    "messages": [_pull_row(m, args.preview_chars) for m in msgs],
+                    "messages": [
+                        _pull_row(m, args.preview_chars, wakes=_wakes(conn, sid, m)) for m in msgs
+                    ],
                 }
             )
         )
@@ -402,7 +420,7 @@ def cmd_wait(args) -> int:
             break
         time.sleep(args.interval)
     cursor = msgs[-1]["id"] if msgs else args.after
-    rows = [_pull_row(m, args.preview_chars) for m in msgs]
+    rows = [_pull_row(m, args.preview_chars, wakes=_wakes(conn, sid, m)) for m in msgs]
     print(json.dumps({"session_id": sid, "cursor": cursor, "messages": rows}), flush=True)
     return 0
 

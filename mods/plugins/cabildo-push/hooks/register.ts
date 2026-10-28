@@ -62,6 +62,9 @@ type PullRow = {
   from_display: string
   from_robot: string
   from_human: boolean
+  // cabildo decides: a DM from a roommate or a paired machine's agent, or an
+  // urgent room post. Absent from an older cabildo, which reads as false.
+  wakes?: boolean
   to_session: string | null
   topic: string | null
   urgent: boolean
@@ -102,10 +105,10 @@ async function isDnd($: EngineInterface): Promise<boolean> {
   }
 }
 
-// Who this session accepts an interrupt (auto-turn) from, beyond the human and
-// replies to its own asks. One id / robot-name per line in ~/.cabildo/push-accept;
-// a bare `*` or `all` accepts everyone. Missing file means: wake for nobody
-// (badge/toast only) — the safe default. Handles are deliberately NOT matched:
+// Who else this session accepts an interrupt (auto-turn) from, beyond the human,
+// replies to its own asks, and rows cabildo marks `wakes` (a DM from a roommate
+// or a paired machine's agent, an urgent room post). One id / robot-name per line in ~/.cabildo/push-accept;
+// a bare `*` or `all` accepts everyone. Missing file means: nobody else. Handles are deliberately NOT matched:
 // they are self-assigned and non-unique, so a peer could set a handle to a
 // listed name and win an auto-turn. Robot names derive from the session id and
 // are spoof-resistant.
@@ -304,7 +307,7 @@ async function handleBatch(
       clears.push(m.from_session)
       continue
     }
-    if (m.from_human || accepts(accept, m)) wakers.push(m)
+    if (m.from_human || m.wakes === true || accepts(accept, m)) wakers.push(m)
     else toasts.push(m)
   }
   await update($, cursorA, () => advanceTo)
