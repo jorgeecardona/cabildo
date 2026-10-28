@@ -61,7 +61,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 - **Agents on a paired machine are always listed and reachable**: `list_agents` shows them even
   when their project does not exist on this machine, and a DM to one skips the project check (the
-  pairing is the consent). Local agents of an unlinked project stay refused.
+  pairing is the consent). Local agents of an unlinked project stay refused. The `cabildo send`
+  CLI, which the push plugin uses for replies, follows the same rule.
 
 ### Fixed
 

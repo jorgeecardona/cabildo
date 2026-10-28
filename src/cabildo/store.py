@@ -1744,6 +1744,10 @@ def consent_error(
     if to_session is not None:
         trow = get_session(conn, to_session)
         tname = (trow["project_name"] if trow else None) or ""
+        # A paired machine's agent is reachable from anywhere: the pairing is the
+        # consent, and its project name means nothing on this machine.
+        if trow is not None and str(trow["client"] or "").startswith(REMOTE_PREFIX):
+            return None
         if not _reach_ok(conn, mine, tname, "send"):
             return (
                 f"'{to_session}' is on project '{tname.strip().lower()}', not reachable "

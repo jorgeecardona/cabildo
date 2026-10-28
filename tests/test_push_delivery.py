@@ -183,3 +183,15 @@ def test_cli_whoami_resolves_via_session_env(conn, capsys, monkeypatch):
     assert out["handle"] == "xavier"
     assert out["is_human"] is False
     assert out["cursor"] == store.max_message_id(conn)
+
+
+def test_cli_send_reaches_a_paired_machines_agent_of_another_project(conn):
+    # The CLI reply path (the push plugin uses it) must follow the same rule as
+    # the MCP tool: the pairing is the consent for a remote agent.
+    make_session(conn, "A", handle="alice", project="/repo/alpha", project_name="alpha")
+    store.replace_remote_sessions(
+        conn, "nodeB", [{"session_id": "R", "handle": "rita", "project_name": "gamma"}]
+    )
+    assert cli.main(["send", "--session", "A", "--to", "R", "--json", "--", "hi"]) == 0
+    row = conn.execute("SELECT to_session FROM messages WHERE body='hi'").fetchone()
+    assert row["to_session"] == "R"
