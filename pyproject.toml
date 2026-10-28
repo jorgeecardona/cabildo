@@ -60,7 +60,9 @@ cabildo-codex-hook = "cabildo.codex_hooks:main"
 # keeping cabildo's own 3.11 support intact.
 dev = [
     "ruff>=0.6",
-    "pyright>=1.1.390",
+    # [nodejs]: Node from a PyPI wheel. Without it pyright downloads Node from nodejs.org
+    # on every fresh CI container, which can hang the typecheck step.
+    "pyright[nodejs]>=1.1.390",
     "pytest>=8",
     "musil>=0.35; python_version >= '3.12'",
     "vulture>=2.11",
