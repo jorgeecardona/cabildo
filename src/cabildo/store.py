@@ -1728,6 +1728,19 @@ def _proj_topic(topic: str | None) -> str | None:
     return t[len("proj:") :].strip().lower() if t.startswith("proj:") else None
 
 
+def share_a_room(conn: sqlite3.Connection, a: str, b: str) -> bool:
+    """Whether two sessions are both in the same chatroom (any topic that is not a
+    ``proj:`` channel). Joining a room is opting in to talk, so a DM between two
+    members needs no project link or grant.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM subscriptions x JOIN subscriptions y ON x.topic=y.topic "
+        "WHERE x.session_id=? AND y.session_id=? AND x.topic NOT LIKE 'proj:%' LIMIT 1",
+        (a, b),
+    ).fetchone()
+    return row is not None
+
+
 def consent_error(
     conn: sqlite3.Connection,
     sid: str,
@@ -1747,6 +1760,8 @@ def consent_error(
         # A paired machine's agent is reachable from anywhere: the pairing is the
         # consent, and its project name means nothing on this machine.
         if trow is not None and str(trow["client"] or "").startswith(REMOTE_PREFIX):
+            return None
+        if share_a_room(conn, sid, to_session):
             return None
         if not _reach_ok(conn, mine, tname, "send"):
             return (

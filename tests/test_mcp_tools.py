@@ -354,6 +354,10 @@ def two_projects(conn, monkeypatch):
     store.register_session(conn, store.HUMAN_SESSION, cwd="/home", claude_pid=999)
     store.set_handle(conn, "A", "ava")
     store.set_handle(conn, "B", "ben")
+    # No room in common, so project consent decides (roommates may always DM).
+    for sid in ("A", "B"):
+        store.unsubscribe(conn, sid, "general")
+    conn.commit()
     current = {"pid": 111}
     monkeypatch.setattr(srv, "resolve_claude_pid", lambda: current["pid"])
     return lambda pid: current.__setitem__("pid", pid)
@@ -455,7 +459,21 @@ def test_dm_to_a_local_agent_of_an_unlinked_project_is_still_refused(conn, two_a
         conn, "L", cwd="/repo/zeta", project="/repo/zeta", project_name="zeta", claude_pid=333
     )
     store.set_handle(conn, "L", "lena")
+    store.unsubscribe(conn, "L", "general")  # no room in common
+    conn.commit()
     assert srv.send(body="hi", to="@lena")["ok"] is False
+
+
+def test_dm_between_members_of_the_same_room_skips_the_project_check(conn, two_agents):
+    store.register_session(
+        conn, "L", cwd="/repo/zeta", project="/repo/zeta", project_name="zeta", claude_pid=333
+    )
+    store.set_handle(conn, "L", "lena")
+    for sid in ("A", "L"):
+        store.unsubscribe(conn, sid, "general")
+        store.subscribe(conn, sid, "war-room")
+    conn.commit()
+    assert srv.send(body="hi", to="@lena")["ok"] is True
 
 
 def test_a_room_post_stamped_before_the_join_is_delivered_when_it_arrives_after(conn):

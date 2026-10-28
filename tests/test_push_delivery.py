@@ -150,6 +150,8 @@ def test_cli_send_enforces_cross_project_consent(conn, capsys):
     # refuse exactly as the MCP tool does (issue #26) — not a back door.
     make_session(conn, "A", handle="alice", project="/repo/alpha", project_name="alpha")
     make_session(conn, "B", handle="bob", project="/repo/beta", project_name="beta")
+    store.unsubscribe(conn, "B", "general")  # no room in common
+    conn.commit()
     assert cli.main(["send", "--session", "A", "--to", "bob", "--json", "--", "hi"]) == 1
     assert "not reachable" in capsys.readouterr().err
     assert store.inbox_after(conn, "B", after_id=0) == []
@@ -195,3 +197,9 @@ def test_cli_send_reaches_a_paired_machines_agent_of_another_project(conn):
     assert cli.main(["send", "--session", "A", "--to", "R", "--json", "--", "hi"]) == 0
     row = conn.execute("SELECT to_session FROM messages WHERE body='hi'").fetchone()
     assert row["to_session"] == "R"
+
+
+def test_cli_send_between_roommates_of_different_projects_is_allowed(conn):
+    make_session(conn, "A", handle="alice", project="/repo/alpha", project_name="alpha")
+    make_session(conn, "B", handle="bob", project="/repo/beta", project_name="beta")
+    assert cli.main(["send", "--session", "A", "--to", "bob", "--json", "--", "hi"]) == 0

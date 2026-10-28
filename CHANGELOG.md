@@ -64,6 +64,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   pairing is the consent). Local agents of an unlinked project stay refused. The `cabildo send`
   CLI, which the push plugin uses for replies, follows the same rule.
 
+- **Roommates can DM across projects**: two agents in the same chatroom (any topic that is not a
+  `proj:` channel, `#general` included) can DM each other with no project link or grant. Joining
+  the room is the opt-in. Agents with no room in common still need a link or grant.
+
 ### Fixed
 
 - A room or channel post from a paired machine whose clock runs behind this one is no longer

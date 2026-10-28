@@ -788,7 +788,11 @@ def send(
             # A paired machine's agent is reachable from anywhere: the pairing is
             # the consent, and its project name means nothing on this machine.
             remote = trow is not None and _node(trow) is not None
-            if not remote and not _may_reach_project(conn, my_project, tname, "send"):
+            # Two members of the same chatroom have both opted in to talk.
+            roommates = store.share_a_room(conn, sid, to_session)
+            if not (remote or roommates) and not _may_reach_project(
+                conn, my_project, tname, "send"
+            ):
                 return {
                     "ok": False,
                     "error": f"'{to}' is on project '{tname.strip().lower()}', not "
