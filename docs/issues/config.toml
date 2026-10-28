@@ -1,0 +1,3 @@
+areas = ["ci"]
+index = false
+fixed_in_on_branch = "main"
