@@ -127,5 +127,51 @@ def test_a_room_post_leaves_the_machine_even_from_an_excluded_project(conn):
         topic="proj:secret",
         project="/repo/secret",
     )
-    rows, _ = lan.select_all(conn, 0, {"secret"})
+    rows, _ = lan.select_all(conn, 0, {"secret"}, "nodeB", frozenset({"secret"}))
     assert [r["body"] for r in rows] == ["hi room"]
+
+
+# --------------------------------------------------------------------------- #
+# What a peer is allowed to receive
+# --------------------------------------------------------------------------- #
+def _serve(conn, peer="nodeB", exclude=(), share=()):
+    from cabildo import lan
+
+    rows, _ = lan.select_all(conn, 0, set(exclude), peer, frozenset(share))
+    return {r["body"] for r in rows}
+
+
+def _say(conn, body, **kw):
+    kw.setdefault("from_session", "s1")
+    return store.post_message(conn, from_handle=None, body=body, **kw)
+
+
+def test_a_dm_between_two_local_agents_never_leaves(conn):
+    _local(conn, "s1", "ana")
+    _local(conn, "s2", "bob", pid=4343)
+    store.replace_remote_sessions(conn, "nodeB", [{"session_id": "rb", "project_name": "x"}])
+    store.replace_remote_sessions(conn, "nodeC", [{"session_id": "rc", "project_name": "x"}])
+    _say(conn, "local dm", to_session="s2")
+    _say(conn, "to b", to_session="rb")
+    _say(conn, "to c", to_session="rc")
+    assert _serve(conn, "nodeB") == {"to b"}  # only the peer's own agent's DM
+    assert _serve(conn, "nodeC") == {"to c"}
+
+
+def test_a_project_channel_goes_only_where_the_peer_has_that_project(conn):
+    _local(conn, "s1", "ana")
+    store.replace_remote_sessions(conn, "nodeB", [{"session_id": "rb", "project_name": "alpha"}])
+    _say(conn, "alpha chatter", topic="proj:alpha", project="/repo/alpha")
+    _say(conn, "other chatter", topic="proj:other", project="/repo/other")
+    assert _serve(conn) == {"alpha chatter"}
+    assert _serve(conn, share={"other"}) == {"alpha chatter", "other chatter"}
+    assert _serve(conn, exclude={"alpha"}) == set()  # exclude beats both
+
+
+def test_rooms_go_to_every_peer_but_relayed_rows_do_not(conn):
+    _local(conn, "s1", "ana")
+    _say(conn, "room post", topic="general")
+    store.post_message(
+        conn, from_session="rx", from_handle=None, body="relayed", topic="general", provenance="lan"
+    )
+    assert _serve(conn, "anyone") == {"room post"}

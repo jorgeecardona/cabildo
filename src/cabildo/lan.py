@@ -67,6 +67,7 @@ def node_id() -> str:
 _MSG_COLS = (
     "id, guid, created_at, from_session, from_handle, topic, to_session, project, body, urgent"
 )
+_MSG_FIELDS = tuple(c.strip() for c in _MSG_COLS.split(","))
 
 
 def select_outbound(
@@ -278,33 +279,59 @@ def lan_settings() -> dict[str, Any]:
 
 
 def select_all(
-    conn, since: int, exclude: set[str], limit: int = PULL_LIMIT
+    conn,
+    since: int,
+    exclude: set[str],
+    peer: str,
+    share: frozenset[str] = frozenset(),
+    limit: int = PULL_LIMIT,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Rows with id > since, minus excluded projects, plus the highest id scanned.
+    """Rows with id > since that machine ``peer`` may receive, plus the highest id
+    scanned. Only rows born on this machine are served (no relaying, no echo).
 
-    Excluded projects are filtered here, on the serving side, so they never leave
-    this machine, as are the daemon's own DMs (a pair result holds a live PIN).
+    What a peer gets, and nothing else:
+
+    - room posts (any topic that is not ``proj:``), always;
+    - a DM whose recipient is one of ``peer``'s own agents (stored here as
+      ``client='lan:<peer>'``): DMs between two local agents stay home;
+    - a ``proj:<name>`` post when ``peer`` has an agent in project ``name``, or
+      ``name`` is in ``share`` (``[lan] share``): the same repo open on both machines.
+
+    ``exclude`` (``[lan] exclude``) still withholds project channels and DMs of a
+    project. The daemon's own DMs never leave (a pair result holds a live PIN).
     The stored ``project`` path becomes its project key: paths differ between
     machines, repo names do not.
     """
+    client = store.REMOTE_PREFIX + peer
+    their_agents: set[str] = set()
+    their_projects: set[str] = set()
+    for r in conn.execute(
+        "SELECT session_id, project_name FROM sessions WHERE client=?", (client,)
+    ):
+        their_agents.add(r["session_id"])
+        if r["project_name"]:
+            their_projects.add(cloud.project_key(r["project_name"]))
     rows = conn.execute(
-        f"SELECT {_MSG_COLS} FROM messages WHERE id>? ORDER BY id LIMIT ?",
+        f"SELECT {_MSG_COLS}, provenance FROM messages WHERE id>? ORDER BY id LIMIT ?",
         (since, limit),
     ).fetchall()
     out: list[dict[str, Any]] = []
     max_id = since
     for r in rows:
         max_id = r["id"]
-        if r["from_session"] == _DAEMON_SESSION:
+        if r["provenance"] != "local" or r["from_session"] == _DAEMON_SESSION:
             continue
         topic = r["topic"]
-        # A room post belongs to the room, not to the project of whoever wrote it:
-        # [lan] exclude keeps project channels and DMs home, never #general.
-        is_room = bool(topic) and not str(topic).startswith("proj:")
         key = cloud.message_project(topic, r["project"])
-        if key and key in exclude and not is_room:
-            continue
-        d = dict(r)
+        if r["to_session"]:
+            if r["to_session"] not in their_agents or (key and key in exclude):
+                continue
+        elif str(topic).startswith("proj:"):
+            name = cloud.project_key(str(topic)[len("proj:") :])
+            if name in exclude or not (name in their_projects or name in share):
+                continue
+        # else: a room post belongs to the room, never to its sender's project.
+        d = {k: r[k] for k in _MSG_FIELDS}
         d["urgent"] = bool(d["urgent"])
         d["project"] = key
         out.append(d)
@@ -361,6 +388,9 @@ class Service:
 
     def exclude(self) -> set[str]:
         return {cloud.project_key(p) for p in lan_settings().get("exclude") or []}
+
+    def share(self) -> frozenset[str]:
+        return frozenset(cloud.project_key(p) for p in lan_settings().get("share") or [])
 
     def start(self) -> bool:
         try:
@@ -447,6 +477,8 @@ class Service:
             peers = pair.load_peers()
             with pair.server_context(self.me, peers).wrap_socket(raw, server_side=True) as s:
                 req = pair.recv_line(s) or {}
+                if not req:
+                    return  # a probe that connected and closed (the address check)
                 op = req.get("op")
                 if op == "pair":
                     peer = pair.answer_pair(self.me, self.pairing, s, req, host)
@@ -464,7 +496,9 @@ class Service:
                     conn = store.connect()
                     try:
                         exclude = self.exclude()
-                        msgs, max_id = select_all(conn, since, exclude)
+                        msgs, max_id = select_all(
+                            conn, since, exclude, known[fp].node, self.share()
+                        )
                         top = conn.execute("SELECT COALESCE(MAX(id),0) FROM messages").fetchone()
                         sessions = store.export_sessions(conn, exclude)
                     finally:

@@ -48,6 +48,14 @@ def main() -> None:
         row = store.get_session(conn, session_id)
         handle = row["handle"] if row else None
         body = "🤖 subagent finished" + (f": {task}" if task else "")
+        # The note carries the session's title, so every subagent of one session
+        # writes the same line. Say it once, not once per subagent.
+        last = conn.execute(
+            "SELECT body FROM messages WHERE from_session=? AND topic=? ORDER BY id DESC LIMIT 1",
+            (session_id, topic),
+        ).fetchone()
+        if last is not None and last["body"] == body:
+            return
         store.post_message(
             conn,
             from_session=session_id,

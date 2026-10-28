@@ -112,7 +112,7 @@ def machine_a(tmp_path):
     home_a = tmp_path / "a"
     home_a.mkdir()
     port = _free_port()
-    (home_a / "config.toml").write_text(f"[lan]\nport = {port}\n")
+    (home_a / "config.toml").write_text(f'[lan]\nport = {port}\nshare = ["alpha"]\n')
     env = {**os.environ, "CABILDO_HOME": str(home_a), "CABILDO_CONFIG": str(home_a / "config.toml")}
     proc = subprocess.Popen(
         [sys.executable, "-c", _MACHINE_A],
@@ -160,7 +160,7 @@ def test_wrong_pin_burns_the_window(home, machine_a):
 def test_pair_then_messages_cross_both_ways(home, machine_a, monkeypatch):
     proc, port, hello = machine_a
     my_port = _free_port()
-    monkeypatch.setattr(lan, "lan_settings", lambda: {"port": my_port})
+    monkeypatch.setattr(lan, "lan_settings", lambda: {"port": my_port, "share": ["alpha"]})
     svc = lan.start_service(lambda _m: None)
     assert svc is not None
     try:
@@ -208,7 +208,7 @@ def test_daemon_dms_are_never_served_to_a_peer(conn):
         conn, from_session="daemon", from_handle="daemon", body="PIN 123456", to_session="s1"
     )
     store.post_message(conn, from_session="s1", from_handle=None, body="hi", topic="proj:a")
-    rows, _ = lan.select_all(conn, 0, set())
+    rows, _ = lan.select_all(conn, 0, set(), "nodeB", frozenset({"a"}))
     assert [r["body"] for r in rows] == ["hi"]
 
 
@@ -270,7 +270,7 @@ def test_paired_peer_agents_show_up_as_remote_sessions(home, machine_a, monkeypa
     proc, port, hello = machine_a
     _ask(proc, {"op": "session"})
     my_port = _free_port()
-    monkeypatch.setattr(lan, "lan_settings", lambda: {"port": my_port})
+    monkeypatch.setattr(lan, "lan_settings", lambda: {"port": my_port, "share": ["alpha"]})
     svc = lan.start_service(lambda _m: None)
     assert svc is not None
     try:
@@ -351,7 +351,7 @@ def test_no_flag_reset_after_the_daemon_stops(home):
 def test_sync_records_what_each_pull_did(home, machine_a, monkeypatch):
     _, port, hello = machine_a
     my_port = _free_port()
-    monkeypatch.setattr(lan, "lan_settings", lambda: {"port": my_port})
+    monkeypatch.setattr(lan, "lan_settings", lambda: {"port": my_port, "share": ["alpha"]})
     svc = lan.start_service(lambda _m: None)
     assert svc is not None
     try:
@@ -373,7 +373,7 @@ def test_an_open_topic_joins_three_agents_in_three_projects_on_two_machines(
 ):
     proc, port, hello = machine_a
     my_port = _free_port()
-    monkeypatch.setattr(lan, "lan_settings", lambda: {"port": my_port})
+    monkeypatch.setattr(lan, "lan_settings", lambda: {"port": my_port, "share": ["alpha"]})
     svc = lan.start_service(lambda _m: None)
     assert svc is not None
     conn = store.connect()

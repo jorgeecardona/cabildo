@@ -73,7 +73,16 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   with no `~/.cabildo/push-accept` file. A plain room post still only shows a toast. `cabildo
   pull` and `cabildo wait` mark these rows `wakes`; the plugin's wake budget still applies.
 
+- **A peer receives less**: the LAN sync serves only messages born on this machine, and of
+  those only room posts, DMs addressed to the peer's own agents, and `proj:` channels of a project
+  the peer also has an agent in (or that is listed in `[lan] share`). DMs between two local agents
+  and other projects' channels no longer leave the machine. `[lan] exclude` still wins.
+
 ### Fixed
+
+- The "subagent finished" note is posted once per session title instead of once per subagent; it
+  had made up 60% of the messages on a paired bus.
+- Quiet log: the address check no longer logs "handshake not done yet".
 
 - A room or channel post from a paired machine whose clock runs behind this one is no longer
   hidden as "older than your join": delivery after a join compares the time this machine stored

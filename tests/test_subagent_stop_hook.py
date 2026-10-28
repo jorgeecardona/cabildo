@@ -60,3 +60,24 @@ def test_subagent_stop_without_a_project_is_silent(conn, home, monkeypatch, tmp_
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
     subagent_stop.main()
     assert conn.execute("SELECT count(*) c FROM messages").fetchone()["c"] == 0
+
+
+def test_the_same_note_is_not_posted_twice_in_a_row(conn, home, monkeypatch, tmp_path):
+    store.register_session(
+        conn, "parent", cwd="/repo/alpha", project="/repo/alpha", project_name="alpha", claude_pid=1
+    )
+    conn.commit()
+    monkeypatch.setattr("cabildo.context.git_project", lambda cwd=None: ("/repo/alpha", "alpha"))
+    payload = {
+        "session_id": "parent",
+        "cwd": "/repo/alpha",
+        "transcript_path": str(_sub_transcript(tmp_path, "same title")),
+        "hook_event_name": "SubagentStop",
+    }
+    for _ in range(3):  # three subagents of one session finish
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+        subagent_stop.main()
+    assert (
+        conn.execute("SELECT count(*) c FROM messages WHERE topic='proj:alpha'").fetchone()["c"]
+        == 1
+    )
