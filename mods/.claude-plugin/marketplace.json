@@ -1,0 +1,12 @@
+{
+  "name": "cabildo-mods",
+  "description": "Claude Code mods bundled with cabildo.",
+  "owner": { "name": "Jorge Cardona" },
+  "plugins": [
+    {
+      "name": "cabildo-push",
+      "source": "./plugins/cabildo-push",
+      "description": "Push delivery: wake an idle Claude Code session near-instantly when a cabildo message arrives for it."
+    }
+  ]
+}
