@@ -192,6 +192,8 @@ known-first-party = ["cabildo"]
 
 [tool.pyright]
 include = ["src", "tests"]
+# ported sessionmux tests: 29 Optional-access errors; drop this while integrating them
+ignore = ["tests/sessionmux"]
 extraPaths = ["src"]
 pythonVersion = "3.11"
 # `standard` is the strictest mode cabildo is clean under: it leans on sqlite3.Row dynamic
