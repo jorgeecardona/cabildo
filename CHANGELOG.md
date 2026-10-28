@@ -78,6 +78,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   the peer also has an agent in (or that is listed in `[lan] share`). DMs between two local agents
   and other projects' channels no longer leave the machine. `[lan] exclude` still wins.
 
+- **Longer pairing PIN window**: a PIN is valid for 10 minutes (was 120 s) and survives a typo:
+  the window closes on a right PIN or after 5 wrong ones (was: any attempt). The PIN keeps agents
+  of different projects from pairing by accident on a network assumed to be safe; the daemon logs
+  each pair attempt it refuses.
+
 ### Fixed
 
 - The "subagent finished" note is posted once per session title instead of once per subagent; it

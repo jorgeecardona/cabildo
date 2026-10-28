@@ -481,7 +481,7 @@ class Service:
                     return  # a probe that connected and closed (the address check)
                 op = req.get("op")
                 if op == "pair":
-                    peer = pair.answer_pair(self.me, self.pairing, s, req, host)
+                    peer = pair.answer_pair(self.me, self.pairing, s, req, host, self.log)
                     if peer is not None:
                         self.log(f"lan: paired with {peer.node[:8]} at {host}")
                         self.wake.set()

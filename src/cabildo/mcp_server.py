@@ -1237,7 +1237,7 @@ def request(action: str, params: dict[str, Any] | None = None) -> dict[str, Any]
       pair  — pair this machine with another on the LAN so messages sync both
               ways. No params: get a 6-digit PIN to show the user. On the other
               machine: {"pin": "482913"}, plus "host" and "port" if it is not
-              found over mDNS. The PIN allows one attempt within 120 s.
+              found over mDNS. The PIN is valid for 10 minutes and 5 tries.
 
     Poll `intents` for the outcome, or just wait — the daemon DMs you the result
     (urgently, if it failed).

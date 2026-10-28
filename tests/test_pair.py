@@ -39,12 +39,18 @@ def test_tag_binds_role_and_fingerprints():
     assert t != pair.tag("123456", "b", "fx", "fb", "na", "nb")
 
 
-def test_window_allows_one_attempt_and_expires():
+def test_window_survives_typos_closes_after_max_tries_and_expires():
     p = pair.Pairing()
     w = p.open()
     assert len(w.pin) == 6 and w.pin.isdigit()
-    assert p.take() == w
-    assert p.take() is None  # burned
+    assert pair.PAIR_WINDOW == 600.0
+    for left in range(pair.MAX_TRIES - 1, 0, -1):
+        assert p.fail(w) == left
+        assert p.live() is w  # a typo does not close it
+    assert p.fail(w) == 0 and p.live() is None  # the last wrong try does
+    w2 = p.open()
+    p.close(w2)
+    assert p.live() is None  # a right PIN closes it
     p.open(now=time.time() - pair.PAIR_WINDOW - 1)
     assert p.live() is None  # expired
 
@@ -83,6 +89,8 @@ for line in sys.stdin:
                                project_name="alpha", claude_pid=4242, owner_pid=4242)
         store.set_handle(c, "sa", "ana")
         c.close()
+    elif cmd["op"] == "window":
+        print(json.dumps({"pin": svc.pairing.open().pin}), flush=True)
     elif cmd["op"] == "join":
         c = store.connect()
         store.ensure_topic(c, cmd["topic"], created_by="sa")
@@ -131,7 +139,7 @@ def machine_a(tmp_path):
 def _ask(proc, cmd):
     proc.stdin.write(json.dumps(cmd) + "\n")
     proc.stdin.flush()
-    if cmd["op"] in ("bodies", "heard"):
+    if cmd["op"] in ("bodies", "heard", "window"):
         return json.loads(proc.stdout.readline())
     return None
 
@@ -145,13 +153,26 @@ def _wait(fn, timeout=10.0):
     return False
 
 
-def test_wrong_pin_burns_the_window(home, machine_a):
+def test_a_wrong_pin_costs_a_try_and_the_right_one_still_works(home, machine_a):
     _, port, hello = machine_a
     me = pair.load_identity()
     assert me is not None
     wrong = "000000" if hello["pin"] != "000000" else "111111"
-    with pytest.raises(pair.PairError, match="wrong PIN"):
+    with pytest.raises(pair.PairError, match=r"wrong PIN \(4 tries left\)"):
         pair.join(me, "127.0.0.1", port, wrong, _free_port())
+    assert pair.load_peers() == {}
+    peer = pair.join(me, "127.0.0.1", port, hello["pin"], _free_port())
+    assert peer.node == hello["node"]
+
+
+def test_five_wrong_pins_close_the_window(home, machine_a):
+    _, port, hello = machine_a
+    me = pair.load_identity()
+    assert me is not None
+    wrong = "000000" if hello["pin"] != "000000" else "111111"
+    for _ in range(pair.MAX_TRIES):
+        with pytest.raises(pair.PairError, match="wrong PIN"):
+            pair.join(me, "127.0.0.1", port, wrong, _free_port())
     with pytest.raises(pair.PairError, match="no pairing window"):
         pair.join(me, "127.0.0.1", port, hello["pin"], _free_port())
     assert pair.load_peers() == {}
@@ -327,11 +348,11 @@ def test_a_newer_window_keeps_its_pairing_flag(home):
     svc = lan.Service(me, 0, lambda _m: None)
     svc.mdns = _FakeMdns()
     svc.open_pairing()
-    svc.pairing.take()  # the first window is used...
+    svc.pairing.close()  # the first window is used...
     svc.open_pairing()  # ...and a second opens before the first closer looks
     time.sleep(1.5)
     assert svc.mdns.calls == [True, True]
-    svc.pairing.take()
+    svc.pairing.close()
     time.sleep(1.5)
     assert svc.mdns.calls == [True, True, False]
 
@@ -343,7 +364,7 @@ def test_no_flag_reset_after_the_daemon_stops(home):
     svc.mdns = _FakeMdns()
     svc.open_pairing()
     svc.stop.set()
-    svc.pairing.take()
+    svc.pairing.close()
     time.sleep(1.5)
     assert svc.mdns.calls == [True]
 
@@ -415,3 +436,17 @@ def test_an_open_topic_joins_three_agents_in_three_projects_on_two_machines(
     finally:
         conn.close()
         svc.close()
+
+
+def test_a_machine_that_is_already_paired_can_pair_again(home, machine_a):
+    proc, port, hello = machine_a
+    me = pair.load_identity()
+    assert me is not None
+    pair.join(me, "127.0.0.1", port, hello["pin"], _free_port())
+    # A opens a second window; the same machine joins again (the server now has a
+    # paired peer, so its TLS context asks for client certificates).
+    window = _ask(proc, {"op": "window"})
+    assert isinstance(window, dict)
+    pin2 = window["pin"]
+    again = pair.join(me, "127.0.0.1", port, pin2, _free_port())
+    assert again.node == hello["node"]

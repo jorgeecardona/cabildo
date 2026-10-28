@@ -12,9 +12,10 @@ Flow:
 3. Each side stores the other's certificate. Every later sync is mutual TLS
    against the stored certificates. The PIN is never used again.
 
-The PIN allows one attempt: a wrong tag closes the window. A recorded exchange
-only reveals a PIN that is already dead. The announcement carries no hash of the
-PIN, since a 6-digit PIN behind a hash is guessed in milliseconds.
+The PIN is not a secret against the network: it keeps agents of different projects
+from pairing by accident, on a network assumed to be safe. The window lasts 10
+minutes and closes on a right PIN or after 5 wrong ones. The announcement carries
+no hash of the PIN, since a 6-digit PIN behind a hash is guessed in milliseconds.
 
 Certificates are made once with the ``openssl`` CLI (stdlib ``ssl`` cannot make
 them). Without ``openssl`` the LAN service stays off.
@@ -32,6 +33,7 @@ import ssl
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -39,7 +41,10 @@ from typing import Any
 from . import store
 
 PROTO = 2
-PAIR_WINDOW = 120.0
+# The PIN only keeps projects apart on a network that is assumed safe, so the window is
+# long enough to relay it between two Claude sessions, and a typo is not fatal.
+PAIR_WINDOW = 600.0
+MAX_TRIES = 5
 _TIMEOUT = 10.0
 _RECV_CAP = 16 * 1024 * 1024
 
@@ -185,6 +190,7 @@ class Pairing:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._window: Window | None = None
+        self._fails = 0
 
     def open(self, now: float | None = None) -> Window:
         w = Window(
@@ -194,6 +200,7 @@ class Pairing:
         )
         with self._lock:
             self._window = w
+            self._fails = 0
         return w
 
     def live(self, now: float | None = None) -> Window | None:
@@ -203,13 +210,24 @@ class Pairing:
                 self._window = w = None
             return w
 
-    def take(self) -> Window | None:
-        """Return the live window and close it: every attempt burns the PIN."""
+    def fail(self, w: Window) -> int:
+        """Count a wrong PIN against ``w``; the window closes at ``MAX_TRIES``.
+        Returns the tries left (0 once closed).
+        """
         with self._lock:
-            w, self._window = self._window, None
-        if w is None or time.time() >= w.expires_at:
-            return None
-        return w
+            if self._window is not w:
+                return 0
+            self._fails += 1
+            left = MAX_TRIES - self._fails
+            if left <= 0:
+                self._window = None
+            return max(left, 0)
+
+    def close(self, w: Window | None = None) -> None:
+        """Close the window, or only ``w`` if it is still the live one."""
+        with self._lock:
+            if w is None or self._window is w:
+                self._window = None
 
 
 # --------------------------------------------------------------------------- #
@@ -291,12 +309,17 @@ def connect(me: Identity, host: str, port: int, peer: PairedPeer | None) -> ssl.
 # Pairing over the wire
 # --------------------------------------------------------------------------- #
 def answer_pair(
-    me: Identity, pairing: Pairing, sock: ssl.SSLSocket, req: dict[str, Any], host: str
+    me: Identity,
+    pairing: Pairing,
+    sock: ssl.SSLSocket,
+    req: dict[str, Any],
+    host: str,
+    log: Callable[[str], None] = lambda _m: None,
 ) -> PairedPeer | None:
     """Server half (machine A). Returns the new peer on success.
 
-    A malformed request is refused without touching the window; a well-formed
-    one takes it, so the PIN gets exactly one guess.
+    A malformed request is refused without touching the window. A wrong PIN counts
+    one try, and the window closes after ``MAX_TRIES``; a right one closes it.
     """
     cert_b, nonce_b = str(req.get("cert") or ""), str(req.get("nonce") or "")
     node_b = str(req.get("node") or "")
@@ -307,15 +330,18 @@ def answer_pair(
     if not (fp_b and nonce_b and node_b and int(req.get("port") or 0) > 0):
         send_line(sock, {"ok": False, "error": "malformed pair request"})
         return None
-    w = pairing.take()
+    w = pairing.live()
     if w is None:
+        log(f"lan: pair attempt from {host}: no window open")
         send_line(sock, {"ok": False, "error": "no pairing window open"})
         return None
     send_line(sock, {"ok": True, "node": me.node, "cert": me.cert_pem, "nonce": w.nonce})
     proof = recv_line(sock) or {}
     want = tag(w.pin, "b", me.fingerprint, fp_b, w.nonce, nonce_b)
     if not hmac.compare_digest(str(proof.get("tag") or ""), want):
-        send_line(sock, {"ok": False, "error": "wrong PIN"})
+        left = pairing.fail(w)
+        log(f"lan: pair attempt from {host}: wrong PIN, {left} tries left")
+        send_line(sock, {"ok": False, "error": f"wrong PIN ({left} tries left)"})
         return None
     peer = PairedPeer(
         node=node_b,
@@ -326,6 +352,7 @@ def answer_pair(
     )
     send_line(sock, {"ok": True, "tag": tag(w.pin, "a", me.fingerprint, fp_b, w.nonce, nonce_b)})
     save_peer(peer)
+    pairing.close(w)
     return peer
 
 

@@ -1187,7 +1187,7 @@ def _wait_for_pairing(svc: Any, timeout: float = 20.0) -> list[Any]:
 def pair(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     """Pair this machine with another one on the LAN (see pair.py).
 
-    Without ``pin``: open a 120 s pairing window and return the PIN to show the
+    Without ``pin``: open a 10 minute pairing window and return the PIN to show the
     user. With ``pin``: join the machine that is announcing a pairing, or the one
     at ``host`` + ``port`` when given.
     """
@@ -1209,7 +1209,7 @@ def pair(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         return {
             "ok": True,
             "pin": w.pin,
-            "reason": f"PIN {w.pin} (valid 120 s, one attempt). On the other machine: "
+            "reason": f"PIN {w.pin} (valid 10 minutes, 5 tries). On the other machine: "
             f'request("pair", {{"pin": "{w.pin}"}}). If it finds nothing, add '
             f'"host" and "port": {where}',
         }
