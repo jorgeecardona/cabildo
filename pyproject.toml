@@ -32,6 +32,9 @@ dependencies = [
     # the imports, not before.
     "mcp>=1.2,<2",
     "zeroconf>=0.130,<1",
+    # the session switcher (cabildo.sessionmux) uses private APIs of both: pinned
+    "textual==8.2.8",
+    "textual-tty==0.4.0",
 ]
 
 [project.optional-dependencies]
@@ -168,6 +171,9 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# moved in from sessionmux as-is; drop these while integrating it
+"src/cabildo/sessionmux/*" = ["RUF012", "S606"]
+"tests/sessionmux/*" = ["ASYNC109", "PLW0108", "N802", "S103"]
 "tests/*" = [
     "S101",    # asserts are the point of tests
     "PLR2004", # literal expectations in asserts are clearer than named constants
