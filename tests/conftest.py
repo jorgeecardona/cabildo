@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from cabildo import store
+
+
+@pytest.fixture(autouse=True)
+def _isolate_git(tmp_path, monkeypatch):
+    """Keep tests that run git away from the real repo, even under a git hook."""
+    for var in [v for v in os.environ if v.startswith("GIT_")]:
+        monkeypatch.delenv(var)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
 
 
 @pytest.fixture

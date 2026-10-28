@@ -5,4 +5,8 @@
 
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+# Git exports GIT_DIR and friends to hooks. Tests that create temp repos would inherit
+# them and write to this repo instead of their own.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
 exec make check
