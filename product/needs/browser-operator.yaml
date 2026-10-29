@@ -1,0 +1,77 @@
+who: browser-operator
+
+needs:
+
+  - id: BROWSER-1
+    text: >
+      When the operator wants to manage the browser that agents use, they can do all of it
+      with one cabildo command, with no loose script in ~/.claude/bin and no hand edit of
+      ~/.claude.json.
+    sources:
+      - kind: primary
+        who: Jorge Cardona
+        date: 2026-10-29
+        quote: "so the cabildo browser tool is fully incorporated into cabildo please"
+      - kind: internal
+        date: 2026-08-29
+        locator: "docs/issues/29-08-2026-cabildo-browser-subcommand.md"
+
+  - id: BROWSER-2
+    text: >
+      When the operator runs `cabildo browser status`, they can see how many browser MCP
+      servers and Chrome processes are alive, their age and memory, which config each runs,
+      and whether the saved login (storage state) is empty or stale. It reads /proc and never
+      uses `pkill -f`, because that pattern kills the shell that runs it.
+    sources:
+      - kind: internal
+        date: 2026-08-29
+        locator: "docs/issues/29-08-2026-cabildo-browser-subcommand.md (22 servers, 2.2 GB measured)"
+
+  - id: BROWSER-3
+    text: >
+      When the operator runs `cabildo browser reap`, they can stop the browser processes
+      whose Claude session is gone, or all of them with a flag, and read how much memory was
+      freed. It never stops the process that runs it.
+    sources:
+      - kind: internal
+        date: 2026-08-29
+        locator: "docs/issues/29-08-2026-cabildo-browser-subcommand.md"
+
+  - id: BROWSER-4
+    text: >
+      When the operator runs `cabildo browser login`, they can log into sites in a visible
+      browser window, and the logins are saved to the storage-state file with mode 600 when
+      the window closes. It uses the Python Playwright package, so cabildo needs no npm
+      install for this step.
+    sources:
+      - kind: primary
+        who: Jorge Cardona
+        date: 2026-10-29
+        quote: "aah, there is a python based playwright no? [...] can we add it to cabildo please"
+      - kind: internal
+        date: 2026-08-29
+        locator: "~/.claude/bin/cabildo-browser-login (the script this replaces)"
+
+  - id: BROWSER-5
+    text: >
+      When the operator runs `cabildo browser doctor`, they can see a failure if the
+      `cabildo-browser` entry in ~/.claude.json lacks `--isolated`, carries a
+      `--user-data-dir`, or carries `--headless`. The browser always runs with a visible
+      window.
+    sources:
+      - kind: internal
+        date: 2026-10-24
+        locator: "docs/issues/29-08-2026-cabildo-browser-subcommand.md (headed rule)"
+
+  - id: BROWSER-6
+    text: >
+      When an agent starts a session, it can browse through a browser MCP server that cabildo
+      ships, built on the Python Playwright package, instead of the npm `@playwright/mcp`
+      server.
+    sources:
+      - kind: assumption
+        who: claude
+        date: 2026-10-29
+        note: >
+          Read from "fully incorporated". Not confirmed by Jorge. The Playwright MCP server
+          exists only for Node today, so this means writing a new MCP server.
