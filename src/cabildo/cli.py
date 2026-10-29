@@ -1095,6 +1095,21 @@ def cmd_browser(args) -> int:
         Path(saved).expanduser() if saved else browser_entry.DEFAULT_STATE
     )
 
+    if args.browser_cmd == "login":
+        from .browser import login as browser_login
+
+        saved = browser_login.run(
+            Path(args.profile).expanduser() if args.profile else browser_login.default_profile(),
+            state.path,
+            channel=args.channel,
+            say=print,
+        )
+        if saved is None:
+            return 1
+        print(f"saved {saved.cookies} cookies, {saved.origins} origins to {saved.path} (mode 600)")
+        print("New sessions pick it up; running ones need their MCP server restarted.")
+        return 0
+
     if args.browser_cmd == "doctor":
         findings = browser_entry.check(entry, state)
         print("\n".join(browser_report.doctor(findings)))
@@ -2450,6 +2465,15 @@ def main(argv: list[str] | None = None) -> int:
     bw_sub = bw.add_subparsers(dest="browser_cmd", required=True)
     bw_sub.add_parser("status", help="servers, chrome processes, memory, saved login")
     bw_sub.add_parser("doctor", help="check the cabildo-browser entry: isolated, headed")
+    bw_login = bw_sub.add_parser(
+        "login", help="log into sites in a visible window, save for agents"
+    )
+    bw_login.add_argument(
+        "--profile", help="browser profile directory (default: the one with the logins)"
+    )
+    bw_login.add_argument(
+        "--channel", default="chrome", help="Chrome channel to open (default: chrome)"
+    )
     bw_reap = bw_sub.add_parser("reap", help="stop browser processes whose session is gone")
     bw_reap.add_argument("--all", action="store_true", help="every server, live sessions too")
     bw_reap.add_argument(

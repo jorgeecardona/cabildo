@@ -199,6 +199,30 @@ def _session_alive(server: procs.Proc, parent: procs.Proc | None) -> bool:
     return parent is not None and server.ppid > 1 and parent.comm not in _SESSION_GONE_COMM
 
 
+def on_profile(processes: Sequence[procs.Proc], profile: Path) -> tuple[Target, ...]:
+    """The Chrome browsers that hold ``profile``, each with the processes under it.
+
+    A profile directory allows one browser at a time, so these must stop before ``login`` opens it.
+    """
+    children: dict[int, list[procs.Proc]] = {}
+    for p in processes:
+        children.setdefault(p.ppid, []).append(p)
+    wanted = str(profile)
+    out: list[Target] = []
+    for p in processes:
+        if not _is_main_chrome(p) or _user_data_dir(p) != wanted:
+            continue
+        tree = [p, *_descendants(p.pid, children)]
+        out.append(
+            Target(
+                f"chrome {p.pid} on the profile",
+                tuple(t.pid for t in tree),
+                sum(t.rss_kb for t in tree),
+            )
+        )
+    return tuple(out)
+
+
 def ancestors(pid: int, processes: Sequence[procs.Proc]) -> frozenset[int]:
     """``pid`` and every process above it. These must never be stopped."""
     by_pid = {p.pid: p for p in processes}
