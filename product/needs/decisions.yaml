@@ -1,0 +1,25 @@
+decisions:
+- id: D-1
+  text: The bus DB (store.py sessions table) is the one registry of sessions. The
+    panel and every other lister read it.
+  needs:
+  - SWITCH-3
+  - SWITCH-1
+  - SWITCH-2
+  alternatives:
+  - Keep the panel reading Claude transcript folders and sync it to the bus on a timer
+  - Make the transcript folders the registry and drop the sessions table
+  consequences: The panel needs the DB open and the daemon running. A session with
+    no bus registration does not appear until it registers.
+  decided_at: '2026-10-29'
+- id: D-2
+  text: The panel only reads state. Actions (stop, launch, process checks) go through
+    the daemon.
+  needs:
+  - SWITCH-4
+  - SWITCH-7
+  alternatives:
+  - Let the panel scan /proc and signal processes itself
+  consequences: The panel cannot stop a process when the daemon is down. The daemon
+    needs an API for process identity and launch.
+  decided_at: '2026-10-29'

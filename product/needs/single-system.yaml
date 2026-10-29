@@ -1,0 +1,78 @@
+who: operator
+
+needs:
+
+  - id: SWITCH-1
+    text: >
+      When the operator opens the session panel, they can see each session's project and the
+      topics (rooms) it is subscribed to, such as #proj:cabildo, next to its name.
+    sources:
+      - kind: primary
+        who: Jorge Cardona
+        date: 2026-10-29
+        quote: "can we show the project, topics or rooms in the panel as well?"
+      - kind: internal
+        date: 2026-10-29
+        locator: "src/cabildo/store.py (topics table, subscribe, project_topic)"
+
+  - id: SWITCH-2
+    text: >
+      When the operator opens the session panel, they can see each session's unread inbox
+      count and held claims, so they know which session is waiting and which is blocking.
+    sources:
+      - kind: assumption
+        date: 2026-10-29
+        locator: "follows from SWITCH-1: the bus already stores both"
+
+  - id: SWITCH-3
+    text: >
+      When cabildo lists sessions, they can rely on one registry: the panel and the bus list the
+      same sessions, with no second state to drift from the first.
+    sources:
+      - kind: internal
+        date: 2026-10-29
+        locator: "src/cabildo/sessionmux/sessions.py reads ~/.claude/projects; src/cabildo/store.py has its own sessions table"
+
+  - id: SWITCH-4
+    text: >
+      When the panel needs to know if a process is alive, it can get the answer from the daemon (procs.py),
+      with no /proc scan or pkill of its own.
+    sources:
+      - kind: internal
+        date: 2026-10-29
+        locator: "commit 1e9c4f8 (CI needed procps for the sessionmux usage tests)"
+
+  - id: SWITCH-5
+    text: >
+      When a developer runs `make check`, they can see pyright cover the sessionmux code and its tests,
+      with no path excluded.
+    sources:
+      - kind: internal
+        date: 2026-10-29
+        locator: "commit 158da37 (pyright kept off the ported tests until they are typed)"
+
+  - id: SWITCH-6
+    text: >
+      When a developer reads src/cabildo/sessionmux, they can read it with no legacy state reader, and the
+      separate sessionmux install is gone.
+    sources:
+      - kind: internal
+        date: 2026-10-29
+        locator: "src/cabildo/sessionmux/legacy.py; /home/test/.venv/bin/sessionmux"
+
+  - id: SWITCH-7
+    text: >
+      When an operator starts a Claude or Codex session, they can start it from the panel or the command line, and one
+      launch code path runs both.
+    sources:
+      - kind: assumption
+        date: 2026-10-29
+        locator: "sessionmux/launch.py and cabildo codex both start clients"
+
+  - id: SWITCH-8
+    text: >
+      When the operator reads token use, they can trust that each session is counted once, by one module.
+    sources:
+      - kind: internal
+        date: 2026-10-29
+        locator: "src/cabildo/usage.py and src/cabildo/sessionmux/usage.py"

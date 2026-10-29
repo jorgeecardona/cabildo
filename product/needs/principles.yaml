@@ -1,0 +1,15 @@
+principles:
+- id: P-3
+  scope: engineering
+  text: Find processes by pid and /proc ancestry, never by pattern (pkill -f), because
+    the pattern also matches the shell that runs it.
+  revised_at: '2026-10-29'
+- id: P-4
+  scope: engineering
+  text: Everything in make check passes before a commit, and no path is excluded from
+    lint or typecheck without an issue in docs/issues/.
+  revised_at: '2026-10-29'
+- id: P-5
+  text: Every user-visible fact the bus stores can be seen in the panel, so the operator
+    never needs a second command to read it.
+  revised_at: '2026-10-29'

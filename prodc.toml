@@ -6,3 +6,6 @@ needs = ["product/needs/*.yaml"]
 [proofs.test]
 kind = "pytest"
 root = "."
+
+[principles]
+scopes = ["product", "engineering"]
