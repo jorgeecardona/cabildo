@@ -1082,6 +1082,41 @@ def cmd_cost(args) -> int:
     return 0
 
 
+def cmd_browser(args) -> int:
+    """``cabildo browser``: status, reap, doctor of the browser agents use."""
+    from . import procs
+    from .browser import entry as browser_entry
+    from .browser import fleet as browser_fleet
+    from .browser import report as browser_report
+
+    entry = browser_entry.load_entry()
+    saved = entry.flags.storage_state if entry else None
+    state = browser_entry.read_storage_state(
+        Path(saved).expanduser() if saved else browser_entry.DEFAULT_STATE
+    )
+
+    if args.browser_cmd == "doctor":
+        findings = browser_entry.check(entry, state)
+        print("\n".join(browser_report.doctor(findings)))
+        return 1 if any(f.level == "fail" for f in findings) else 0
+
+    processes = procs.processes()
+    fleet = browser_fleet.find(processes)
+    if args.browser_cmd == "status":
+        print("\n".join(browser_report.status(fleet, state, now=time.time())))
+        return 0
+
+    protect = browser_fleet.ancestors(os.getpid(), processes)
+    targets = browser_fleet.pick(
+        fleet, everything=args.all, include_mine=args.include_mine, protect=protect
+    )
+    if args.dry_run:
+        print("\n".join(browser_report.reap_plan(targets)))
+        return 0
+    print("\n".join(browser_report.reap_result(browser_fleet.stop(targets))))
+    return 0
+
+
 def cmd_fleet(args) -> int:
     conn = store.connect()
     rows = store.list_spawns(conn, limit=args.n)
@@ -2410,6 +2445,20 @@ def main(argv: list[str] | None = None) -> int:
     mm.add_argument("--min-mb", type=int, default=100, help="ignore processes below this")
     mm.add_argument("--top", type=int, default=12, help="how many processes to list")
     mm.set_defaults(fn=cmd_mem)
+
+    bw = sub.add_parser("browser", help="the browser agents use: status, reap, doctor")
+    bw_sub = bw.add_subparsers(dest="browser_cmd", required=True)
+    bw_sub.add_parser("status", help="servers, chrome processes, memory, saved login")
+    bw_sub.add_parser("doctor", help="check the cabildo-browser entry: isolated, headed")
+    bw_reap = bw_sub.add_parser("reap", help="stop browser processes whose session is gone")
+    bw_reap.add_argument("--all", action="store_true", help="every server, live sessions too")
+    bw_reap.add_argument(
+        "--include-mine", action="store_true", help="with --all: also this session's own server"
+    )
+    bw_reap.add_argument(
+        "--dry-run", action="store_true", help="list what would stop, stop nothing"
+    )
+    bw.set_defaults(fn=cmd_browser)
 
     fl = sub.add_parser("fleet", help="spawn ledger: who begat whom, and their fate")
     fl.add_argument("-n", type=int, default=20)
