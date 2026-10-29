@@ -12,6 +12,7 @@ from cabildo.browser import fleet, login
 
 PROFILE = Path("/profiles/main")
 CHROME = f"/opt/google/chrome/chrome --remote-debugging-pipe --user-data-dir={PROFILE}"
+CHROME_ON = "/opt/google/chrome/chrome --remote-debugging-pipe --user-data-dir="
 OTHER = "/opt/google/chrome/chrome --remote-debugging-pipe --user-data-dir=/profiles/other"
 RENDERER = "/opt/google/chrome/chrome --type=renderer --remote-debugging-pipe"
 
@@ -87,3 +88,36 @@ def test_default_profile_keeps_the_earlier_profile_when_it_exists(
     old = tmp_path / ".cache/ms-playwright-mcp/mcp-chrome-for-testing-3b855a0"
     old.mkdir(parents=True)
     assert login.default_profile() == old
+
+
+def test_free_profile_keeps_the_locks_when_a_browser_survived(tmp_path: Path) -> None:
+    profile = tmp_path / "p"
+    profile.mkdir()
+    (profile / "SingletonLock").symlink_to("/nowhere")
+
+    def survivor(targets) -> fleet.Stopped:
+        return fleet.Stopped(targets=tuple(targets), gone=(), left=(10,))
+
+    done = login.free_profile(profile, [proc(10, 1, f"{CHROME_ON}{profile}")], stop=survivor)
+    assert done.left == (10,)
+    assert (profile / "SingletonLock").is_symlink()
+
+
+def test_run_does_not_open_a_profile_it_could_not_free(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(procs, "processes", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        login, "free_profile", lambda *_a, **_k: fleet.Stopped(targets=(), gone=(), left=(7,))
+    )
+    said: list[str] = []
+    assert login.run(tmp_path / "p", tmp_path / "s.json", channel="chrome", say=said.append) is None
+    assert "not opening it" in said[-1]
+    assert not (tmp_path / "s.json").exists()
+
+
+def test_write_state_leaves_no_temporary_file_and_replaces_atomically(tmp_path: Path) -> None:
+    target = tmp_path / "state.json"
+    target.write_text('{"cookies": [1]}')
+    target.chmod(0o644)
+    login.write_state(target, {"cookies": [], "origins": []})
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["state.json"]
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600

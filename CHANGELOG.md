@@ -6,6 +6,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
+- **`cabildo browser`**: the browser that agents use, managed by cabildo. `status` lists the
+  browser servers and Chrome processes with age and memory. `reap` stops the ones whose session
+  is gone. `login` opens a visible Chrome and saves your logins for every agent. `doctor` fails
+  when the `cabildo-browser` entry lacks `--isolated` or turns headless on. `serve` is a
+  browser MCP server built on the Python Playwright package; it has no headless mode. See the
+  Browser page of the docs.
+- **Bare `cabildo`** opens the session switcher that used to be the separate `sessionmux`
+  project. `textual` and `textual-tty` are now cabildo dependencies.
 - **LAN pairing** (`request("pair")`): two machines on one network pair once with
   a 6-digit PIN, then the daemon syncs all messages both ways over mutual TLS with
   each other's pinned certificate. The other machine is found over mDNS

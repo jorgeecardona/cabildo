@@ -202,3 +202,68 @@ def test_stop_ignores_a_pid_that_already_exited() -> None:
         [Target("t", (9,), 1)], kill=fake.kill, alive=fake.alive, sleep=lambda _s: None
     )
     assert done.left == ()
+
+
+def test_a_server_adopted_by_the_user_manager_is_reaped_even_if_it_is_an_ancestor() -> None:
+    """The user manager is an ancestor of the shell that runs reap; it must not hide orphans."""
+    processes = [
+        proc(1, 0, "systemd"),
+        proc(2425, 1, "systemd"),  # systemd --user, a subreaper
+        proc(9752, 2425, "guake"),
+        proc(100, 9752, "claude"),
+        proc(102, 100, "cabildo"),  # the process that runs reap
+        proc(200, 2425, "node", SERVER),  # its claude died; the user manager adopted it
+    ]
+    protect = fleet.ancestors(102, processes)
+    assert 2425 in protect
+    (server,) = find(processes).servers
+    assert not server.session_alive
+    assert server.owner is None
+    picked = fleet.pick(find(processes), protect=protect)
+    assert [t.pids[0] for t in picked] == [200]
+    assert [t.pids[0] for t in fleet.pick(find(processes), everything=True, protect=protect)] == [
+        200
+    ]
+
+
+def test_a_wrapper_between_claude_and_the_server_does_not_hide_the_owner() -> None:
+    processes = [
+        proc(1, 0, "systemd"),
+        proc(100, 1, "claude"),
+        proc(150, 100, "sh"),
+        proc(200, 150, "node", SERVER),
+    ]
+    (server,) = find(processes).servers
+    assert server.owner == 100
+    protect = frozenset({100})
+    assert fleet.pick(find(processes), everything=True, protect=protect) == ()
+    assert (
+        len(fleet.pick(find(processes), everything=True, include_mine=True, protect=protect)) == 1
+    )
+
+
+def test_a_second_claude_under_the_same_terminal_is_not_mine() -> None:
+    processes = [
+        proc(1, 0, "systemd"),
+        proc(50, 1, "guake"),
+        proc(100, 50, "claude"),
+        proc(110, 50, "claude"),
+        proc(200, 100, "node", SERVER),
+        proc(210, 110, "node", SERVER),
+    ]
+    protect = frozenset({50, 100})
+    picked = fleet.pick(find(processes), everything=True, protect=protect)
+    assert [t.pids[0] for t in picked] == [210]
+
+
+def test_a_client_that_is_not_claude_or_codex_owns_its_server_through_its_parent() -> None:
+    processes = [proc(1, 0, "systemd"), proc(100, 1, "opencode"), proc(200, 100, "node", SERVER)]
+    (server,) = find(processes).servers
+    assert server.owner == 100
+    assert fleet.pick(find(processes), everything=True, protect=frozenset({100})) == ()
+
+
+def test_a_server_adopted_by_a_container_init_has_lost_its_session() -> None:
+    processes = [proc(1, 0, "systemd"), proc(30, 1, "catatonit"), proc(200, 30, "node", SERVER)]
+    (server,) = find(processes).servers
+    assert not server.session_alive

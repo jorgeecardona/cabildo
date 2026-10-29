@@ -151,3 +151,27 @@ def test_a_world_readable_storage_state_warns(tmp_path: Path) -> None:
     os.chmod(path, 0o644)
     state = entry.read_storage_state(path)
     assert levels(entry.check(make_entry(), state))["storage-state-mode"] == "warn"
+
+
+def config_file(tmp_path: Path, browser: dict[str, object]) -> str:
+    path = tmp_path / "pw.json"
+    path.write_text(json.dumps({"browser": browser}))
+    return str(path)
+
+
+def test_a_config_file_with_a_user_data_dir_fails(tmp_path: Path) -> None:
+    config = config_file(tmp_path, {"userDataDir": "/p", "isolated": True})
+    got = entry.check(make_entry(("--config", config)), None)
+    assert levels(got)["user-data-dir"] == "fail"
+
+
+def test_a_config_file_that_attaches_to_a_running_browser_fails(tmp_path: Path) -> None:
+    config = config_file(tmp_path, {"isolated": True, "cdpEndpoint": "http://localhost:9222"})
+    got = entry.check(make_entry(("--config", config)), None)
+    assert levels(got)["cdp-endpoint"] == "fail"
+
+
+def test_isolated_set_by_the_config_file_counts(tmp_path: Path) -> None:
+    config = config_file(tmp_path, {"isolated": True})
+    got = entry.check(make_entry(("--config", config)), None)
+    assert levels(got)["isolated"] == "ok"

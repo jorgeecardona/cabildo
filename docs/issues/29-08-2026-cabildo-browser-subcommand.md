@@ -83,3 +83,11 @@ watching a real agent open a real page **logged in**, from a storage state produ
   referenced by `command` and by the storage-state path; renaming it is churn with no benefit.
 - **The 1.8 GB profile was not deleted.** It is the only source of logins until
   `cabildo browser login` runs successfully once.
+
+## Status 2026-10-29
+
+Built: `cabildo browser status`, `reap`, `login`, `doctor` and `serve` (a Python Playwright MCP
+server). The needs are in `product/needs/browser-operator.yaml`, each with test proofs. Still
+open, because `verify: probe` asks for a real agent logged in from a state made by
+`cabildo browser login`, next to a second agent browsing: that run has not happened, and the live
+`cabildo-browser` entry in `~/.claude.json` still points at the npm `playwright-mcp`.

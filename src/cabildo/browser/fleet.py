@@ -24,7 +24,8 @@ _SERVER_MARKERS = (
     "cabildo browser serve",
     "cabildo.browser.server",
 )
-_SESSION_GONE_COMM = frozenset({"systemd", "init", "launchd"})
+_SESSION_GONE_COMM = frozenset({"systemd", "init", "launchd", "tini", "catatonit", "dumb-init"})
+_AGENT_COMM = frozenset({"claude", "codex"})
 _GRACE_SECONDS = 3.0
 _POLL_SECONDS = 0.1
 
@@ -38,6 +39,7 @@ class Server:
     started_at: float
     flags: LaunchFlags
     session_alive: bool
+    owner: int | None
     pids: tuple[int, ...]
     chrome_count: int
     rss_kb: int
@@ -142,9 +144,10 @@ def _descendants(root: int, children: dict[int, list[procs.Proc]]) -> list[procs
     return out
 
 
-def find(processes: Sequence[procs.Proc], *, owned: Callable[[int], bool] = _owned) -> Fleet:
+def find(processes: Sequence[procs.Proc], *, owned: Callable[[int], bool] | None = None) -> Fleet:
     """Group the browser processes of this user into servers and strays."""
-    mine = [p for p in processes if owned(p.pid)]
+    is_mine = owned or _owned
+    mine = [p for p in processes if is_mine(p.pid)]
     by_pid = {p.pid: p for p in mine}
     children: dict[int, list[procs.Proc]] = {}
     for p in mine:
@@ -158,13 +161,16 @@ def find(processes: Sequence[procs.Proc], *, owned: Callable[[int], bool] = _own
         tree = [p, *_descendants(p.pid, children)]
         covered.update(t.pid for t in tree)
         parent = by_pid.get(p.ppid)
+        alive = _session_alive(p, parent)
         servers.append(
             Server(
                 pid=p.pid,
                 ppid=p.ppid,
                 started_at=p.started_at,
                 flags=parse_flags(p.cmdline.split()),
-                session_alive=_session_alive(p, parent),
+                session_alive=alive,
+                # a client that is not claude or codex: its direct parent is the owner
+                owner=_owner_of(p, by_pid) or (p.ppid if alive else None),
                 pids=tuple(t.pid for t in tree),
                 chrome_count=sum(1 for t in tree if is_chrome(t)),
                 rss_kb=sum(t.rss_kb for t in tree),
@@ -223,6 +229,26 @@ def on_profile(processes: Sequence[procs.Proc], profile: Path) -> tuple[Target, 
     return tuple(out)
 
 
+def _owner_of(server: procs.Proc, by_pid: dict[int, procs.Proc]) -> int | None:
+    """The agent process (``claude`` or ``codex``) above ``server``, or None.
+
+    A wrapper such as ``sh`` or ``npx`` between the agent and the server does not hide it. The
+    walk ends with None at init or at a subreaper such as ``systemd --user``: those adopt servers
+    whose session died.
+    """
+    pid = server.ppid
+    seen: set[int] = set()
+    while pid > 1 and pid not in seen:
+        seen.add(pid)
+        parent = by_pid.get(pid)
+        if parent is None or parent.comm in _SESSION_GONE_COMM:
+            return None
+        if parent.comm in _AGENT_COMM:
+            return pid
+        pid = parent.ppid
+    return None
+
+
 def ancestors(pid: int, processes: Sequence[procs.Proc]) -> frozenset[int]:
     """``pid`` and every process above it. These must never be stopped."""
     by_pid = {p.pid: p for p in processes}
@@ -255,7 +281,7 @@ def pick(
             continue
         if s.session_alive and not everything:
             continue
-        if s.ppid in protect and not include_mine:
+        if everything and s.owner in protect and not include_mine:
             continue
         state = "session alive" if s.session_alive else "session gone"
         out.append(Target(f"server {s.pid} ({state})", s.pids, s.rss_kb))

@@ -125,6 +125,8 @@ cabildo viewer                  # read-only web view on http://127.0.0.1:8787
   DMs the result. Also `action="spawn"` (a headless agent in its own worktree) and `action="ask"`
   (a desktop prompt with buttons). Installs dry-run unless you pass `--allow-push` /
   `--allow-spawn`. Sweeps sessions whose `claude` died without firing `SessionEnd`.
+- **Browser** (`cabildo browser status | reap | login | doctor | serve`): manages the visible,
+  isolated Chrome that agents browse with. See [docs/browser.md](docs/browser.md).
 - **Platforms**: Linux and macOS, Python 3.11+. Memory-pressure stall detection (PSI) is
   Linux-only.
 

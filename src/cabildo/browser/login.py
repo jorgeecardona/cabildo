@@ -54,10 +54,14 @@ def free_profile(
     *,
     stop: Callable[[Sequence[fleet.Target]], fleet.Stopped] = fleet.stop,
 ) -> fleet.Stopped:
-    """Stop the browsers that hold ``profile`` and remove the lock files they left."""
+    """Stop the browsers that hold ``profile`` and remove the lock files they left.
+
+    The lock files stay when a browser survived the stop: it still holds the profile.
+    """
     done = stop(fleet.on_profile(processes, profile))
-    for name in _LOCK_FILES:
-        (profile / name).unlink(missing_ok=True)
+    if not done.left:
+        for name in _LOCK_FILES:
+            (profile / name).unlink(missing_ok=True)
     return done
 
 
@@ -80,12 +84,18 @@ def collect(
 
 
 def write_state(path: Path, state: dict[str, Any]) -> Saved:
-    """Write ``state`` to ``path`` with mode 600, from the first byte."""
+    """Write ``state`` to ``path`` with mode 600, from the first byte.
+
+    The file is written aside and moved into place, so a server that starts during the write reads
+    the old file or the new one, never half of one.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _PRIVATE_MODE)
+    aside = path.with_name(path.name + ".tmp")
+    fd = os.open(aside, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _PRIVATE_MODE)
     with os.fdopen(fd, "w") as handle:
+        os.fchmod(handle.fileno(), _PRIVATE_MODE)
         json.dump(state, handle)
-    path.chmod(_PRIVATE_MODE)
+    aside.replace(path)
     return Saved(
         path=path, cookies=len(state.get("cookies", [])), origins=len(state.get("origins", []))
     )
@@ -100,11 +110,17 @@ def run(
 ) -> Saved | None:
     """Open ``profile`` in a visible browser, wait for it to close, save the logins.
 
-    Returns None, and leaves the saved file as it was, when no state could be read.
+    Returns None, and leaves the saved file as it was, when the profile could not be freed or
+    no state could be read.
     """
     from playwright.sync_api import Error, sync_playwright
 
     freed = free_profile(profile, procs.processes())
+    if freed.left:
+        say(
+            f"could not stop process(es) {', '.join(map(str, freed.left))} on the profile: not opening it"
+        )
+        return None
     if freed.targets:
         say(f"freed the profile: stopped {len(freed.gone)} process(es)")
     say("Opening the profile. Log into what you need, then CLOSE THE WINDOW.")

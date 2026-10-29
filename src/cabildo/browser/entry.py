@@ -162,16 +162,22 @@ def read_storage_state(path: Path, *, now: float | None = None) -> StorageState:
     )
 
 
-def config_headless(path: str | None) -> bool:
-    """True when a Playwright MCP config file turns headless on."""
+def config_browser(path: str | None) -> dict[str, object]:
+    """The ``browser`` section of a Playwright MCP config file. Empty when unreadable."""
     if not path:
-        return False
+        return {}
     try:
         data = json.loads(Path(path).expanduser().read_text())
     except (OSError, json.JSONDecodeError):
-        return False
-    launch = data.get("browser", {}).get("launchOptions", {})
-    return bool(launch.get("headless"))
+        return {}
+    section = data.get("browser", {}) if isinstance(data, dict) else {}
+    return section if isinstance(section, dict) else {}
+
+
+def config_headless(path: str | None) -> bool:
+    """True when a Playwright MCP config file turns headless on."""
+    launch = config_browser(path).get("launchOptions", {})
+    return isinstance(launch, dict) and bool(launch.get("headless"))
 
 
 def check(entry: Entry | None, state: StorageState | None) -> tuple[Finding, ...]:
@@ -185,19 +191,25 @@ def check(entry: Entry | None, state: StorageState | None) -> tuple[Finding, ...
             Finding("entry", "fail", f"no {ENTRY_NAME!r} entry in mcpServers of ~/.claude.json"),
         )
     flags = entry.flags
+    from_config = config_browser(flags.config_file)
     findings = [Finding("entry", "ok", f"{ENTRY_NAME} runs {entry.command}")]
     findings.append(
         Finding("isolated", "ok", "--isolated is set")
-        if flags.isolated
+        if flags.isolated or from_config.get("isolated") is True
         else Finding("isolated", "fail", "--isolated is missing: agents share one profile lock"),
     )
+    data_dir = flags.user_data_dir or from_config.get("userDataDir")
     findings.append(
-        Finding(
-            "user-data-dir", "fail", f"--user-data-dir {flags.user_data_dir} brings the lock back"
-        )
-        if flags.user_data_dir
+        Finding("user-data-dir", "fail", f"user data dir {data_dir} brings the lock back")
+        if data_dir
         else Finding("user-data-dir", "ok", "no --user-data-dir"),
     )
+    if from_config.get("cdpEndpoint"):
+        findings.append(
+            Finding(
+                "cdp-endpoint", "fail", "the config attaches to an existing browser (cdpEndpoint)"
+            )
+        )
     findings.append(_headless_finding(entry))
     if state is not None:
         findings.extend(_state_findings(state))

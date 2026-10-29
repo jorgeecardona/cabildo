@@ -15,6 +15,10 @@ needs:
       - kind: internal
         date: 2026-08-29
         locator: "docs/issues/29-08-2026-cabildo-browser-subcommand.md"
+    proofs:
+      - "test:tests/test_browser_cli.py::test_doctor_exits_0_for_a_good_entry"
+      - "test:tests/test_browser_cli.py::test_status_lists_the_servers_found"
+      - "test:tests/test_browser_cli.py::test_reap_dry_run_names_what_it_would_stop_and_stops_nothing"
 
   - id: BROWSER-2
     text: >
@@ -26,6 +30,10 @@ needs:
       - kind: internal
         date: 2026-08-29
         locator: "docs/issues/29-08-2026-cabildo-browser-subcommand.md (22 servers, 2.2 GB measured)"
+    proofs:
+      - "test:tests/test_browser_fleet.py::test_a_server_owns_the_chrome_processes_under_it"
+      - "test:tests/test_browser_fleet.py::test_a_shell_that_only_mentions_the_server_is_not_a_server"
+      - "test:tests/test_browser_entry.py::test_storage_state_counts_and_age"
 
   - id: BROWSER-3
     text: >
@@ -36,6 +44,10 @@ needs:
       - kind: internal
         date: 2026-08-29
         locator: "docs/issues/29-08-2026-cabildo-browser-subcommand.md"
+    proofs:
+      - "test:tests/test_browser_fleet.py::test_reap_by_default_picks_only_what_lost_its_session"
+      - "test:tests/test_browser_fleet.py::test_a_tree_holding_a_protected_pid_is_never_picked"
+      - "test:tests/test_browser_fleet.py::test_stop_kills_what_ignores_term"
 
   - id: BROWSER-4
     text: >
@@ -51,6 +63,10 @@ needs:
       - kind: internal
         date: 2026-08-29
         locator: "~/.claude/bin/cabildo-browser-login (the script this replaces)"
+    proofs:
+      - "test:tests/test_browser_login.py::test_write_state_is_mode_600_and_counts"
+      - "test:tests/test_browser_login.py::test_collect_returns_the_last_state_read_before_the_browser_closed"
+      - "test:tests/test_browser_login.py::test_free_profile_stops_that_browser_and_removes_the_locks"
 
   - id: BROWSER-5
     text: >
@@ -62,6 +78,12 @@ needs:
       - kind: internal
         date: 2026-10-24
         locator: "docs/issues/29-08-2026-cabildo-browser-subcommand.md (headed rule)"
+    proofs:
+      - "test:tests/test_browser_entry.py::test_missing_isolated_fails"
+      - "test:tests/test_browser_entry.py::test_a_user_data_dir_fails"
+      - "test:tests/test_browser_entry.py::test_headless_flag_fails"
+      - "test:tests/test_browser_entry.py::test_a_headless_env_var_fails"
+      - "test:tests/test_browser_cli.py::test_doctor_exits_1_when_the_entry_turns_headless_on"
 
   - id: BROWSER-6
     text: >
@@ -75,3 +97,7 @@ needs:
         note: >
           Read from "fully incorporated". Not confirmed by Jorge. The Playwright MCP server
           exists only for Node today, so this means writing a new MCP server.
+    proofs:
+      - "test:tests/test_browser_server.py::test_the_server_offers_the_browser_tools_and_nothing_headless"
+      - "test:tests/test_browser_server.py::test_click_by_ref_uses_the_aria_ref_locator"
+      - "test:tests/test_browser_server.py::test_serve_refuses_headless_and_a_profile_directory"

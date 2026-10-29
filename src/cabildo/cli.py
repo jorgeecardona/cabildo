@@ -1084,12 +1084,38 @@ def cmd_cost(args) -> int:
 
 def cmd_browser(args) -> int:
     """``cabildo browser``: status, reap, doctor of the browser agents use."""
+    if args.browser_cmd == "serve":
+        from .browser import server as browser_server
+
+        if args.headless or args.user_data_dir:
+            print(
+                "cabildo browser serve: the browser is always visible and isolated, "
+                "so --headless and --user-data-dir are refused",
+                file=sys.stderr,
+            )
+            return 2
+        return browser_server.serve(
+            browser_server.Session(
+                channel=args.browser or args.channel,
+                storage_state=Path(args.storage_state).expanduser() if args.storage_state else None,
+                output_dir=(
+                    Path(args.output_dir).expanduser()
+                    if args.output_dir
+                    else browser_server.Session().output_dir
+                ),
+            )
+        )
+
     from . import procs
     from .browser import entry as browser_entry
     from .browser import fleet as browser_fleet
     from .browser import report as browser_report
 
-    entry = browser_entry.load_entry()
+    try:
+        entry = browser_entry.load_entry()
+    except ValueError as exc:
+        print(f"cabildo browser: {exc}", file=sys.stderr)
+        return 1
     saved = entry.flags.storage_state if entry else None
     state = browser_entry.read_storage_state(
         Path(saved).expanduser() if saved else browser_entry.DEFAULT_STATE
@@ -2474,6 +2500,16 @@ def main(argv: list[str] | None = None) -> int:
     bw_login.add_argument(
         "--channel", default="chrome", help="Chrome channel to open (default: chrome)"
     )
+    bw_serve = bw_sub.add_parser("serve", help="run the browser MCP server (stdio)")
+    bw_serve.add_argument("--channel", default="chrome", help="Chrome channel (default: chrome)")
+    bw_serve.add_argument(
+        "--browser", help="same as --channel; for configs written for playwright-mcp"
+    )
+    bw_serve.add_argument("--storage-state", help="saved login file every browser starts from")
+    bw_serve.add_argument("--output-dir", help="where screenshots and snapshots are saved")
+    bw_serve.add_argument("--isolated", action="store_true", help="accepted; always on")
+    bw_serve.add_argument("--headless", action="store_true", help="refused: the browser is visible")
+    bw_serve.add_argument("--user-data-dir", help="refused: browsers are isolated")
     bw_reap = bw_sub.add_parser("reap", help="stop browser processes whose session is gone")
     bw_reap.add_argument("--all", action="store_true", help="every server, live sessions too")
     bw_reap.add_argument(
