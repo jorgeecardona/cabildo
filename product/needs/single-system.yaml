@@ -14,6 +14,10 @@ needs:
       - kind: internal
         date: 2026-10-29
         locator: "src/cabildo/store.py (topics table, subscribe, project_topic)"
+    proofs:
+      - "test:tests/sessionmux/test_rooms.py::test_load_returns_project_and_sorted_topics_of_a_registered_session"
+      - "test:tests/sessionmux/test_rooms.py::test_the_panel_row_shows_the_rooms_on_its_second_line"
+      - "test:tests/sessionmux/test_rooms.py::test_the_panel_row_without_a_bus_entry_has_no_rooms_text"
 
   - id: SWITCH-2
     text: >

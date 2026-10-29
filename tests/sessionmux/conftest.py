@@ -95,3 +95,11 @@ def runtime_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home.mkdir()
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(home))
     return home
+
+
+@pytest.fixture(autouse=True)
+def bus_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Every test reads an empty bus in tmp, never the real ~/.cabildo."""
+    home = tmp_path / "bus"
+    monkeypatch.setenv("CABILDO_HOME", str(home))
+    return home

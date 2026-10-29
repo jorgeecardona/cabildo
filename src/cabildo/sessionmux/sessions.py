@@ -20,7 +20,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from cabildo.sessionmux import xdgdirs
+from cabildo.sessionmux import rooms, xdgdirs
+from cabildo.sessionmux.rooms import NO_ROOMS, Rooms
 
 # --- paths -----------------------------------------------------------------
 
@@ -268,6 +269,7 @@ class Row:
     chain: tuple[Session, ...]
     meta: Meta
     meta_key: str  # sidecar key: the chain id that already has metadata, else the origin
+    rooms: Rooms = NO_ROOMS  # project and topics on the bus; set by ``attach_rooms``
 
     @property
     def head(self) -> Session:
@@ -730,6 +732,18 @@ def build_rows(
     # group together, ungrouped last, then newest-first inside each group
     rows.sort(key=lambda r: (r.meta.group == "", r.meta.group, -r.mtime))
     return rows
+
+
+def attach_rooms(rows: list[Row]) -> list[Row]:
+    """The rows with the bus's project and topics for each conversation.
+
+    A conversation takes the rooms of its newest session the bus knows.
+    """
+    found = rooms.load(i for r in rows for i in r.ids)
+    return [
+        replace(r, rooms=next((found[i] for i in reversed(r.ids) if i in found), NO_ROOMS))
+        for r in rows
+    ]
 
 
 def trash(row: Row) -> Path:

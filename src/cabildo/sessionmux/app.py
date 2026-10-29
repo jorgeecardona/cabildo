@@ -32,7 +32,7 @@ from textual.widgets import ContentSwitcher, DataTable, Input, Label, Static
 from textual.worker import get_current_worker
 
 from cabildo import __version__
-from cabildo.sessionmux import agents, launch, legacy, plan, sessions, state, usage
+from cabildo.sessionmux import agents, launch, legacy, plan, rooms, sessions, state, usage
 from cabildo.sessionmux.agents import AgentState
 from cabildo.sessionmux.hosting import ClaudePane, Target
 from cabildo.sessionmux.launch import Config
@@ -76,7 +76,9 @@ def short_path(path: str, width: int) -> str:
     home = os.path.expanduser("~")
     if path == home or path.startswith(home + "/"):
         path = "~" + path[len(home) :]
-    return path if len(path) <= width else "…" + path[-(width - 1) :]
+    if len(path) <= width:
+        return path
+    return "…" + path[-(width - 1) :] if width > 1 else "…"[: max(width, 0)]
 
 
 def fmt_window(n: int) -> str:
@@ -644,15 +646,22 @@ class SwitcherApp(App[None]):
 
     @staticmethod
     def _session_text(r: Row, width: int) -> Text:
-        """Two lines: title (+ tags), then where it works (cwd · branch), dimmed."""
+        """Two lines: title (+ tags), then where it works (cwd · branch) and its rooms, dimmed."""
         line = (f"[{r.meta.group}] " if r.meta.group else "") + r.display_title
         if r.meta.tags:
             line += "  " + " ".join(f"·{t}" for t in r.meta.tags)
         line = line[:width]
-        where = short_path(r.cwd, width)
+        # branch and rooms each get a third of the width at most; the cwd takes what is left
+        room_text = rooms.label(r.rooms)
+        if len(room_text) > width // 3:
+            room_text = room_text[: max(width // 3 - 1, 0)] + "…"
+        branch = ""
         if r.git_branch and r.git_branch != "HEAD":
-            branch = r.git_branch[: width // 2]
-            where = short_path(r.cwd, width - len(branch) - 3) + f" · {branch}"
+            branch = r.git_branch[: width // 3]
+        tail = (f" · {branch}" if branch else "") + (f"  {room_text}" if room_text else "")
+        room_left = width - len(tail)
+        where = (short_path(r.cwd, room_left) if room_left >= 2 else "") + tail
+        where = where if room_left >= 2 else where.lstrip(" ·")
         text = Text(line)
         text.append("\n" + where, style="dim")
         return text
@@ -755,6 +764,7 @@ class SwitcherApp(App[None]):
         worker = get_current_worker()
         try:
             rows = sessions.build_rows(cwd, lambda: worker.is_cancelled, only, subfolders)
+            rows = sessions.attach_rooms(rows)
         except sessions.Cancelled:
             return  # the app is closing
         self._to_ui(self._apply_rows, gen, rows)
