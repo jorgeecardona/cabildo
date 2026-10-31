@@ -490,3 +490,52 @@ def test_a_room_post_stamped_before_the_join_is_delivered_when_it_arrives_after(
         provenance="lan",
     )
     assert [m["body"] for m in store.inbox(conn, "S")] == ["late clock"]
+
+
+def test_role_question_round_trip(two_agents):
+    two_agents(222)
+    srv.set_role("product", "owns needs")
+    two_agents(111)
+    out = srv.send_to_role("Product", "what is the priority?", question=True)
+    assert out["ok"] is True and out["role"] == "product"
+    guid = out["question"]
+
+    two_agents(222)
+    item = srv.inbox()["messages"][0]
+    assert item["to"] == "role:product" and item["question"] == guid
+    assert srv.questions_tool()["waiting"][0]["question"] == guid
+    assert srv.send("ship A first", reply_to=guid)["ok"] is True
+
+    two_agents(111)
+    msgs = srv.inbox()["messages"]
+    assert msgs[0]["body"] == "ship A first" and msgs[0]["reply_to"] == guid
+    asked = srv.questions_tool(open_only=False)["asked"]
+    assert asked[0]["answered_by"] == "bob"
+
+
+def test_reply_to_refused_for_non_holder_and_unknown_guid(two_agents):
+    two_agents(111)
+    guid = srv.send_to_role("product", "q?", question=True)["question"]
+    two_agents(222)  # bob holds no role
+    assert srv.send("nope", reply_to=guid)["ok"] is False
+    assert srv.send("nope", reply_to="not-a-guid")["ok"] is False
+
+
+def test_blank_role_question_is_refused(two_agents):
+    two_agents(111)
+    assert srv.send_to_role("  ", "q?", question=True)["ok"] is False
+
+
+def test_answer_cannot_be_redirected_away_from_the_asker(two_agents):
+    two_agents(222)
+    srv.set_role("product", None)
+    two_agents(111)
+    guid = srv.send_to_role("product", "q?", question=True)["question"]
+    two_agents(222)
+    assert srv.send("answer", to="alice", reply_to=guid)["ok"] is True
+    guid2 = None
+    two_agents(111)
+    guid2 = srv.send_to_role("product", "q2?", question=True)["question"]
+    two_agents(222)
+    assert srv.send("answer", to="bob", reply_to=guid2)["ok"] is False
+    assert srv.send("answer", topic="general", reply_to=guid2)["ok"] is False

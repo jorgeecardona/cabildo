@@ -21,6 +21,8 @@ def unread_line(conn: sqlite3.Connection, session_id: str) -> str | None:
     parts: list[str] = []
     if s["dm"]:
         parts.append(f"{s['dm']} DM")
+    if s["questions"]:
+        parts.append(f"{s['questions']} question(s) for your role")
     topic_bits = ", ".join(f"#{t}({n})" for t, n in s["by_topic"].items())
     if topic_bits:
         parts.append(topic_bits)
@@ -44,7 +46,7 @@ def midturn_urgent_text(conn: sqlite3.Connection, session_id: str) -> str | None
         return None
     lines = [f"⚠ cabildo: {len(msgs)} URGENT message(s) just arrived:"]
     for m in msgs:
-        dest = "DM" if m["to_session"] else f"#{m['topic']}"
+        dest = store.dest_label(m)
         preview = " ".join(m["body"].split())[:200]
         lines.append(f"  · {m['from_display']} → {dest} (id {m['id']}): {preview}")
     lines.append(
@@ -68,7 +70,7 @@ def urgent_block_reason(conn: sqlite3.Connection, session_id: str) -> str | None
     ]
     for m in urgent[:5]:
         preview = " ".join(m["body"].split())[:160]
-        dest = "DM" if m["to_session"] else f"#{m['topic']}"
+        dest = store.dest_label(m)
         lines.append(f"  · {m['from_display']} → {dest} (id {m['id']}): {preview}…")
     lines.append(
         "Call `inbox` to read them in full, act or reply via `send` if they need "
@@ -306,6 +308,11 @@ def session_banner(conn: sqlite3.Connection, session_id: str) -> str:
     if project_name:
         lines.append(f"Project: {project_name} · channel #{store.project_topic(project_name)}")
 
+    if me and me["role"]:
+        lines.append(f"Your role: {me['role']}")
+        if me["responsibilities"]:
+            lines.append(me["responsibilities"])
+
     peers = store.active_sessions(conn, project=project, exclude=session_id)
     if peers:
         who = ", ".join(
@@ -360,8 +367,8 @@ def session_banner(conn: sqlite3.Connection, session_id: str) -> str:
             lines.append(
                 "⚠ Shared checkout. Stage explicit paths — `git add -A` here commits "
                 "another agent's unfinished work. Pushing is manual on this project: "
-                "cabildo does not push or push for it, so commit and let a human "
-                "push — do not `git push` on your own."
+                "cabildo does not queue pushes for it, so push yourself with "
+                "`git push origin main` after you commit."
             )
         else:
             lines.append(

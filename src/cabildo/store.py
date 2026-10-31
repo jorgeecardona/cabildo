@@ -151,6 +151,12 @@ CREATE TABLE IF NOT EXISTS messages (
     from_handle   TEXT,
     topic         TEXT,               -- set => channel message
     to_session    TEXT,               -- set => direct message
+    -- set => a question addressed to a role (lowercase), not to one session. Any
+    -- active holder of the role sees it until a reply_to row answers it.
+    to_role       TEXT,
+    -- guid of the question this message answers. A guid, not a local id: local
+    -- ids differ per machine, a guid survives LAN/WAN sync.
+    reply_to      TEXT,
     project       TEXT,
     body          TEXT NOT NULL,
     urgent        INTEGER NOT NULL DEFAULT 0,
@@ -565,6 +571,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "gated" not in have:
         conn.execute("ALTER TABLE topics ADD COLUMN gated INTEGER NOT NULL DEFAULT 0")
 
+    have_messages = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
+    if "to_role" not in have_messages:
+        conn.execute("ALTER TABLE messages ADD COLUMN to_role TEXT")
+    if "reply_to" not in have_messages:
+        conn.execute("ALTER TABLE messages ADD COLUMN reply_to TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_to_role ON messages(to_role)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to)")
+
     if "quota_kind" not in have_sessions:
         conn.execute("ALTER TABLE sessions ADD COLUMN quota_kind TEXT")
         conn.execute("ALTER TABLE sessions ADD COLUMN quota_resets_at REAL")
@@ -577,6 +591,23 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
 def _now() -> float:
     return time.time()
+
+
+def role_key(role: str) -> str:
+    """The form of a role that questions compare on: spaces trimmed, ASCII letters
+    lowercased. It mirrors SQLite ``lower(trim(x))`` exactly, so the Python and
+    SQL sides of a role match never disagree on non-ASCII letters or tabs.
+    """
+    return "".join(c.lower() if c.isascii() else c for c in role.strip(" "))
+
+
+def dest_label(m: dict[str, Any]) -> str:
+    """Where a message was addressed: ``DM``, ``role:<role>`` or ``#<topic>``."""
+    if m.get("to_session"):
+        return "DM"
+    if m.get("to_role"):
+        return f"role:{m['to_role']}"
+    return f"#{m['topic']}"
 
 
 # --------------------------------------------------------------------------- #
@@ -1356,6 +1387,8 @@ def post_message(
     body: str,
     topic: str | None = None,
     to_session: str | None = None,
+    to_role: str | None = None,
+    reply_to: str | None = None,
     project: str | None = None,
     urgent: bool = False,
     provenance: str = "local",
@@ -1364,6 +1397,11 @@ def post_message(
 ) -> int:
     """Insert a message and return its local id.
 
+    Exactly one of ``topic`` / ``to_session`` / ``to_role`` addresses it. A
+    ``to_role`` message is a question for whoever holds that role (see
+    ``cabildo.questions``). ``reply_to`` is the guid of the question a message
+    answers; it rides on a normal DM.
+
     `guid` is the global identity; a fresh one is minted for a locally-born
     message, but the LAN and WAN transports pass the original so the same message
     is not re-inserted on another machine. Insert is idempotent
@@ -1371,20 +1409,26 @@ def post_message(
     existing row's id instead of a duplicate. `created_at` is likewise preserved
     across a hop so ordering and merge stay consistent everywhere.
     """
-    if (topic is None) == (to_session is None):
-        raise ValueError("exactly one of topic / to_session must be set")
+    if sum(x is not None for x in (topic, to_session, to_role)) != 1:
+        raise ValueError("exactly one of topic / to_session / to_role must be set")
+    if to_role is not None:
+        to_role = role_key(to_role)
+        if not to_role:
+            raise ValueError("to_role is empty")
     guid = guid or uuid.uuid4().hex
     ts = _now() if created_at is None else created_at
     cur = conn.execute(
         "INSERT INTO messages(created_at, from_session, from_handle, topic, to_session, "
-        "project, body, urgent, provenance, guid, received_at) VALUES (?,?,?,?,?,?,?,?,?,?,?) "
-        "ON CONFLICT(guid) DO NOTHING",
+        "to_role, reply_to, project, body, urgent, provenance, guid, received_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(guid) DO NOTHING",
         (
             ts,
             from_session,
             from_handle,
             topic,
             to_session,
+            to_role,
+            reply_to,
             project,
             body,
             1 if urgent else 0,
@@ -1409,12 +1453,20 @@ def _inbox_where(session_id: str) -> tuple[str, list[Any]]:
     channel's entire backlog as unread: subscribing to #proj:paas with 100
     prior messages must not hand the new agent 100 unread (~50k tokens of
     context) the moment it starts. A DM is always yours regardless of timing.
+
+    A question addressed to my role is also mine, while no reply_to row answers
+    it. The role is matched at read time, so a session that takes the role later
+    inherits the open questions. Same project only: a question's ``project`` is the
+    project key (a name), not a path, because paths differ between machines.
     """
     return (
         "(m.to_session=? OR EXISTS (SELECT 1 FROM subscriptions s "
-        "WHERE s.session_id=? AND s.topic=m.topic AND COALESCE(m.received_at, m.created_at) >= s.joined_at)) "
+        "WHERE s.session_id=? AND s.topic=m.topic AND COALESCE(m.received_at, m.created_at) >= s.joined_at) "
+        "OR (m.to_role IS NOT NULL AND EXISTS (SELECT 1 FROM sessions me "
+        "WHERE me.session_id=? AND lower(trim(me.role))=m.to_role AND lower(trim(me.project_name))=m.project) "
+        "AND NOT EXISTS (SELECT 1 FROM messages a WHERE a.reply_to=m.guid))) "
         "AND m.from_session!=?",
-        [session_id, session_id, session_id],
+        [session_id, session_id, session_id, session_id],
     )
 
 
@@ -1500,12 +1552,15 @@ def unread_summary(conn: sqlite3.Connection, session_id: str) -> dict[str, Any]:
     by_sender: dict[str, int] = {}
     by_topic: dict[str, int] = {}
     dm = 0
+    asks = 0
     urgent = 0
     for m in rows:
         if m["urgent"]:
             urgent += 1
         if m["to_session"]:
             dm += 1
+        if m["to_role"]:
+            asks += 1
         if m["topic"]:
             by_topic[m["topic"]] = by_topic.get(m["topic"], 0) + 1
         s = m["from_display"]
@@ -1513,6 +1568,7 @@ def unread_summary(conn: sqlite3.Connection, session_id: str) -> dict[str, Any]:
     return {
         "count": len(rows),
         "dm": dm,
+        "questions": asks,
         "urgent": urgent,
         "by_sender": by_sender,
         "by_topic": by_topic,

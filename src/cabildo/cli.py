@@ -82,7 +82,7 @@ def _who(conn, session_id: str) -> str:
 
 def render(m: dict, *, conn=None, body_indent: str = "    ") -> str:
     who = m["from_display"]
-    dest = _who(conn, m["to_session"]) if m["to_session"] else f"#{m['topic']}"
+    dest = _who(conn, m["to_session"]) if m["to_session"] else store.dest_label(m)
     urgent = f" {C.RED}{C.BOLD}⚠ URGENT{C.OFF}" if m["urgent"] else ""
     col = _sender_color(who)
     head = (
@@ -297,6 +297,8 @@ def _wakes(conn, sid: str, m: dict) -> bool:
         row = store.get_session(conn, sender)
         remote = row is not None and str(row["client"] or "").startswith(store.REMOTE_PREFIX)
         return remote or store.share_a_room(conn, sid, sender)
+    if m["to_role"]:
+        return bool(m["urgent"])  # an urgent question wakes its holders like a room post
     topic = str(m["topic"] or "")
     return bool(m["urgent"]) and bool(topic) and not topic.startswith("proj:")
 
@@ -319,6 +321,8 @@ def _pull_row(m: dict, preview_chars: int, *, wakes: bool = False) -> dict:
         "from_human": m["from_session"] == HUMAN_SESSION,
         "wakes": wakes,
         "to_session": m["to_session"],
+        "to_role": m["to_role"],
+        "reply_to": m["reply_to"],
         "topic": m["topic"],
         "urgent": m["urgent"],
         "read": m["read"],

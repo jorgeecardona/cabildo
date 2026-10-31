@@ -65,7 +65,8 @@ def node_id() -> str:
 # Pure sync logic (no sockets) — the testable core.
 # --------------------------------------------------------------------------- #
 _MSG_COLS = (
-    "id, guid, created_at, from_session, from_handle, topic, to_session, project, body, urgent"
+    "id, guid, created_at, from_session, from_handle, topic, to_session, to_role, reply_to, "
+    "project, body, urgent"
 )
 _MSG_FIELDS = tuple(c.strip() for c in _MSG_COLS.split(","))
 
@@ -118,9 +119,9 @@ def merge_incoming(conn, rows: list[dict[str, Any]], *, provenance: str = "lan")
         g = r.get("guid")
         if not g or g in have:
             continue
-        topic, to_session = r.get("topic"), r.get("to_session")
-        if bool(topic) == bool(to_session):
-            continue  # exactly one of topic / to_session must be set; skip malformed
+        topic, to_session, to_role = r.get("topic"), r.get("to_session"), r.get("to_role")
+        if sum(bool(x) for x in (topic, to_session, to_role)) != 1:
+            continue  # exactly one address must be set; skip malformed
         store.post_message(
             conn,
             from_session=r.get("from_session") or f"{provenance}:unknown",
@@ -128,6 +129,8 @@ def merge_incoming(conn, rows: list[dict[str, Any]], *, provenance: str = "lan")
             body=r.get("body") or "",
             topic=topic,
             to_session=to_session,
+            to_role=to_role or None,
+            reply_to=r.get("reply_to"),
             project=r.get("project"),
             urgent=bool(r.get("urgent")),
             provenance=provenance,
@@ -325,6 +328,10 @@ def select_all(
         key = cloud.message_project(topic, r["project"])
         if r["to_session"]:
             if r["to_session"] not in their_agents or (key and key in exclude):
+                continue
+        elif r["to_role"]:
+            # A question belongs to its project: same gate as a project channel.
+            if not key or key in exclude or not (key in their_projects or key in share):
                 continue
         elif str(topic).startswith("proj:"):
             name = cloud.project_key(str(topic)[len("proj:") :])

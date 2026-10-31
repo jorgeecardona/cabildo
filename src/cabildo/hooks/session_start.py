@@ -34,6 +34,12 @@ def main() -> None:
             claude_pid=pid,
             tag=os.environ.get("CABILDO_TAG"),
         )
+        role = (os.environ.get("CABILDO_ROLE") or "").strip()
+        if role:
+            from cabildo import config
+
+            text = config.roles(cwd, name).get(role.lower())
+            store.set_role(conn, session_id, role, text)
         banner = notify.session_banner(conn, session_id)
     finally:
         conn.close()

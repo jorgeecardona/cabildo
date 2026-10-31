@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cabildo import notify
+from cabildo import notify, store
 from tests.conftest import make_session
 
 P = "/repo/x"
@@ -57,7 +57,8 @@ def test_shared_repo_banner_drops_push_in_manual_mode(conn, monkeypatch):
     banner = notify.session_banner(conn, "me")
     assert 'request(action="push"' not in banner
     assert "Pushing is manual" in banner
-    assert "do not `git push`" in banner
+    assert "`git push origin main`" in banner
+    assert "do not `git push`" not in banner
 
 
 def test_timeline_text_injects_once_then_throttles(conn):
@@ -86,3 +87,16 @@ def test_heartbeat_reason_off_by_default_interval(conn):
     make_session(conn, "me", handle="me", project=P, project_name="x")
     # heartbeat_s defaults to 0 (off): no nudge, session idles normally.
     assert notify.heartbeat_reason(conn, "me", 0) is None
+
+
+def test_banner_injects_the_role_description_verbatim(conn):
+    make_session(conn, "pm", handle="pm", project=P, project_name="x")
+    store.set_role(conn, "pm", "product", "Owns needs. Writes no code. Ask backend.")
+    banner = notify.session_banner(conn, "pm")
+    assert "Your role: product" in banner
+    assert "Owns needs. Writes no code. Ask backend." in banner
+
+
+def test_banner_has_no_role_line_without_a_role(conn):
+    make_session(conn, "dev", handle="dev", project=P, project_name="x")
+    assert "Your role" not in notify.session_banner(conn, "dev")

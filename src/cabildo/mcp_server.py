@@ -19,7 +19,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from . import config, names, store
+from . import cloud, config, names, questions, store
 from .actions import ACTIONS
 from .context import git_project, resolve_claude_pid
 
@@ -750,6 +750,7 @@ def send(
     to: str | None = None,
     topic: str | None = None,
     urgent: bool = False,
+    reply_to: str | None = None,
 ) -> dict[str, Any]:
     """Send a message to the bus.
 
@@ -757,11 +758,29 @@ def send(
     `topic` (a channel name). If you give neither, it posts to your project's
     channel (#proj:<name>) so agents on the same repo see it. Set urgent=True to
     flag it. Messages are delivered as unread; recipients must call `read`.
+
+    To answer a question that was asked of your role, pass `reply_to` with the
+    question's guid (the `question` field of the inbox item). The answer is a
+    direct message to the asker, so `to` is optional. Only a session that holds
+    the question's role may answer it; the first answer removes the question from
+    the other holders' inboxes.
     """
     with store.connect() as conn:
         sid = _me(conn)
         me_handle = _handle(conn, sid)
         project = _project(conn, sid)
+
+        if reply_to is not None:
+            q = questions.get(conn, reply_to)
+            if q is None:
+                return {"ok": False, "error": "reply_to is not a question guid"}
+            mine = store.get_session(conn, sid)
+            if not mine or store.role_key(mine["role"] or "") != q.role:
+                return {"ok": False, "error": f"you do not hold the role '{q.role}'"}
+            # An answer goes to the asker, or the asker never hears it.
+            if topic is not None or (to is not None and _resolve_recipient(conn, to) != q.asked_by):
+                return {"ok": False, "error": "an answer goes to the asker; omit `to` and `topic`"}
+            to = q.asked_by
 
         to_session: str | None = None
         if to is not None:
@@ -826,6 +845,7 @@ def send(
             body=body,
             topic=topic,
             to_session=to_session,
+            reply_to=reply_to,
             project=project,
             urgent=urgent,
         )
@@ -834,19 +854,42 @@ def send(
 
 
 @mcp.tool()
-def send_to_role(role: str, body: str, urgent: bool = False) -> dict[str, Any]:
+def send_to_role(
+    role: str, body: str, urgent: bool = False, question: bool = False
+) -> dict[str, Any]:
     """Route a message by function: DM every active agent whose role is `role`,
     instead of naming a handle. This is how you hand work to whoever owns a
     domain (e.g. send_to_role("reviewer", "please review #123")) without knowing
     who is on shift. Delivers one DM per matching agent; yourself is excluded,
     and only agents on your project or a linked one are reached. Returns the
     recipients it hit — an empty list means no one currently holds that role.
+
+    With question=True it posts ONE question addressed to the role instead of
+    one DM per holder. Every holder sees it until one of them answers; if nobody
+    holds the role yet, it waits for the first session that takes it. Same
+    project only. Returns the question's guid; track it with `questions`.
     """
     with store.connect() as conn:
         sid = _me(conn)
         me_handle = _handle(conn, sid)
         project = _project(conn, sid)
         my_project = _project_name(conn, sid)
+        if question:
+            key = store.role_key(role)
+            if not key:
+                return {"ok": False, "error": "role is empty"}
+            # The project key, not the path: paths differ between machines.
+            mid = store.post_message(
+                conn,
+                from_session=sid,
+                from_handle=me_handle,
+                body=body,
+                to_role=key,
+                project=cloud.project_key(project) if project else None,
+                urgent=urgent,
+            )
+            row = conn.execute("SELECT guid FROM messages WHERE id=?", (mid,)).fetchone()
+            return {"ok": True, "role": key, "question": row["guid"]}
         recipients: list[dict[str, Any]] = []
         for r in store.agents_with_role(conn, role, exclude=sid):
             tname = (r["project_name"] or "").strip().lower()
@@ -866,6 +909,41 @@ def send_to_role(role: str, body: str, urgent: bool = False) -> dict[str, Any]:
                 {"session_id": r["session_id"], "name": store.display_name(r), "message_id": mid}
             )
         return {"ok": True, "role": role, "delivered": len(recipients), "recipients": recipients}
+
+
+@mcp.tool(name="questions")
+def questions_tool(open_only: bool = True) -> dict[str, Any]:
+    """List the questions you asked a role, and the ones waiting for your role.
+
+    `asked` are questions you posted with send_to_role(question=True); each shows
+    whether it is answered and by whom. `waiting` are unanswered questions
+    addressed to the role you hold; answer one with send(body, reply_to=<guid>).
+    """
+    with store.connect() as conn:
+        sid = _me(conn)
+        mine = store.get_session(conn, sid)
+        role = (mine["role"] if mine else None) or ""
+        asked = [
+            {
+                "question": q.guid,
+                "role": q.role,
+                "body": q.body,
+                "answered_by": q.answered_by.by_handle or q.answered_by.by_session
+                if q.answered_by
+                else None,
+            }
+            for q in questions.asked_by(conn, sid, open_only=open_only)
+        ]
+        waiting = [
+            {"question": q.guid, "from": q.asked_handle or q.asked_by, "body": q.body}
+            for q in (
+                questions.open_for_role(conn, role, store.role_key(_project_name(conn, sid) or ""))
+                if role.strip()
+                else []
+            )
+            if q.asked_by != sid
+        ]
+        return {"asked": asked, "waiting": waiting}
 
 
 def _resolve_recipient(conn, to: str) -> str | None:
@@ -979,9 +1057,19 @@ def inbox(
             item = {
                 "id": m["id"],
                 "from": m["from_display"],
-                "to": "you" if m["to_session"] else f"#{m['topic']}",
+                "to": (
+                    "you"
+                    if m["to_session"]
+                    else f"role:{m['to_role']}"
+                    if m.get("to_role")
+                    else f"#{m['topic']}"
+                ),
                 "at": m["created_at"],
             }
+            if m.get("to_role"):
+                item["question"] = m["guid"]  # answer with send(body, reply_to=<this>)
+            if m.get("reply_to"):
+                item["reply_to"] = m["reply_to"]
             if m["urgent"]:
                 item["urgent"] = True  # false is the norm; don't spend on it
             if not unread_only and m["read"]:

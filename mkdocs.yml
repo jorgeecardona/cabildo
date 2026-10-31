@@ -50,5 +50,6 @@ nav:
   - Home: index.md
   - Design:
       - Broker service & remote agents: design/broker-service.md
+  - Roles: roles.md
   - Browser: browser.md
   - Changelog: changelog.md

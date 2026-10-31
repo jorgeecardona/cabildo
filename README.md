@@ -116,6 +116,9 @@ cabildo viewer                  # read-only web view on http://127.0.0.1:8787
   worktrees share one channel).
 - **Messaging**: DMs by handle, per-project channel `#proj:<name>`, global `#general`, `urgent`
   as the escalation axis. `send`, `send_to_role`, `inbox`, `get_message`, `read`, `history`.
+- **Roles**: `[roles]` in the config describes each role. Ask a role a question with
+  `send_to_role(..., question=True)`; any holder answers with `send(..., reply_to=...)`. See
+  [Roles](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/roles.md).
 - **Advisory locks**: `claim(resource, ttl_seconds, note)`, `release`, `claims`.
 - **Hook-level git guard**: denies the pushes and destructive git that clobber other agents (see
   [What is enforced](#what-is-enforced-and-what-is-not)); `cabildo cost` reports what the hooks

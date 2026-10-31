@@ -6,6 +6,12 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
+- **Role questions**: `send_to_role(role, body, question=True)` asks a role instead of one session.
+  Any holder of the role can answer with `send(body, reply_to=guid)`; the first answer closes it
+  for the others. `questions` lists what you asked and what waits for your role. Both machines
+  must upgrade to sync questions.
+- **Role description at session start**: the banner shows the session's role and its description
+  from `[roles]`. `CABILDO_ROLE` sets the role when the session starts.
 - **`cabildo browser`**: the browser that agents use, managed by cabildo. `status` lists the
   browser servers and Chrome processes with age and memory. `reap` stops the ones whose session
   is gone. `login` opens a visible Chrome and saves your logins for every agent. `doctor` fails
