@@ -20,7 +20,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from cabildo.sessionmux import rooms, xdgdirs
+from cabildo.sessionmux import notes, rooms, xdgdirs
+from cabildo.sessionmux.notes import Note
 from cabildo.sessionmux.rooms import NO_ROOMS, Rooms
 
 # --- paths -----------------------------------------------------------------
@@ -270,6 +271,7 @@ class Row:
     meta: Meta
     meta_key: str  # sidecar key: the chain id that already has metadata, else the origin
     rooms: Rooms = NO_ROOMS  # project and topics on the bus; set by ``attach_rooms``
+    notes: tuple[Note, ...] = ()  # open notes typed in the panel; set by ``attach_notes``
 
     @property
     def head(self) -> Session:
@@ -732,6 +734,17 @@ def build_rows(
     # group together, ungrouped last, then newest-first inside each group
     rows.sort(key=lambda r: (r.meta.group == "", r.meta.group, -r.mtime))
     return rows
+
+
+def attach_notes(rows: list[Row]) -> list[Row]:
+    """The rows with the open notes of every session of each conversation, oldest first."""
+    found = notes.load(i for r in rows for i in r.ids)
+    return [
+        replace(
+            r, notes=tuple(sorted((n for i in r.ids for n in found.get(i, ())), key=lambda n: n.id))
+        )
+        for r in rows
+    ]
 
 
 def attach_rooms(rows: list[Row]) -> list[Row]:

@@ -32,7 +32,7 @@ from textual.widgets import ContentSwitcher, DataTable, Input, Label, Static
 from textual.worker import get_current_worker
 
 from cabildo import __version__
-from cabildo.sessionmux import agents, launch, legacy, plan, rooms, sessions, state, usage
+from cabildo.sessionmux import agents, launch, legacy, notes, plan, rooms, sessions, state, usage
 from cabildo.sessionmux.agents import AgentState
 from cabildo.sessionmux.hosting import ClaudePane, Target
 from cabildo.sessionmux.launch import Config
@@ -306,6 +306,7 @@ KEYS = f"""\
    C-d          delete (asks yes or no)
    x            close: its Claude ends, the conversation stays
    l  g  t      label / group / tags
+   n            notes for this session, separated by ; (written with no model call)
    a            list this directory / with subfolders / all directories
    f            filter by group / tag  (g:work t:urgent; empty = all)
    Tab          back to Claude
@@ -450,6 +451,7 @@ class SwitcherApp(App[None]):
         Binding("l", "edit_label", "Label"),
         Binding("g", "edit_group", "Group"),
         Binding("t", "edit_tags", "Tags"),
+        Binding("n", "note", "Note"),
         Binding("q", "quit", "Quit"),
         Binding("R", "reload", "Reload"),
         Binding("ctrl+q", "quit", show=False),  # not priority: inside Claude it is Claude's
@@ -650,6 +652,8 @@ class SwitcherApp(App[None]):
         line = (f"[{r.meta.group}] " if r.meta.group else "") + r.display_title
         if r.meta.tags:
             line += "  " + " ".join(f"·{t}" for t in r.meta.tags)
+        if r.notes:
+            line += f"  ✎ {notes.label(r.notes)}"
         line = line[:width]
         # branch and rooms each get a third of the width at most; the cwd takes what is left
         room_text = rooms.label(r.rooms)
@@ -764,7 +768,7 @@ class SwitcherApp(App[None]):
         worker = get_current_worker()
         try:
             rows = sessions.build_rows(cwd, lambda: worker.is_cancelled, only, subfolders)
-            rows = sessions.attach_rooms(rows)
+            rows = sessions.attach_notes(sessions.attach_rooms(rows))
         except sessions.Cancelled:
             return  # the app is closing
         self._to_ui(self._apply_rows, gen, rows)
@@ -1541,6 +1545,23 @@ class SwitcherApp(App[None]):
             "Label (blank = Claude's title):",
             lambda r: r.meta.label,
             lambda key, v: self._update_meta(key, lambda m: replace(m, label=v.strip())),
+        )
+
+    def action_note(self) -> None:
+        r = self._current_row()
+        if not r:
+            return
+
+        def done(value: str | None) -> None:
+            if value is None:
+                return
+            if notes.save(r.notes, r.head.session_id, value):
+                self.reload()
+            else:
+                self.notify("Notes not saved: the bus is not writable")
+
+        self.push_screen(
+            EditScreen(f"Notes (separate with {notes.SEPARATOR}):", notes.label(r.notes)), done
         )
 
     def action_edit_tags(self) -> None:

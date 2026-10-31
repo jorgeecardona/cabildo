@@ -6,6 +6,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
+- **Notes in the panel**: press `n` on a session in the switcher to write notes for it, separated by
+  `;`. They show on the row after the tags (`✎`). No model call is made. The session sees them in
+  its SessionStart banner the next time it starts, for example after running out of tokens.
 - **Role questions**: `send_to_role(role, body, question=True)` asks a role instead of one session.
   Any holder of the role can answer with `send(body, reply_to=guid)`; the first answer closes it
   for the others. `questions` lists what you asked and what waits for your role. Both machines
