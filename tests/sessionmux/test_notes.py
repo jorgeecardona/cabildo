@@ -34,6 +34,13 @@ def test_save_marks_notes_human_and_the_banner_style_agent_notes_stay_out() -> N
     assert [n.text for n in notes.load(["s1"])["s1"]] == ["mine"]
 
 
+def test_save_for_a_session_not_on_the_bus_keeps_the_note_without_a_project() -> None:
+    assert notes.save((), "unregistered", "call me")
+    with store.connect() as conn:
+        [row] = store.list_notes(conn, session_id="unregistered", state="open", source="human")
+    assert row["text"] == "call me" and row["project"] is None
+
+
 def test_load_is_empty_without_a_db_and_never_creates_it(bus_home: Path) -> None:
     assert notes.load(["s1"]) == {}
     assert not bus_home.exists()

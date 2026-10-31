@@ -80,3 +80,40 @@ needs:
       - kind: internal
         date: 2026-10-29
         locator: "src/cabildo/usage.py and src/cabildo/sessionmux/usage.py"
+
+  - id: SWITCH-9
+    text: >
+      When a session is out of tokens, the operator can type a note for it in the panel, and the
+      session reads the note in its SessionStart banner, with no model call in between.
+    sources:
+      - kind: internal
+        date: 2026-10-31
+        locator: "commit 8db4f1d (human notes, StopFailure hook); src/cabildo/sessionmux/notes.py; src/cabildo/notify.py (SessionStart banner)"
+    proofs:
+      - "test:tests/sessionmux/test_notes.py::test_save_adds_keeps_and_removes_by_text"
+      - "test:tests/test_quota.py::test_human_notes_show_in_session_banner_agent_notes_do_not"
+
+  - id: SWITCH-10
+    text: >
+      When the operator opens the panel, they can see the state of each push intent (pending, running,
+      done, failed, with the reason), and more of the bus as the screen height allows.
+    sources:
+      - kind: primary
+        who: Jorge Cardona
+        date: 2026-10-31
+        quote: "it would be great to see the state of the intents on the left panel"
+      - kind: internal
+        date: 2026-10-31
+        locator: "principle P-5; intent 1920 failed on uncommitted files and the only signal was a DM"
+
+  - id: SWITCH-11
+    text: >
+      When the operator reads the 7-day pace in the panel, they can read it as close to the average
+      over the last day, not as the speed of the last few hours.
+    sources:
+      - kind: primary
+        who: Jorge Cardona
+        date: 2026-10-31
+        quote: "put soem decay so at least one day would look like a average"
+    proofs:
+      - "test:tests/sessionmux/test_plan.py::test_the_seven_day_pace_over_a_day_reads_like_an_average"

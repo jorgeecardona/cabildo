@@ -71,6 +71,9 @@ def save(current: Iterable[Note], head_id: str, line: str) -> bool:
 
     A note that is still in ``line`` keeps its id. One that is gone is marked done. A new
     text becomes a note of ``head_id``, the newest session of the conversation.
+
+    Opens the bus with ``store.connect``, which creates the DB when it is missing (``load``
+    never does). A ``head_id`` that is not registered on the bus gets a note with no project.
     """
     wanted = list(split(line))
     try:

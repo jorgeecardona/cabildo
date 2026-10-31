@@ -1,0 +1,33 @@
+who: operator
+
+needs:
+
+  - id: ROLES-1
+    text: >
+      When the operator runs several sessions on one project, they can give each session a role
+      (product, design, backend), and a role can have several sessions, so each session keeps to
+      its kind of work.
+    sources:
+      - kind: primary
+        who: Jorge Cardona
+        date: 2026-10-31
+        quote: "some sessions should just deal let say with product work, or design or backend and so on, roles and maybe some roles can have several sessions"
+      - kind: internal
+        date: 2026-10-31
+        locator: "src/cabildo/mcp_server.py set_role; [roles] in .cabildo/config.toml"
+    proofs:
+      - "test:tests/test_notify.py::test_banner_injects_the_role_description_verbatim"
+
+  - id: ROLES-2
+    text: >
+      When a session needs an answer from another role, it can ask that role a question on the bus,
+      and the first holder of the role to answer closes it for the others, with no named recipient.
+    sources:
+      - kind: primary
+        who: Jorge Cardona
+        date: 2026-10-31
+        quote: "among the roles they can communicate via the cabildo bus no and also maybe in between different roles questions could be raised"
+    proofs:
+      - "test:tests/test_questions.py::test_answer_removes_question_from_other_holders_and_reaches_asker"
+      - "test:tests/test_questions.py::test_question_waits_until_a_session_takes_the_role"
+      - "test:tests/test_mcp_tools.py::test_role_question_round_trip"

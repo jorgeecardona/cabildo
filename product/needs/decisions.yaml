@@ -13,13 +13,19 @@ decisions:
     no bus registration does not appear until it registers.
   decided_at: '2026-10-29'
 - id: D-2
-  text: The panel only reads state. Actions (stop, launch, process checks) go through
-    the daemon.
+  text: The panel never touches processes or git. Stop, launch, liveness checks and
+    push go through the daemon. The panel may write bus rows that record what the operator
+    said, only through store.py functions, with source='human' where the row has a source.
   needs:
   - SWITCH-4
   - SWITCH-7
+  - SWITCH-9
   alternatives:
   - Let the panel scan /proc and signal processes itself
+  - Route every panel write through a daemon intent
   consequences: The panel cannot stop a process when the daemon is down. The daemon
-    needs an API for process identity and launch.
+    needs an API for process identity and launch. Panel writes work with the daemon down.
+    A panel write is a store.py call, never raw SQL, so the same validation applies as
+    to the MCP tool.
   decided_at: '2026-10-29'
+  revised_at: '2026-10-31'
