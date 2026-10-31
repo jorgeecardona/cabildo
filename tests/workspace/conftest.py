@@ -10,12 +10,12 @@ from pathlib import Path
 import pytest
 from lines import PROJECT
 
-from cabildo.sessionmux import sessions
+from cabildo.workspace import sessions
 
 # The tests render the app and its terminal pane. Under `moon run` in CI (a non-TTY run) moon
 # exports NO_COLOR to its task children, which puts Textual in monochrome mode -- and the
 # textual-tty pane's monochrome render path hits a None style and crashes (see docs/issues).
-# sessionmux is a colour TUI; drop NO_COLOR here so the suite renders the way the app actually
+# the workspace is a colour TUI; drop NO_COLOR here so the suite renders the way the app actually
 # runs. The real no-colour-terminal robustness fix belongs upstream.
 os.environ.pop("NO_COLOR", None)
 
@@ -32,7 +32,7 @@ exec cat
 @pytest.fixture
 def fake_claude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """The app's panes run this script instead of the real `claude`."""
-    from cabildo.sessionmux import app
+    from cabildo.workspace import app
 
     path = tmp_path / "bin" / "claude"
     path.parent.mkdir()

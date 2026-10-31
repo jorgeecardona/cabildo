@@ -15,9 +15,9 @@ needs:
         date: 2026-10-29
         locator: "src/cabildo/store.py (topics table, subscribe, project_topic)"
     proofs:
-      - "test:tests/sessionmux/test_rooms.py::test_load_returns_project_and_sorted_topics_of_a_registered_session"
-      - "test:tests/sessionmux/test_rooms.py::test_the_panel_row_shows_the_rooms_on_its_second_line"
-      - "test:tests/sessionmux/test_rooms.py::test_the_panel_row_without_a_bus_entry_has_no_rooms_text"
+      - "test:tests/workspace/test_rooms.py::test_load_returns_project_and_sorted_topics_of_a_registered_session"
+      - "test:tests/workspace/test_rooms.py::test_the_panel_row_shows_the_rooms_on_its_second_line"
+      - "test:tests/workspace/test_rooms.py::test_the_panel_row_without_a_bus_entry_has_no_rooms_text"
 
   - id: SWITCH-2
     text: >
@@ -35,7 +35,7 @@ needs:
     sources:
       - kind: internal
         date: 2026-10-29
-        locator: "src/cabildo/sessionmux/sessions.py reads ~/.claude/projects; src/cabildo/store.py has its own sessions table"
+        locator: "src/cabildo/workspace/sessions.py reads ~/.claude/projects; src/cabildo/store.py has its own sessions table"
 
   - id: SWITCH-4
     text: >
@@ -48,7 +48,7 @@ needs:
 
   - id: SWITCH-5
     text: >
-      When a developer runs `make check`, they can see pyright cover the sessionmux code and its tests,
+      When a developer runs `make check`, they can see pyright cover the workspace code and its tests,
       with no path excluded.
     sources:
       - kind: internal
@@ -57,12 +57,12 @@ needs:
 
   - id: SWITCH-6
     text: >
-      When a developer reads src/cabildo/sessionmux, they can read it with no legacy state reader, and the
+      When a developer reads src/cabildo/workspace, they can read it with no legacy state reader, and the
       separate sessionmux install is gone.
     sources:
       - kind: internal
         date: 2026-10-29
-        locator: "src/cabildo/sessionmux/legacy.py; /home/test/.venv/bin/sessionmux"
+        locator: "src/cabildo/workspace/legacy.py; /home/test/.venv/bin/sessionmux"
 
   - id: SWITCH-7
     text: >
@@ -71,7 +71,7 @@ needs:
     sources:
       - kind: assumption
         date: 2026-10-29
-        locator: "sessionmux/launch.py and cabildo codex both start clients"
+        locator: "workspace/launch.py and cabildo codex both start clients"
 
   - id: SWITCH-8
     text: >
@@ -79,7 +79,7 @@ needs:
     sources:
       - kind: internal
         date: 2026-10-29
-        locator: "src/cabildo/usage.py and src/cabildo/sessionmux/usage.py"
+        locator: "src/cabildo/usage.py and src/cabildo/workspace/usage.py"
 
   - id: SWITCH-9
     text: >
@@ -88,9 +88,9 @@ needs:
     sources:
       - kind: internal
         date: 2026-10-31
-        locator: "commit 8db4f1d (human notes, StopFailure hook); src/cabildo/sessionmux/notes.py; src/cabildo/notify.py (SessionStart banner)"
+        locator: "commit 8db4f1d (human notes, StopFailure hook); src/cabildo/workspace/notes.py; src/cabildo/notify.py (SessionStart banner)"
     proofs:
-      - "test:tests/sessionmux/test_notes.py::test_save_adds_keeps_and_removes_by_text"
+      - "test:tests/workspace/test_notes.py::test_save_adds_keeps_and_removes_by_text"
       - "test:tests/test_quota.py::test_human_notes_show_in_session_banner_agent_notes_do_not"
 
   - id: SWITCH-10
@@ -111,9 +111,9 @@ needs:
         date: 2026-10-31
         locator: "principle P-5; intent 1920 failed on uncommitted files and the only signal was a DM"
     proofs:
-      - "test:tests/sessionmux/test_intents.py::test_load_lists_the_queue_running_first_then_the_latest_finished"
-      - "test:tests/sessionmux/test_intents.py::test_the_group_shows_the_queue_and_a_failure_with_its_reason"
-      - "test:tests/sessionmux/test_intents.py::test_the_mode_line_shows_the_intents_group_and_grows_to_fit_it"
+      - "test:tests/workspace/test_intents.py::test_load_lists_the_queue_running_first_then_the_latest_finished"
+      - "test:tests/workspace/test_intents.py::test_the_group_shows_the_queue_and_a_failure_with_its_reason"
+      - "test:tests/workspace/test_intents.py::test_the_mode_line_shows_the_intents_group_and_grows_to_fit_it"
 
   - id: SWITCH-11
     text: >
@@ -125,4 +125,4 @@ needs:
         date: 2026-10-31
         quote: "put soem decay so at least one day would look like a average"
     proofs:
-      - "test:tests/sessionmux/test_plan.py::test_the_seven_day_pace_over_a_day_reads_like_an_average"
+      - "test:tests/workspace/test_plan.py::test_the_seven_day_pace_over_a_day_reads_like_an_average"

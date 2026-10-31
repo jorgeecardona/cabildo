@@ -1,9 +1,9 @@
 import json
 import time
 
-from cabildo.sessionmux import plan, xdgdirs
-from cabildo.sessionmux.app import fmt_plan, plan_style
-from cabildo.sessionmux.plan import Limit, PlanUsage
+from cabildo.workspace import plan, xdgdirs
+from cabildo.workspace.app import fmt_plan, plan_style
+from cabildo.workspace.plan import Limit, PlanUsage
 
 REPLY = {
     "five_hour": {"utilization": 18.0, "resets_at": "2026-10-25T20:10:00.041540+00:00"},
@@ -290,7 +290,7 @@ def test_a_newer_format_is_shown_but_never_fetched_over(monkeypatch):
     raw = json.loads(path.read_text())
     raw["format"] = plan.FORMAT + 1
     path.write_text(json.dumps(raw))
-    got = plan.shared(not_before=time.time() + 1)  # stale, but a newer sessionmux owns it
+    got = plan.shared(not_before=time.time() + 1)  # stale, but a newer workspace owns it
     assert len(calls) == 1 and got and got.usage.five_hour
     assert got.usage.five_hour.percent == 20.0
     assert json.loads(path.read_text())["format"] == plan.FORMAT + 1

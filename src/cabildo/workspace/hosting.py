@@ -21,7 +21,7 @@ from textual.geometry import Offset
 from textual.message import Message
 from textual_tty import Terminal
 
-from cabildo.sessionmux.agents import title_name
+from cabildo.workspace.agents import title_name
 
 
 @dataclass(frozen=True)

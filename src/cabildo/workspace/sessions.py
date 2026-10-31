@@ -2,7 +2,7 @@
 
 Pure stdlib. Models a session transcript and the sidecar metadata (label,
 group, tags) we keep apart from Claude's own files, in the XDG data directory
-(~/.local/share/sessionmux/), with the trash.
+(~/.local/share/workspace/), with the trash.
 """
 
 from __future__ import annotations
@@ -20,9 +20,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from cabildo.sessionmux import notes, rooms, xdgdirs
-from cabildo.sessionmux.notes import Note
-from cabildo.sessionmux.rooms import NO_ROOMS, Rooms
+from cabildo.workspace import notes, rooms, xdgdirs
+from cabildo.workspace.notes import Note
+from cabildo.workspace.rooms import NO_ROOMS, Rooms
 
 # --- paths -----------------------------------------------------------------
 
@@ -95,7 +95,7 @@ def launch_dir(s: Session) -> str | None:
 
 
 def data_dir() -> Path:
-    """Our own files: $XDG_DATA_HOME/sessionmux (default ~/.local/share)."""
+    """Our own files: $XDG_DATA_HOME/workspace (default ~/.local/share)."""
     return xdgdirs.data_home() / xdgdirs.APP
 
 

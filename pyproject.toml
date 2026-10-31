@@ -32,7 +32,7 @@ dependencies = [
     # the imports, not before.
     "mcp>=1.2,<2",
     "zeroconf>=0.130,<1",
-    # the session switcher (cabildo.sessionmux) uses private APIs of both: pinned
+    # the session switcher (cabildo.workspace) uses private APIs of both: pinned
     "textual==8.2.8",
     "textual-tty==0.4.0",
     "playwright>=1.50,<2",
@@ -173,8 +173,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # moved in from sessionmux as-is; drop these while integrating it
-"src/cabildo/sessionmux/*" = ["RUF012", "S606"]
-"tests/sessionmux/*" = ["ASYNC109", "PLW0108", "N802", "S103"]
+"src/cabildo/workspace/*" = ["RUF012", "S606"]
+"tests/workspace/*" = ["ASYNC109", "PLW0108", "N802", "S103"]
 "tests/*" = [
     "S101",    # asserts are the point of tests
     "PLR2004", # literal expectations in asserts are clearer than named constants
@@ -194,7 +194,7 @@ known-first-party = ["cabildo"]
 [tool.pyright]
 include = ["src", "tests"]
 # ported sessionmux tests: 29 Optional-access errors; drop this while integrating them
-ignore = ["tests/sessionmux"]
+ignore = ["tests/workspace"]
 extraPaths = ["src"]
 pythonVersion = "3.11"
 # `standard` is the strictest mode cabildo is clean under: it leans on sqlite3.Row dynamic

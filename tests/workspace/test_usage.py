@@ -8,8 +8,8 @@ import time
 
 import pytest
 
-from cabildo.sessionmux import usage
-from cabildo.sessionmux.usage import Proc, Sample
+from cabildo.workspace import usage
+from cabildo.workspace.usage import Proc, Sample
 
 pytestmark = pytest.mark.skipif(not usage.available(), reason="needs Linux /proc")
 T = usage.TICKS

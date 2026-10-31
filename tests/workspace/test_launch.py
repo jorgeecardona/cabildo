@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from cabildo.sessionmux import launch
-from cabildo.sessionmux.launch import Config, ConfigError, Launch
+from cabildo.workspace import launch
+from cabildo.workspace.launch import Config, ConfigError, Launch
 
 CONFIG = """
 [launch]
@@ -37,7 +37,7 @@ def config_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def write(home: Path, text: str) -> None:
-    path = home / "sessionmux" / "config.toml"
+    path = home / "workspace" / "config.toml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
 

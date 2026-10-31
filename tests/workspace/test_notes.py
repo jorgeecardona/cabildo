@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from cabildo import store
-from cabildo.sessionmux import notes, sessions
-from cabildo.sessionmux.app import SwitcherApp
-from cabildo.sessionmux.notes import Note
+from cabildo.workspace import notes, sessions
+from cabildo.workspace.app import SwitcherApp
+from cabildo.workspace.notes import Note
 
 
 def test_split_trims_and_drops_blank_parts() -> None:

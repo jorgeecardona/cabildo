@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from cabildo.sessionmux import state, xdgdirs
-from cabildo.sessionmux.sessions import Filter
-from cabildo.sessionmux.state import OpenState
+from cabildo.workspace import state, xdgdirs
+from cabildo.workspace.sessions import Filter
+from cabildo.workspace.state import OpenState
 
 
 @pytest.mark.parametrize(
@@ -44,9 +44,7 @@ def test_save_then_load(state_home: Path) -> None:
     )
     state.save(saved)
     assert state.load("/work/proj") == saved
-    assert state.state_path("/work/proj") == (
-        state_home / "sessionmux" / "open" / "-work-proj.json"
-    )
+    assert state.state_path("/work/proj") == (state_home / "workspace" / "open" / "-work-proj.json")
 
 
 def test_new_directories_are_private_and_existing_ones_keep_their_mode(state_home: Path) -> None:
@@ -58,7 +56,7 @@ def test_new_directories_are_private_and_existing_ones_keep_their_mode(state_hom
         return stat.S_IMODE(p.stat().st_mode)
 
     assert mode(state_home) == 0o755
-    assert mode(state_home / "sessionmux") == mode(state_home / "sessionmux" / "open") == 0o700
+    assert mode(state_home / "workspace") == mode(state_home / "workspace" / "open") == 0o700
 
 
 def test_nothing_saved_loads_as_empty() -> None:

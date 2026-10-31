@@ -15,7 +15,7 @@ import subprocess
 import time
 from dataclasses import asdict, dataclass
 
-from cabildo.sessionmux import xdgdirs
+from cabildo.workspace import xdgdirs
 
 
 @dataclass(frozen=True)
@@ -103,7 +103,7 @@ class Snapshot:
 
 
 def shared_live_agents(not_before: float) -> Snapshot:
-    """The last `claude agents` snapshot of any sessionmux of this user, or a new one.
+    """The last `claude agents` snapshot of any workspace of this user, or a new one.
 
     A snapshot taken before ``not_before`` (epoch seconds) is too old: then this
     process runs `claude agents` and shares the result. A lock file makes the other

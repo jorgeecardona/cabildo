@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from cabildo import store
-from cabildo.sessionmux import rooms
-from cabildo.sessionmux.rooms import NO_ROOMS, Rooms
+from cabildo.workspace import rooms
+from cabildo.workspace.rooms import NO_ROOMS, Rooms
 
 
 def register(session_id: str, project_name: str, *topics: str) -> None:
@@ -49,8 +49,8 @@ def test_label_shows_each_topic_with_a_hash_and_nothing_for_no_rooms() -> None:
 def test_the_panel_row_shows_the_rooms_on_its_second_line(transcript) -> None:
     from lines import user
 
-    from cabildo.sessionmux import sessions
-    from cabildo.sessionmux.app import SwitcherApp
+    from cabildo.workspace import sessions
+    from cabildo.workspace.app import SwitcherApp
 
     transcript("s1", user("Fix the login bug"))
     register("s1", "cabildo", "general", "proj:cabildo")
@@ -67,8 +67,8 @@ def test_the_panel_row_shows_the_rooms_on_its_second_line(transcript) -> None:
 def test_the_panel_row_without_a_bus_entry_has_no_rooms_text(transcript) -> None:
     from lines import user
 
-    from cabildo.sessionmux import sessions
-    from cabildo.sessionmux.app import SwitcherApp
+    from cabildo.workspace import sessions
+    from cabildo.workspace.app import SwitcherApp
 
     transcript("s1", user("Fix the login bug"))
     [row] = sessions.build_rows(None)
@@ -80,8 +80,8 @@ def test_the_second_line_never_exceeds_the_width_and_keeps_the_rooms(transcript)
 
     from lines import user
 
-    from cabildo.sessionmux import sessions
-    from cabildo.sessionmux.app import SwitcherApp
+    from cabildo.workspace import sessions
+    from cabildo.workspace.app import SwitcherApp
 
     transcript("s1", user("Fix the login bug", branch="main"))
     [row] = sessions.build_rows(None)
@@ -96,7 +96,7 @@ def test_the_second_line_never_exceeds_the_width_and_keeps_the_rooms(transcript)
 
 
 def test_short_path_with_no_room_returns_at_most_an_ellipsis() -> None:
-    from cabildo.sessionmux.app import short_path
+    from cabildo.workspace.app import short_path
 
     assert short_path("/a/long/path", 1) == "…"
     assert short_path("/a/long/path", 0) == ""

@@ -9,8 +9,8 @@ import time
 
 import pytest
 
-from cabildo.sessionmux import agents
-from cabildo.sessionmux.agents import AgentState
+from cabildo.workspace import agents
+from cabildo.workspace.agents import AgentState
 
 
 def agent(

@@ -1,6 +1,6 @@
-"""How sessionmux starts Claude: model, effort, permission mode and other launch flags.
+"""How the workspace starts Claude: model, effort, permission mode and other launch flags.
 
-Read from ``$XDG_CONFIG_HOME/sessionmux/config.toml`` (default ``~/.config``). A ``[launch]``
+Read from ``$XDG_CONFIG_HOME/workspace/config.toml`` (default ``~/.config``). A ``[launch]``
 table sets the default; ``[groups.<name>.launch]`` overrides it for the conversations of one
 group. A missing file means plain ``claude``.
 
@@ -28,11 +28,11 @@ import tomllib
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 
-from cabildo.sessionmux.xdgdirs import APP, config_home
+from cabildo.workspace.xdgdirs import APP, config_home
 
 
 class ConfigError(Exception):
-    """The config file cannot be read or has a key or value sessionmux does not know."""
+    """The config file cannot be read or has a key or value the workspace does not know."""
 
 
 @dataclass(frozen=True)
@@ -97,7 +97,7 @@ class Config:
         return own.over(self.launch) if own else self.launch
 
     def with_model(self, model: str) -> Config:
-        """``sessionmux --model``: this model for every conversation, groups included."""
+        """``cabildo workspace --model``: this model for every conversation, groups included."""
         if not model:
             return self
         return Config(

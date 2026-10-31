@@ -13,8 +13,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from cabildo.sessionmux.sessions import NO_FILTER, Filter, encode_cwd
-from cabildo.sessionmux.xdgdirs import APP, make_dirs, state_home
+from cabildo.workspace.sessions import NO_FILTER, Filter, encode_cwd
+from cabildo.workspace.xdgdirs import APP, make_dirs, state_home
 
 
 @dataclass(frozen=True)

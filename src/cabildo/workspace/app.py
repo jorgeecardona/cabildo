@@ -1,11 +1,11 @@
-"""sessionmux — a two-panel Claude Code session switcher in one terminal.
+"""The cabildo workspace — Claude Code sessions and the cabildo bus in one terminal.
 
 Left: the Claude session you work in, running inside this app. Right: the
 conversations of one working directory (`a`: with its subfolders, then every directory). Every Claude
 you open keeps running while hidden, so switching back is instant. `q` in the
 list closes them all; the next start (also after a crash) has them open again.
 
-Run:   sessionmux [working-dir]      (default: current directory)
+Run:   cabildo [working-dir]      (default: current directory)
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from textual.widgets import ContentSwitcher, DataTable, Input, Label, Static
 from textual.worker import get_current_worker
 
 from cabildo import __version__, store
-from cabildo.sessionmux import (
+from cabildo.workspace import (
     agents,
     intents,
     launch,
@@ -44,14 +44,14 @@ from cabildo.sessionmux import (
     state,
     usage,
 )
-from cabildo.sessionmux.agents import AgentState
-from cabildo.sessionmux.hosting import ClaudePane, Target
-from cabildo.sessionmux.launch import Config
-from cabildo.sessionmux.plan import PlanUsage
-from cabildo.sessionmux.sessions import Filter, Meta, Row, Tokens
-from cabildo.sessionmux.state import OpenState
-from cabildo.sessionmux.usage import Use, fmt_count, fmt_cpu, fmt_mb
-from cabildo.sessionmux.xdgdirs import APP, make_dirs, state_home
+from cabildo.workspace.agents import AgentState
+from cabildo.workspace.hosting import ClaudePane, Target
+from cabildo.workspace.launch import Config
+from cabildo.workspace.plan import PlanUsage
+from cabildo.workspace.sessions import Filter, Meta, Row, Tokens
+from cabildo.workspace.state import OpenState
+from cabildo.workspace.usage import Use, fmt_count, fmt_cpu, fmt_mb
+from cabildo.workspace.xdgdirs import APP, make_dirs, state_home
 
 CLAUDE = "claude"  # the CLI the panes run; tests point this at a fake
 
@@ -64,7 +64,7 @@ CHROME = MARK_WIDTH + USE_WIDTH + 4 * 2 + 2 + 2 + BORDER  # cell padding of 4 co
 # scrollbar
 PLACEHOLDER = "placeholder"
 POLL_SECONDS = 10  # `claude agents` costs ~0.4 s CPU and ~170 MB per call; also run on events
-SHARE_SECONDS = 5  # a timed poll reuses another sessionmux's snapshot up to this old
+SHARE_SECONDS = 5  # a timed poll reuses another workspace's snapshot up to this old
 NEW_POLL_SECONDS = 3  # a new Claude shows in `claude agents` about 2 s after it starts
 # CPU / wakeups / memory of each session (usage.py), sampled only while someone can see it
 SAMPLE_SECONDS = 10  # while the list shows
@@ -162,7 +162,7 @@ Scope = Literal["here", "subfolders", "all"]
 SCOPES: tuple[Scope, ...] = ("here", "subfolders", "all")  # the order `a` goes through
 SCOPE_NAMES = {"here": "{proj}", "subfolders": "{proj}/…", "all": "all directories"}
 SCOPE_HEADERS = {"here": "Session", "subfolders": "Session · subfolders", "all": "Session · all"}
-# the plan usage is fetched once per minute of the clock; every sessionmux reads the shared
+# the plan usage is fetched once per minute of the clock; every workspace reads the shared
 # sample on the same wall-clock beats (:00, :15, :30, :45), so they all change at :00
 PLAN_SECONDS = 60.0
 PLAN_POLL_SECONDS = 15.0
@@ -355,7 +355,7 @@ class EditScreen(ModalScreen[str | None]):
 
 
 KEYS = f"""\
- sessionmux {__version__}
+ workspace {__version__}
 
  Anywhere (also inside Claude)
    Alt-s        show the list and focus it
@@ -970,7 +970,7 @@ class SwitcherApp(App[None]):
         """Poll `claude agents` in a worker thread, one poll at a time (each costs ~0.4 s
         CPU and ~170 MB). Asked while one runs, it polls once more after it: the running
         poll may have started before what asked for it. So snapshots arrive in order.
-        ``max_age``: a snapshot another sessionmux took up to this many seconds ago is
+        ``max_age``: a snapshot another workspace took up to this many seconds ago is
         good enough (timed polls); 0 asks for one taken from now on (events).
         """
         if self._polling:
@@ -1107,7 +1107,7 @@ class SwitcherApp(App[None]):
         """
         others = [u for pid, u in self.uses.items() if pid != os.getpid()]
         total = Use.total(others) if others else None
-        return fmt_use("all running", total), fmt_use("sessionmux", self.uses.get(os.getpid()))
+        return fmt_use("all running", total), fmt_use("workspace", self.uses.get(os.getpid()))
 
     def _root_label(self, pid: int) -> str:
         """Which session a sampled tree is, and where it runs."""
@@ -1151,7 +1151,7 @@ class SwitcherApp(App[None]):
                     (Text("   (ended in between)", style="dim"), fmt_cpu(u.ended_cpu), "", "")
                 )
         if me in self.uses:
-            lines.append(line(Text("sessionmux (this app)", style="bold"), self.uses[me]))
+            lines.append(line(Text("workspace (this app)", style="bold"), self.uses[me]))
         if self.uses:
             lines.append(line(Text("Total", style="bold"), Use.total(list(self.uses.values()))))
         else:
@@ -1669,7 +1669,7 @@ def _log_crash(exc: BaseException) -> None:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="cabildo sessionmux",
+        prog="cabildo workspace",
         description="Two-panel, keyboard-only switcher for Claude Code sessions.",
     )
     parser.add_argument("working_dir", nargs="?", help="default: the current directory")
@@ -1705,7 +1705,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = launch.load().with_model(args.model)
     except launch.ConfigError as exc:
-        print(f"sessionmux: {exc}", file=sys.stderr)
+        print(f"workspace: {exc}", file=sys.stderr)
         return 2
     os.chdir(cwd)  # every Claude starts here: --resume looks up the transcript by cwd
     try:

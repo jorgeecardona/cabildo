@@ -15,12 +15,12 @@ from textual.coordinate import Coordinate
 from textual.widgets import DataTable
 from textual_tty import Terminal
 
-import cabildo.sessionmux.app as app_module
-from cabildo.sessionmux import agents, sessions, state
-from cabildo.sessionmux.app import SwitcherApp
-from cabildo.sessionmux.hosting import ClaudePane
-from cabildo.sessionmux.launch import Config, Launch
-from cabildo.sessionmux.state import OpenState
+import cabildo.workspace.app as app_module
+from cabildo.workspace import agents, sessions, state
+from cabildo.workspace.app import SwitcherApp
+from cabildo.workspace.hosting import ClaudePane
+from cabildo.workspace.launch import Config, Launch
+from cabildo.workspace.state import OpenState
 
 
 @pytest.fixture
@@ -301,7 +301,7 @@ def test_focus_is_visible(three, monkeypatch) -> None:
 
 
 def test_question_mark_shows_the_keys_and_any_key_closes_them(three, monkeypatch) -> None:
-    from cabildo.sessionmux.app import KeysScreen
+    from cabildo.workspace.app import KeysScreen
 
     seen: list = []
 
@@ -320,7 +320,7 @@ def test_question_mark_shows_the_keys_and_any_key_closes_them(three, monkeypatch
 def test_the_real_cursor_follows_claudes_cursor(three, monkeypatch) -> None:
     from textual.geometry import Offset
 
-    from cabildo.sessionmux.app import KeysScreen
+    from cabildo.workspace.app import KeysScreen
 
     seen: list = []
 
@@ -820,7 +820,7 @@ def test_a_running_conversation_shows_its_cpu_and_memory(three, monkeypatch) -> 
     assert in_uses and cpu in ("0%", "<1%") and mem_ok  # the fake Claude is an idle cat
     assert idle_row == ""  # nothing runs for that row
     # one conversation runs, so "all running" would repeat "this one": left out
-    assert [x.split()[0] for x in line if x] == ["sessionmux"]
+    assert [x.split()[0] for x in line if x] == ["workspace"]
     line = [x for x in line if x]
     header, this = this
     assert header.split() == ["cpu", "mem"] and this.startswith("this one ")
@@ -830,7 +830,7 @@ def test_a_running_conversation_shows_its_cpu_and_memory(three, monkeypatch) -> 
 
 
 def test_t_shows_each_session_and_its_processes(three, monkeypatch) -> None:
-    from cabildo.sessionmux.app import TopScreen
+    from cabildo.workspace.app import TopScreen
 
     seen: list = []
 
@@ -852,7 +852,7 @@ def test_t_shows_each_session_and_its_processes(three, monkeypatch) -> None:
     labels, pid, still_open = seen
     assert labels[0] == "▶ session s0"  # the shown conversation
     assert labels[1].strip() == f"cat {pid}"  # the fake Claude's process
-    assert labels[-2:] == ["sessionmux (this app)", "Total"]
+    assert labels[-2:] == ["workspace (this app)", "Total"]
     assert not still_open
 
 
@@ -1004,7 +1004,7 @@ def test_all_running_shows_when_more_than_the_shown_conversation_runs(three, mon
         seen.extend(x.split()[0] for x in groups(app)[-1][1:] if x)
 
     drive(monkeypatch, scenario)
-    assert seen == ["this", "all", "sessionmux"]
+    assert seen == ["this", "all", "workspace"]
 
 
 def test_a_hidden_pane_does_not_paint(three, monkeypatch) -> None:

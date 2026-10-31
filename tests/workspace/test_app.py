@@ -9,9 +9,9 @@ from lines import PROJECT, ai_title, assistant, continued_in, user
 from pilot import background, drive, settle, wait_until
 from textual.widgets import DataTable, Input, Static
 
-from cabildo.sessionmux import agents, sessions
-from cabildo.sessionmux.agents import AgentState
-from cabildo.sessionmux.app import CHROME, MIN_WIDTH, LiveState, SwitcherApp, short_path
+from cabildo.workspace import agents, sessions
+from cabildo.workspace.agents import AgentState
+from cabildo.workspace.app import CHROME, MIN_WIDTH, LiveState, SwitcherApp, short_path
 
 
 def test_short_path_uses_tilde_and_keeps_the_end(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -266,8 +266,8 @@ def test_a_bad_filter_changes_nothing(transcript, monkeypatch) -> None:
 
 
 def test_the_filter_comes_back_and_the_command_line_replaces_it(transcript, monkeypatch) -> None:
-    from cabildo.sessionmux import state
-    from cabildo.sessionmux.sessions import Filter
+    from cabildo.workspace import state
+    from cabildo.workspace.sessions import Filter
 
     grouped(transcript)
     state.save(state.OpenState(cwd=PROJECT, filter=Filter(groups=("work",))))
@@ -279,7 +279,7 @@ def test_the_filter_comes_back_and_the_command_line_replaces_it(transcript, monk
 
 
 def test_command_line_flags() -> None:
-    from cabildo.sessionmux.app import parse_args
+    from cabildo.workspace.app import parse_args
 
     args = parse_args(["~/x", "-a", "-G", "work", "--group", "home", "-t", "urgent"])
     assert (args.working_dir, args.all, args.group, args.tag) == (
@@ -295,7 +295,7 @@ def test_command_line_flags() -> None:
 
 @pytest.mark.parametrize("flags", [["-G", ""], ["-t", "  "]])
 def test_an_empty_group_or_tag_is_refused(flags: list[str]) -> None:
-    from cabildo.sessionmux.app import parse_args
+    from cabildo.workspace.app import parse_args
 
     with pytest.raises(SystemExit):
         parse_args(flags)
@@ -315,7 +315,7 @@ def notes(app: SwitcherApp) -> list[str]:
 
 
 def test_c_d_asks_to_delete_and_needs_yes(transcript, monkeypatch) -> None:
-    from cabildo.sessionmux.app import EditScreen
+    from cabildo.workspace.app import EditScreen
 
     path = transcript("s1", user("q"), assistant("a"))
     seen: list = []
@@ -400,7 +400,7 @@ def test_delete_stops_when_claude_agents_fails(transcript, monkeypatch) -> None:
 def test_a_second_delete_waits_for_the_first(transcript, monkeypatch) -> None:
     import threading
 
-    from cabildo.sessionmux.app import EditScreen
+    from cabildo.workspace.app import EditScreen
 
     transcript("s1", user("q"))
     release = threading.Event()
@@ -656,8 +656,8 @@ def test_a_scan_that_ends_after_quit_changes_nothing(transcript, monkeypatch) ->
 
 
 def test_the_context_line_has_no_model_part_when_the_model_is_unknown() -> None:
-    from cabildo.sessionmux.app import fmt_context, grid
-    from cabildo.sessionmux.sessions import Tokens
+    from cabildo.workspace.app import fmt_context, grid
+    from cabildo.workspace.sessions import Tokens
 
     assert fmt_context(Tokens(53_000, 53_000, 2000, model="")) == grid("context", "ctx 53k", "")
     assert fmt_context(Tokens(53_000, 53_000, 2000, model="claude-opus-5-5")) == (
@@ -666,8 +666,8 @@ def test_the_context_line_has_no_model_part_when_the_model_is_unknown() -> None:
 
 
 def test_the_tokens_line_shows_cache_reads_apart_from_input() -> None:
-    from cabildo.sessionmux.app import fmt_tokens
-    from cabildo.sessionmux.sessions import Tokens
+    from cabildo.workspace.app import fmt_tokens
+    from cabildo.workspace.sessions import Tokens
 
     t = Tokens(224_000, 31_200_000, 139_000, cached=30_000_000)
     assert fmt_tokens(t).split() == ["tokens", "in", "1.2M", "out", "139k", "cache", "30.0M"]
@@ -675,16 +675,16 @@ def test_the_tokens_line_shows_cache_reads_apart_from_input() -> None:
 
 
 def test_the_effort_line_is_empty_when_the_effort_is_unknown() -> None:
-    from cabildo.sessionmux.app import fmt_effort
-    from cabildo.sessionmux.sessions import Tokens
+    from cabildo.workspace.app import fmt_effort
+    from cabildo.workspace.sessions import Tokens
 
     assert fmt_effort(Tokens(1, 1, 1, effort="xhigh")).split() == ["effort", "xhigh"]
     assert fmt_effort(Tokens(1, 1, 1)) == ""
 
 
 def test_the_context_line_turns_amber_then_red_as_the_window_fills() -> None:
-    from cabildo.sessionmux.app import context_style
-    from cabildo.sessionmux.sessions import Tokens
+    from cabildo.workspace.app import context_style
+    from cabildo.workspace.sessions import Tokens
 
     def at(used: int, model: str = "claude-opus-5-5") -> str:
         return context_style(Tokens(used, used, 0, model))
@@ -727,4 +727,4 @@ def test_the_keys_screen_shows_the_version(transcript, monkeypatch) -> None:
         seen.append(str(app.screen.query_one("#keys", Static).render()))
 
     drive(monkeypatch, scenario)
-    assert f"sessionmux {__version__}" in seen[0]
+    assert f"workspace {__version__}" in seen[0]

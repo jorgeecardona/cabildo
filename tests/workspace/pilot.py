@@ -11,9 +11,9 @@ import pytest
 from lines import PROJECT
 from textual.pilot import Pilot
 
-from cabildo.sessionmux import agents
-from cabildo.sessionmux.agents import AgentState
-from cabildo.sessionmux.app import SwitcherApp
+from cabildo.workspace import agents
+from cabildo.workspace.agents import AgentState
+from cabildo.workspace.app import SwitcherApp
 
 Scenario = Callable[[SwitcherApp, Pilot], Awaitable[None]]
 

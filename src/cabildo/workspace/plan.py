@@ -5,7 +5,7 @@ dir. The same endpoint Claude Code's ``/usage`` reads returns how much of the 5-
 the 7-day limit is used. It is not a documented API: any failure returns None and the
 mode line leaves the row out. An API-key login has no ``claudeAiOauth`` entry, so no row.
 
-Every running sessionmux on the same Claude config dir (the same account) shares one fetch
+Every running workspace on the same Claude config dir (the same account) shares one fetch
 and one pace through a file in the runtime directory (``shared``), so they ask the API once
 and show the same numbers. Another config dir, another account, has its own file.
 """
@@ -24,7 +24,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
 
-from cabildo.sessionmux import sessions, xdgdirs
+from cabildo.workspace import sessions, xdgdirs
 
 URL = "https://api.anthropic.com/api/oauth/usage"
 BETA = "oauth-2025-04-20"
@@ -233,7 +233,7 @@ BACKOFF_MAX = 600.0
 
 
 # The shared file's format. Readers take the keys they know and ignore the rest, so adding a
-# key does not change it; bump it only when a key changes meaning or goes away. A sessionmux
+# key does not change it; bump it only when a key changes meaning or goes away. A workspace
 # never writes over a newer format: it shows that file and leaves fetching to the newer one.
 FORMAT = 1
 
@@ -250,7 +250,7 @@ class Stored:
 
 @dataclass(frozen=True)
 class Shared:
-    """What every sessionmux of this user shows: the usage, its pace, and when it was taken."""
+    """What every workspace of this user shows: the usage, its pace, and when it was taken."""
 
     usage: PlanUsage
     pace: PlanPace
@@ -258,14 +258,14 @@ class Shared:
 
 
 def _shown(stored: Stored) -> Shared:
-    """The pace is weighted as of the sample, not as of the read, so every sessionmux that
+    """The pace is weighted as of the sample, not as of the read, so every workspace that
     reads the same file shows the same numbers.
     """
     return Shared(stored.usage, pace(stored.history, stored.taken_at), stored.taken_at)
 
 
 def shared(not_before: float) -> Shared | None:
-    """The plan usage and pace of any sessionmux on this Claude config dir, or a new fetch.
+    """The plan usage and pace of any workspace on this Claude config dir, or a new fetch.
 
     A sample taken before ``not_before`` (epoch seconds) is too old: this process then
     fetches, adds the sample to the shared history, and writes it. A lock file makes the

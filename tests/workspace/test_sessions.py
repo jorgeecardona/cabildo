@@ -17,8 +17,8 @@ from lines import (
     user,
 )
 
-from cabildo.sessionmux import sessions
-from cabildo.sessionmux.sessions import Filter, Meta, Tokens
+from cabildo.workspace import sessions
+from cabildo.workspace.sessions import Filter, Meta, Tokens
 
 
 def test_encode_cwd_replaces_every_non_alphanumeric() -> None:

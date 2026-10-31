@@ -2343,11 +2343,11 @@ def cmd_doctor(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    # bare `cabildo` and `cabildo sessionmux ...` open the session switcher; textual loads only here
-    if not argv or argv[0] == "sessionmux":
-        from cabildo.sessionmux.app import main as sessionmux_main
+    # bare `cabildo` and `cabildo workspace ...` open the workspace; textual loads only here
+    if not argv or argv[0] == "workspace":
+        from cabildo.workspace.app import main as workspace_main
 
-        return sessionmux_main(argv[1:])
+        return workspace_main(argv[1:])
     p = argparse.ArgumentParser(prog="cabildo", description=(__doc__ or "").split("\n")[0])
     # `--version` fires during parsing and exits before the required-subcommand
     # check, so `cabildo --version` works without naming a subcommand.

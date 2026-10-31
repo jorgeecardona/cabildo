@@ -4,7 +4,7 @@
 - state ($XDG_STATE_HOME, default ~/.local/state): the open conversations, for the next start.
 - config ($XDG_CONFIG_HOME, default ~/.config): how Claude is started (read only).
 - runtime ($XDG_RUNTIME_DIR, else the state directory): the `claude agents` snapshot
-  that every running sessionmux shares.
+  that every running workspace shares.
 
 A value that is not an absolute path is invalid and ignored (the spec). Missing
 directories are made with mode 0700; existing ones keep their mode.
@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-APP = "sessionmux"
+APP = "workspace"
 
 
 def _base(var: str, default: str) -> Path:

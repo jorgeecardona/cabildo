@@ -6,9 +6,9 @@ import json
 import stat
 from pathlib import Path
 
-from cabildo.sessionmux import legacy, sessions, state
-from cabildo.sessionmux.sessions import Meta
-from cabildo.sessionmux.state import OpenState
+from cabildo.workspace import legacy, sessions, state
+from cabildo.workspace.sessions import Meta
+from cabildo.workspace.state import OpenState
 
 
 def claude_place() -> legacy.OldPlace:
@@ -42,8 +42,8 @@ def test_files_in_claudes_config_dir_move_to_the_data_dir(claude_home, data_home
     done = legacy.move_old_files()
 
     assert done == [
-        f"labels, groups and tags -> {data_home}/sessionmux/meta.json",
-        f"trash (2 conversations) -> {data_home}/sessionmux/trash",
+        f"labels, groups and tags -> {data_home}/workspace/meta.json",
+        f"trash (2 conversations) -> {data_home}/workspace/trash",
     ]
     assert sessions.load_meta() == {"s1": Meta(label="mine")}
     assert sorted(p.name for p in claude_home.iterdir()) == []  # nothing left behind
@@ -52,7 +52,7 @@ def test_files_in_claudes_config_dir_move_to_the_data_dir(claude_home, data_home
     for f in ["cd10c063.jsonl", "201ce8d0.jsonl"]:
         assert (moved / f).exists() and f"{moved / f} -> /claude/projects/-p/{f}" in restore
     assert str(place.trash) not in restore
-    assert stat.S_IMODE((data_home / "sessionmux").stat().st_mode) == 0o700
+    assert stat.S_IMODE((data_home / "workspace").stat().st_mode) == 0o700
     assert legacy.move_old_files() == []  # once
 
 
@@ -71,9 +71,9 @@ def test_the_old_app_name_directories_move(data_home, state_home) -> None:
     done = legacy.move_old_files()
 
     assert done == [
-        f"labels, groups and tags -> {data_home}/sessionmux/meta.json",
-        f"trash (1 conversation) -> {data_home}/sessionmux/trash",
-        f"open conversations (1 directory) -> {state_home}/sessionmux/open",
+        f"labels, groups and tags -> {data_home}/workspace/meta.json",
+        f"trash (1 conversation) -> {data_home}/workspace/trash",
+        f"open conversations (1 directory) -> {state_home}/workspace/open",
     ]
     assert sessions.load_meta() == {"s2": Meta(group="g")}
     assert state.load("/work/proj") == OpenState(cwd="/work/proj", open=("a",), shown="a")

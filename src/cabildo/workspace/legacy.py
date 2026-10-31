@@ -18,7 +18,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from cabildo.sessionmux import sessions, state, xdgdirs
+from cabildo.workspace import sessions, state, xdgdirs
 
 OLD_NAME = "claude-sessions"
 

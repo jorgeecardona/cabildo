@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from cabildo import store
-from cabildo.sessionmux import app, intents
-from cabildo.sessionmux.intents import Intent
+from cabildo.workspace import app, intents
+from cabildo.workspace.intents import Intent
 
 NOW = 1_000_000.0
 

@@ -4,6 +4,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+### Changed
+
+- **`sessionmux` is now the cabildo workspace**: the package is `cabildo.workspace`, the app's
+  version line and process row say `workspace`, and `cabildo workspace` opens it. The folders for
+  your labels, groups, tags and launch config are now named `workspace` (under
+  `~/.local/share`, `~/.local/state` and `~/.config`). There is no alias and no migration: move
+  the old `sessionmux` folders by hand if you want to keep that data.
+
 ### Added
 
 - **Push intents in the panel**: the left panel lists the push queue (running, then pending) and
@@ -143,6 +151,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [0.1.15] - 2026-09-14
 
+### Changed
+
+- **`sessionmux` is now the cabildo workspace**: the package is `cabildo.workspace`, the app's
+  version line and process row say `workspace`, and `cabildo workspace` opens it. The folders for
+  your labels, groups, tags and launch config are now named `workspace` (under
+  `~/.local/share`, `~/.local/state` and `~/.config`). There is no alias and no migration: move
+  the old `sessionmux` folders by hand if you want to keep that data.
+
 ### Added
 
 - `file:` claim enforcement for Codex `apply_patch` edits. The guard maps every
@@ -153,6 +169,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   other's file leases, not just share their visibility.
 
 ## [0.1.14] - 2026-09-14
+
+### Changed
+
+- **`sessionmux` is now the cabildo workspace**: the package is `cabildo.workspace`, the app's
+  version line and process row say `workspace`, and `cabildo workspace` opens it. The folders for
+  your labels, groups, tags and launch config are now named `workspace` (under
+  `~/.local/share`, `~/.local/state` and `~/.config`). There is no alias and no migration: move
+  the old `sessionmux` folders by hand if you want to keep that data.
 
 ### Added
 
@@ -202,6 +226,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [0.1.13] - 2026-09-13
 
+### Changed
+
+- **`sessionmux` is now the cabildo workspace**: the package is `cabildo.workspace`, the app's
+  version line and process row say `workspace`, and `cabildo workspace` opens it. The folders for
+  your labels, groups, tags and launch config are now named `workspace` (under
+  `~/.local/share`, `~/.local/state` and `~/.config`). There is no alias and no migration: move
+  the old `sessionmux` folders by hand if you want to keep that data.
+
 ### Added
 
 - **Codex delivery + cooperative coordination (#10)** — `cabildo codex` now also
@@ -223,6 +255,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   Codex requires trusting hooks (`/hooks`) before they run. Live Codex behavior
   (process topology, real deny) is not auto-tested — needs Codex installed.
 
+### Changed
+
+- **`sessionmux` is now the cabildo workspace**: the package is `cabildo.workspace`, the app's
+  version line and process row say `workspace`, and `cabildo workspace` opens it. The folders for
+  your labels, groups, tags and launch config are now named `workspace` (under
+  `~/.local/share`, `~/.local/state` and `~/.config`). There is no alias and no migration: move
+  the old `sessionmux` folders by hand if you want to keep that data.
+
 ### Added
 
 - **Codex MCP setup (#9)** — `cabildo codex` wires Codex onto the same local bus
@@ -241,6 +281,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   channel + DM both directions, read receipts. Event-driven delivery and tool
   guards for Codex remain #10.
 
+### Changed
+
+- **`sessionmux` is now the cabildo workspace**: the package is `cabildo.workspace`, the app's
+  version line and process row say `workspace`, and `cabildo workspace` opens it. The folders for
+  your labels, groups, tags and launch config are now named `workspace` (under
+  `~/.local/share`, `~/.local/state` and `~/.config`). There is no alias and no migration: move
+  the old `sessionmux` folders by hand if you want to keep that data.
+
 ### Added
 
 - **Agent instructions (#5)** — root `AGENTS.md` (Overview/Build/Test/Style/Gotchas)
@@ -254,6 +302,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   over 0.1.10 beyond the docs above.
 
 ## [0.1.10] - 2026-09-13
+
+### Changed
+
+- **`sessionmux` is now the cabildo workspace**: the package is `cabildo.workspace`, the app's
+  version line and process row say `workspace`, and `cabildo workspace` opens it. The folders for
+  your labels, groups, tags and launch config are now named `workspace` (under
+  `~/.local/share`, `~/.local/state` and `~/.config`). There is no alias and no migration: move
+  the old `sessionmux` folders by hand if you want to keep that data.
 
 ### Added
 
@@ -276,6 +332,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [0.1.9] - 2026-09-12
 
+### Changed
+
+- **`sessionmux` is now the cabildo workspace**: the package is `cabildo.workspace`, the app's
+  version line and process row say `workspace`, and `cabildo workspace` opens it. The folders for
+  your labels, groups, tags and launch config are now named `workspace` (under
+  `~/.local/share`, `~/.local/state` and `~/.config`). There is no alias and no migration: move
+  the old `sessionmux` folders by hand if you want to keep that data.
+
 ### Added
 
 - **macOS service install via launchd (#5)** — `cabildo service` gains a launchd
@@ -287,6 +351,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   `launchctl` + filesystem; not yet run on a real Mac.
 
 ## [0.1.8] - 2026-09-12
+
+### Changed
+
+- **`sessionmux` is now the cabildo workspace**: the package is `cabildo.workspace`, the app's
+  version line and process row say `workspace`, and `cabildo workspace` opens it. The folders for
+  your labels, groups, tags and launch config are now named `workspace` (under
+  `~/.local/share`, `~/.local/state` and `~/.config`). There is no alias and no migration: move
+  the old `sessionmux` folders by hand if you want to keep that data.
 
 ### Added
 
@@ -301,6 +373,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [0.1.7] - 2026-09-12
 
+### Changed
+
+- **`sessionmux` is now the cabildo workspace**: the package is `cabildo.workspace`, the app's
+  version line and process row say `workspace`, and `cabildo workspace` opens it. The folders for
+  your labels, groups, tags and launch config are now named `workspace` (under
+  `~/.local/share`, `~/.local/state` and `~/.config`). There is no alias and no migration: move
+  the old `sessionmux` folders by hand if you want to keep that data.
+
 ### Added
 
 - **macOS process identity (#2, #11)** — `context.py`'s `_ppid`/`_argv` gain a
@@ -314,6 +394,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [0.1.6] - 2026-09-12
 
+### Changed
+
+- **`sessionmux` is now the cabildo workspace**: the package is `cabildo.workspace`, the app's
+  version line and process row say `workspace`, and `cabildo workspace` opens it. The folders for
+  your labels, groups, tags and launch config are now named `workspace` (under
+  `~/.local/share`, `~/.local/state` and `~/.config`). There is no alias and no migration: move
+  the old `sessionmux` folders by hand if you want to keep that data.
+
 ### Added
 
 - **macOS desktop notifications (#4)** — `desktop.py` gains a darwin backend
@@ -325,6 +413,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   against mocked `osascript`/`terminal-notifier` output; not yet run on a real Mac.
 
 ## [0.1.5] - 2026-09-12
+
+### Changed
+
+- **`sessionmux` is now the cabildo workspace**: the package is `cabildo.workspace`, the app's
+  version line and process row say `workspace`, and `cabildo workspace` opens it. The folders for
+  your labels, groups, tags and launch config are now named `workspace` (under
+  `~/.local/share`, `~/.local/state` and `~/.config`). There is no alias and no migration: move
+  the old `sessionmux` folders by hand if you want to keep that data.
 
 ### Added
 
@@ -351,6 +447,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   regardless of path length. (#1)
 
 ## [0.1.3] - 2026-09-12
+
+### Changed
+
+- **`sessionmux` is now the cabildo workspace**: the package is `cabildo.workspace`, the app's
+  version line and process row say `workspace`, and `cabildo workspace` opens it. The folders for
+  your labels, groups, tags and launch config are now named `workspace` (under
+  `~/.local/share`, `~/.local/state` and `~/.config`). There is no alias and no migration: move
+  the old `sessionmux` folders by hand if you want to keep that data.
 
 ### Added
 
