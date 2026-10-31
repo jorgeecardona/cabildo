@@ -26,7 +26,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import actions, broker, desktop, lan, monitor, names, record, store
+from . import actions, broker, ci_watch, config, desktop, lan, monitor, names, record, store
 
 # A 'running' intent older than this means the daemon died holding it.
 STALE_AFTER = actions.GATE_TIMEOUT + 300
@@ -179,6 +179,42 @@ def handle(conn, intent: dict, ctx: actions.Ctx) -> None:
     store.finish_intent(conn, intent["id"], status=status, result=result)
     _log(f"■ #{intent['id']} {status}: {str(result.get('reason') or '')[:120]}")
     _report(conn, intent, status, result)
+    _start_ci_watch(intent, result)
+
+
+def _start_ci_watch(intent: dict, result: dict) -> None:
+    """After a verified push, report a failed GitLab pipeline to the requester on a thread."""
+    sha, url = result.get("sha"), result.get("remote_url")
+    if result.get("pushed") is not True or not sha or not url:
+        return
+    timeout = config.push_ci_watch(str(intent["params"].get("cwd") or "") or None)
+    if timeout <= 0:
+        return
+    threading.Thread(
+        target=_ci_watch_thread, args=(intent, str(url), str(sha), timeout), daemon=True
+    ).start()
+
+
+def _ci_watch_thread(intent: dict, url: str, sha: str, timeout: float) -> None:
+    try:
+        body = ci_watch.watch(url, sha, timeout=timeout)
+        if body is None:
+            return
+        conn = store.connect()
+        try:
+            store.post_message(
+                conn,
+                from_session=DAEMON_SESSION,
+                from_handle=DAEMON_HANDLE,
+                body=body,
+                to_session=intent["from_session"],
+                project=intent.get("project"),
+                urgent=True,
+            )
+        finally:
+            conn.close()
+    except Exception as e:  # a broken watch must not touch the daemon
+        _log(f"  (ci watch for {sha[:12]} failed: {type(e).__name__}: {e})")
 
 
 def _handle_on_thread(intent: dict, ctx: actions.Ctx) -> None:

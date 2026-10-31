@@ -510,6 +510,8 @@ def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         "pushed": True,
         "branch": branch,
         "head": sha[:12],
+        "sha": sha,
+        "remote_url": git(["remote", "get-url", remote], root)[1],
         "target": f"{remote}/{target}",
         "gate": gate_state,
         "verified": f"{remote}/{target} contains {sha[:12]} per ls-remote ({detail})",

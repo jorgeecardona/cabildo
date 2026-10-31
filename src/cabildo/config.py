@@ -210,6 +210,19 @@ def push_timeout(cwd: str | None = None, project_name: str | None = None) -> flo
         return 300.0
 
 
+def push_ci_watch(cwd: str | None = None, project_name: str | None = None) -> float:
+    """``[push].ci_watch_s``: seconds the daemon waits for the GitLab pipeline of a pushed commit.
+
+    On a failed pipeline the daemon DMs the pusher the tail of each failed job log. Default
+    1800. 0 turns the watch off.
+    """
+    val = get(cwd, "push", "ci_watch_s", project_name=project_name, default=1800.0)
+    try:
+        return max(0.0, float(val))
+    except (TypeError, ValueError):
+        return 1800.0
+
+
 def push_local_sync(cwd: str | None = None, project_name: str | None = None) -> str:
     """``[push].local_sync`` for this project: how a successful push updates the
     pusher's LOCAL ``main`` (issue #20).
