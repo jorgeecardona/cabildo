@@ -1,11 +1,7 @@
 # cabildo's own repo policy. Jorge works this repo trunk-based: commit on main,
-# push directly to origin/main, no lanes / no merge requests. So cabildo's own
-# guards, which assume the lane/daemon push flow, are turned off here.
+# no lanes / no merge requests. The trunk guard is off. Pushes go through the
+# cabildo daemon (default push mode): queue request(action="push").
 
 [trunk]
 # Allow committing directly on main — this repo is worked trunk-based.
 mode = "off"
-
-[push]
-# No daemon push routing; a plain `git push origin main` is how work goes out.
-mode = "manual"
