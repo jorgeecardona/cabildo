@@ -6,6 +6,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
+- **Tags in the panel**: press `t` on a session in the switcher to set comma-separated tags (kept
+  in the panel's own file, not on the bus). Press `f` to filter the list by group or tag, for
+  example `g:work t:urgent`. An empty filter shows all.
 - **Notes in the panel**: press `n` on a session in the switcher to write notes for it, separated by
   `;`. They show on the row after the tags (`✎`). No model call is made. The session sees them in
   its SessionStart banner the next time it starts, for example after running out of tokens.
