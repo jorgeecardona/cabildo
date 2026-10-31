@@ -93,10 +93,14 @@ def a_pace(
     return plan.Pace(rate, percent, resets_at, at, ready)
 
 
-def feed(percents, start: float, step: float, reset: float, prev=None):
-    """The history after one 5-hour sample per ``step`` seconds from ``start``."""
+def feed(percents, start: float, step: float, reset: float, prev=None, *, seven_day=False):
+    """The history after one sample per ``step`` seconds from ``start``: of the 5-hour
+    limit, or of the 7-day limit with ``seven_day``.
+    """
     for i, pct in enumerate(percents):
-        prev = plan.record(prev, PlanUsage("max", Limit(pct, reset), None), start + i * step)
+        lim = Limit(pct, reset)
+        usage = PlanUsage("max", None, lim) if seven_day else PlanUsage("max", lim, None)
+        prev = plan.record(prev, usage, start + i * step)
     return prev
 
 
@@ -112,6 +116,16 @@ def test_exact_samples_at_uneven_times_give_the_exact_rate():
     samples = tuple(plan.Sample(t, 5 + t / 360) for t in times)  # 10%/h
     r = plan.rate(samples, now=3000, half_life=1800)
     assert r is not None and abs(r - 10.0) < 1e-9
+
+
+def test_the_seven_day_pace_over_a_day_reads_like_an_average():
+    h = plan.HOUR
+    busy = feed([10 + int(i / 6) for i in range(61)], 6 * h, 60, 7 * 24 * h, seven_day=True)
+    idle = feed([20] * 60, 7 * h + 60, 60, 7 * 24 * h, busy, seven_day=True)
+    p = plan.pace(idle, 8 * h).seven_day
+    # 10% in the busy hour, none in the idle hour: about 5%/h, a little under as the idle
+    # hour is newer
+    assert p and p.ready and 4.5 < p.rate < 5.0
 
 
 def test_an_idle_stretch_brings_the_pace_down():

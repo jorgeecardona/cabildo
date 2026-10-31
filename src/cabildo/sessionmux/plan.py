@@ -101,8 +101,9 @@ def fetch() -> PlanUsage | None:
 
 HOUR = 3600.0
 WINDOW = {"five_hour": 5 * HOUR, "seven_day": 7 * 24 * HOUR}
-# a sample this old weighs half in the pace; the 7-day limit moves slower
-HALF_LIFE = {"five_hour": 0.5 * HOUR, "seven_day": 2 * HOUR}
+# a sample this old weighs half in the pace; the 7-day limit decays slowly, so the last day
+# reads almost like a plain average
+HALF_LIFE = {"five_hour": 0.5 * HOUR, "seven_day": 24 * HOUR}
 KEEP = {key: 4 * half for key, half in HALF_LIFE.items()}  # older samples weigh under 1/16
 # the API gives whole percents: no pace until the samples span this long, so one point of
 # rounding stays a small part of it (1% in the first 100 s would read 36%/h)
