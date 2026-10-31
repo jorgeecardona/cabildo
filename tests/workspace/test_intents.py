@@ -78,8 +78,11 @@ def test_fmt_age_uses_one_unit() -> None:
     ]
 
 
-def row(status: str, reason: str = "", at: float = NOW - 120) -> Intent:
-    return Intent(1, "push", status, "cabildo", "jorge", at, reason)
+def row(
+    status: str, reason: str = "", at: float = NOW - 120, cwd: str = "/home/x/cabildo"
+) -> Intent:
+    name = cwd.rsplit("/", 1)[-1]
+    return Intent(1, "push", status, name, cwd, name, "jorge", at, reason)
 
 
 def test_the_group_shows_the_queue_and_a_failure_with_its_reason() -> None:
@@ -115,6 +118,7 @@ def test_the_mode_line_shows_the_intents_group_and_grows_to_fit_it(monkeypatch) 
     seen: list = []
 
     async def scenario(app, pilot) -> None:
+        app.scope = "all"
         app._intents_got((row("running"), row("failed", "dirty tree")))
         await pilot.pause()
         box = app.query_one("#modeline")
@@ -126,3 +130,44 @@ def test_the_mode_line_shows_the_intents_group_and_grows_to_fit_it(monkeypatch) 
     assert height == n
     assert any(x.startswith("push cabildo") and "running" in x for x in lines)
     assert any("dirty tree" in x for x in lines)
+
+
+def test_scope_here_keeps_only_the_project_of_the_workspace() -> None:
+    mine, other = row("running"), row("running", cwd="/home/x/timbre")
+    assert intents.in_scope((mine, other), "here", "/home/x/cabildo", "cabildo") == (mine,)
+
+
+def test_scope_subfolders_adds_the_repos_under_the_directory() -> None:
+    mine = row("running")
+    below = row("pending", cwd="/home/x/oss/paas")
+    beside = row("pending", cwd="/home/x/ossy")  # a name that only starts the same way
+    got = intents.in_scope((mine, below, beside), "subfolders", "/home/x/oss", "oss")
+    assert got == (below,)
+
+
+def test_scope_all_keeps_every_intent() -> None:
+    items = (row("running"), row("done", cwd="/home/x/timbre"))
+    assert intents.in_scope(items, "all", "/home/x/cabildo", "cabildo") == items
+
+
+def test_the_mode_line_follows_the_scope(monkeypatch) -> None:
+    from pilot import drive
+
+    seen: list[list[str]] = []
+
+    async def scenario(app, pilot) -> None:
+        app._cwd_key = "cabildo"
+        app.cwd = "/home/x/cabildo"
+        app._intents_got((row("running"), row("failed", "dirty", cwd="/home/x/timbre")))
+        await pilot.pause()
+        seen.append(str(app.query_one("#modeline").render()).split("\n"))
+        app.scope = "all"
+        app._modeline()
+        await pilot.pause()
+        seen.append(str(app.query_one("#modeline").render()).split("\n"))
+
+    drive(monkeypatch, scenario)
+    here, everything = seen
+    assert any(x.startswith("push cabildo") for x in here)
+    assert not any(x.startswith("push timbre") for x in here)
+    assert any(x.startswith("push timbre") for x in everything)

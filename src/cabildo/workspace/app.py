@@ -31,7 +31,7 @@ from textual.suggester import SuggestFromList
 from textual.widgets import ContentSwitcher, DataTable, Input, Label, Static
 from textual.worker import get_current_worker
 
-from cabildo import __version__, store
+from cabildo import __version__, cloud, store
 from cabildo.workspace import (
     agents,
     intents,
@@ -546,6 +546,7 @@ class SwitcherApp(App[None]):
         self.reading = False  # a scan for a new scope is on its way
         self.plan_usage: PlanUsage | None = None  # the subscription's limits, once fetched
         self.plan_pace: plan.PlanPace | None = None  # how fast they fill
+        self._cwd_key = cloud.project_key(cwd)  # what the intents of "here" are matched on
         self.intents: tuple[intents.Intent, ...] = ()  # the push queue and its latest results
         self._intents_seen = False  # the bus has been read once: show the group, even if empty
         self._modeline_text: Text | None = None  # what the mode line shows now
@@ -812,7 +813,11 @@ class SwitcherApp(App[None]):
             style = plan_style(self.plan_usage)
             groups.append([(x, style) for x in fmt_plan(self.plan_usage, self.plan_pace)])
         if self.intents or (self._intents_seen and store.db_path().exists()):
-            groups.append(fmt_intents(self.intents, time.time()))
+            groups.append(
+                fmt_intents(
+                    intents.in_scope(self.intents, self.scope, self.cwd, self._cwd_key), time.time()
+                )
+            )
         if usage.available():
             this = fmt_use("this one", use, self._row_first_mb(row) if row else None)
             everyone, me = self._usage_lines()

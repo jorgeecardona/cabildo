@@ -7,7 +7,7 @@ import os
 import sqlite3
 from dataclasses import dataclass
 
-from cabildo import names, store
+from cabildo import cloud, names, store
 
 # a finished intent stays on the panel this long, so a failure is seen before it scrolls away
 RECENT_SECONDS = 3600.0
@@ -22,7 +22,9 @@ class Intent:
     id: int
     action: str
     status: str  # pending | running | done | failed | rejected | expired
-    project: str  # the repo the action is about
+    project: str  # the repo name the action is about
+    cwd: str  # the repo path the action runs in ('' when the intent has none)
+    key: str  # the project key of ``cwd``, which is what a scope compares
     by: str  # the asking session's handle, else its robot name
     at: float  # when it was queued (unix seconds)
     reason: str  # why it failed or was rejected; empty otherwise
@@ -33,14 +35,13 @@ class Intent:
         return self.status in QUEUE_STATUSES
 
 
-def _project(project: str | None, params: str | None) -> str:
-    """The repo name: the ``cwd`` the action runs in, else the asking session's project."""
+def _path(project: str | None, params: str | None) -> str:
+    """The repo path: the ``cwd`` the action runs in, else the asking session's project."""
     try:
         cwd = (json.loads(params) if params else {}).get("cwd")
     except (ValueError, AttributeError):
         cwd = None
-    path = str(cwd or project or "")
-    return os.path.basename(path.rstrip("/")) or path
+    return str(cwd or project or "")
 
 
 def _reason(result: str | None) -> str:
@@ -53,11 +54,14 @@ def _reason(result: str | None) -> str:
 
 
 def _intent(r: sqlite3.Row) -> Intent:
+    path = _path(r["project"], r["params"])
     return Intent(
         id=r["id"],
         action=r["action"],
         status=r["status"],
-        project=_project(r["project"], r["params"]),
+        project=os.path.basename(path.rstrip("/")) or path,
+        cwd=path,
+        key=cloud.project_key(path) if path else "",
         by=r["from_handle"] or names.robot_name(r["from_session"]),
         at=r["created_at"],
         reason=_reason(r["result"]),
@@ -92,3 +96,20 @@ def load(now: float) -> tuple[Intent, ...]:
     except sqlite3.Error:
         return ()
     return tuple(_intent(r) for r in (*queue, *finished))
+
+
+def in_scope(items: tuple[Intent, ...], scope: str, cwd: str, key: str) -> tuple[Intent, ...]:
+    """The intents that belong to the workspace's scope, the one the session list uses.
+
+    ``here``: the project of ``cwd`` (``key`` is its project key). ``subfolders``: that project
+    and any repo under ``cwd``. ``all``: every intent.
+    """
+    if scope == "all":
+        return items
+    root = cwd.rstrip("/")
+    return tuple(
+        i
+        for i in items
+        if i.key == key
+        or (scope == "subfolders" and (i.cwd == root or i.cwd.startswith(root + "/")))
+    )

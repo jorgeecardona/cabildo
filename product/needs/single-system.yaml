@@ -114,6 +114,7 @@ needs:
       - "test:tests/workspace/test_intents.py::test_load_lists_the_queue_running_first_then_the_latest_finished"
       - "test:tests/workspace/test_intents.py::test_the_group_shows_the_queue_and_a_failure_with_its_reason"
       - "test:tests/workspace/test_intents.py::test_the_mode_line_shows_the_intents_group_and_grows_to_fit_it"
+      - "test:tests/workspace/test_intents.py::test_the_mode_line_follows_the_scope"
 
   - id: SWITCH-11
     text: >
@@ -126,3 +127,19 @@ needs:
         quote: "put soem decay so at least one day would look like a average"
     proofs:
       - "test:tests/workspace/test_plan.py::test_the_seven_day_pace_over_a_day_reads_like_an_average"
+
+  - id: SWITCH-12
+    text: >
+      When the operator wants the whole screen for Claude, they can hide the full left panel with
+      one key (Alt-z) and bring it back with the same key.
+    sources:
+      - kind: primary
+        who: Jorge Cardona
+        date: 2026-10-31
+        quote: "I want an option to hide the full left panel maybe with alt s s"
+      - kind: primary
+        who: Jorge Cardona
+        date: 2026-10-31
+        quote: "or alt s wcould just toggle it or alt-s h"
+    proofs:
+      - "test:tests/workspace/test_hosting.py::test_alt_z_hides_and_shows_the_list_and_alt_s_focuses_it"
