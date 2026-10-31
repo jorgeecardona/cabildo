@@ -1,0 +1,70 @@
+who: operator
+
+needs:
+
+  - id: GIT-1
+    text: >
+      When one of several agents runs a force push (--force, -f, --force-with-lease, +refspec, --delete),
+      the operator can rely on cabildo denying it, even for a lone agent, so no agent overwrites another
+      agent's committed work.
+    sources:
+      - kind: internal
+        date: 2026-10-17
+        locator: "docs/issues/17-10-2026-simplify-git-coordination-force-push-deny-recipe-worktree-per-agent.md (phase 0); measured: no guard branch matched a force push"
+    proofs:
+      - "test:tests/test_guard.py::test_force_push_denied_even_when_alone"
+
+  - id: GIT-2
+    text: >
+      When an agent's push is rejected because another push got there first, the agent can read the recovery
+      (fetch, rebase, push again) at that moment, so it does not try reset --hard or a force push.
+    sources:
+      - kind: internal
+        date: 2026-10-17
+        locator: "docs/issues/17-10-2026-simplify-git-coordination-force-push-deny-recipe-worktree-per-agent.md (phase 1); measured: 32 of 1,435 push intents ever queued behind another"
+    proofs:
+      - "test:tests/test_guard.py::test_recipe_fires_on_a_rejected_push"
+      - "test:tests/test_guard.py::test_recipe_parses_a_head_colon_refspec"
+
+  - id: GIT-3
+    text: >
+      When two agents share one checkout, the operator can rely on a git command that changes the tree being
+      denied, with the agent told to use its own worktree, so one agent's uncommitted work is not lost to
+      another.
+    sources:
+      - kind: internal
+        date: 2026-10-17
+        locator: "docs/issues/17-10-2026-simplify-git-coordination-force-push-deny-recipe-worktree-per-agent.md (phase 2)"
+    proofs:
+      - "test:tests/test_guard.py::test_shared_dangerous_git_denied_when_a_peer_shares_the_checkout"
+      - "test:tests/test_guard.py::test_mutating_git_allowed_in_your_own_worktree"
+
+  - id: GIT-4
+    text: >
+      When an agent runs git stash, it can do so, because a stash can be recovered; the destructive guard
+      keeps only the commands that cannot be undone (reset --hard, clean -f, checkout ., whole-tree restore).
+    sources:
+      - kind: internal
+        date: 2026-10-17
+        locator: "docs/issues/17-10-2026-simplify-git-coordination-force-push-deny-recipe-worktree-per-agent.md (phase 4, not done)"
+
+  - id: DAEMON-1
+    text: >
+      When two projects each queue a push, the operator can see both run at the same time, while two pushes
+      of one project never do, so one project's slow gate does not hold up another project.
+    sources:
+      - kind: internal
+        date: 2026-10-26
+        locator: "docs/issues/26-10-2026-daemon-runs-intents-of-all-projects-one-at-a-time-so-one.md; measured: store.take_next_intent took the oldest pending intent across all projects"
+    proofs:
+      - "test:tests/test_intent_lanes.py::test_pushes_to_different_projects_run_at_the_same_time"
+      - "test:tests/test_intent_lanes.py::test_second_push_to_a_project_waits_for_the_first"
+
+  - id: TESTS-1
+    text: >
+      When a developer runs the test suite in a real checkout, they can check that its git status, commit
+      graph and worktree list are the same afterwards, and that no test pushed to the real origin.
+    sources:
+      - kind: internal
+        date: 2026-10-19
+        locator: "docs/issues/19-10-2026-test-suite-pollutes-the-real-repo-and-has-pushed-to-origin-main.md; measured: scratch commits authored t <t@t> reached origin/main"
