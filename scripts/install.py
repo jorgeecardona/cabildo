@@ -23,14 +23,15 @@ install, no data migration, no registration, no hook writes.
 from __future__ import annotations
 
 import argparse
-import json
-import shlex
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "src"))  # the shared wiring lives in the package
+from cabildo import install as shared
+
 VENV = REPO / ".venv"
 VENV_PY = VENV / "bin" / "python"
 MCP_BIN = VENV / "bin" / "cabildo-mcp"
@@ -46,55 +47,19 @@ SETTINGS = Path.home() / ".claude" / "settings.json"
 
 CLIENTS = ("claude", "codex", "opencode", "both", "all")
 
-# event -> (cabildo-hook arg, timeout_s, tool matcher or None). The
-# per-tool-call hooks get a tight timeout: they run on every single tool call,
-# so a hung DB must cost 5s once, not block the whole session repeatedly.
-HOOKS = {
-    "SessionStart": ("session_start", 10, None),
-    "UserPromptSubmit": ("prompt_submit", 10, None),
-    "SessionEnd": ("session_end", 10, None),
-    "Stop": ("stop", 10, None),
-    "SubagentStop": ("subagent_stop", 10, None),
-    "PostToolUse": ("post_tool_use", 5, "*"),
-    "PreToolUse": ("pre_tool_use", 5, "Bash|Edit|Write|NotebookEdit"),
-}
+HOOKS = shared.HOOKS
 
 
-class InstallError(RuntimeError):
-    """A step that cannot proceed: a missing executable or a failed subprocess.
-
-    Raised so the failure surfaces with a clear message and a non-zero exit,
-    rather than a half-done install limping on.
-    """
+InstallError = shared.InstallError
 
 
-def require(tool: str) -> str:
-    """Absolute path to `tool`, or a clear InstallError if it is not on PATH."""
-    found = shutil.which(tool)
-    if not found:
-        raise InstallError(f"required executable not found on PATH: {tool!r}")
-    return found
-
-
-def sh(cmd: list[str], *, check: bool = True) -> int:
-    """Run `cmd`, echoing it shell-safely. Raises InstallError on failure unless
-    check=False (used for best-effort cleanup that is allowed to fail).
-    """
-    print("  $", " ".join(shlex.quote(c) for c in cmd))
-    rc = subprocess.call(cmd)
-    if check and rc != 0:
-        raise InstallError(f"command failed (exit {rc}): {' '.join(shlex.quote(c) for c in cmd)}")
-    return rc
+require = shared.require
+sh = shared.sh
 
 
 def hook_command(event_arg: str) -> str:
-    """The single shell string a Claude hook stores as its `command`: the
-    dispatcher binary plus the event arg. The path is shell-quoted so a venv
-    living under a directory with spaces still produces a valid command (for an
-    ordinary path shlex.quote is a no-op, so this stays byte-identical to older
-    installs and re-running remains a no-op).
-    """
-    return f"{shlex.quote(str(HOOK_BIN))} {event_arg}"
+    """The shell string a Claude hook stores as its ``command`` (see ``shared.hook_command``)."""
+    return shared.hook_command(HOOK_BIN, event_arg)
 
 
 def ensure_venv() -> None:
@@ -122,92 +87,15 @@ def migrate_legacy_home() -> None:
 
 
 def register_mcp() -> None:
-    print("• registering MCP server (user scope)")
-    require("claude")
-    # Remove any prior entry first so this is idempotent, then add. Also drop
-    # the pre-rename "agent-chat" registration. These removes are best-effort:
-    # they exit non-zero when nothing is registered, which is fine.
-    subprocess.call(
-        ["claude", "mcp", "remove", "--scope", "user", "agent-chat"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    subprocess.call(
-        ["claude", "mcp", "remove", "--scope", "user", "cabildo"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    sh(["claude", "mcp", "add", "--scope", "user", "cabildo", "--", str(MCP_BIN)])
+    shared.register_mcp(MCP_BIN)
 
 
 def patch_settings() -> None:
-    print(f"• wiring hooks into {SETTINGS}")
-    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-    data = json.loads(SETTINGS.read_text()) if SETTINGS.exists() else {}
-    hooks = data.setdefault("hooks", {})
-
-    # Drop stale entries from older installs: repo-file-path commands
-    # (agent_chat/ or cabildo/ hook scripts) break whenever the repo
-    # moves or a file is renamed — exactly why we dispatch via HOOK_BIN now.
-    for event, groups in list(hooks.items()):
-        kept = [
-            g
-            for g in groups
-            if not any(
-                "_chat/hooks/" in h.get("command", "") or "cabildo/hooks/" in h.get("command", "")
-                for h in g.get("hooks", [])
-            )
-        ]
-        if len(kept) != len(groups):
-            print(f"  - {event}: removed stale file-path entry")
-        hooks[event] = kept
-
-    for event, (event_arg, timeout, matcher) in HOOKS.items():
-        cmd = hook_command(event_arg)
-        groups = hooks.setdefault(event, [])
-        already = any(h.get("command", "") == cmd for g in groups for h in g.get("hooks", []))
-        if already:
-            print(f"  = {event}: already present, skipping")
-            continue
-        group = {"hooks": [{"type": "command", "command": cmd, "timeout": timeout}]}
-        if matcher is not None:
-            group["matcher"] = matcher
-        groups.append(group)
-        print(f"  + {event}: {cmd}")
-
-    # The push-delivery mod shells the `cabildo` CLI from $.process.run, which
-    # inherits the session env. Pin the venv's binary so the mod finds it even
-    # when the venv is not on PATH.
-    env = data.setdefault("env", {})
-    if env.get("CABILDO_BIN") != str(CABILDO_BIN):
-        env["CABILDO_BIN"] = str(CABILDO_BIN)
-        print(f"  + env.CABILDO_BIN = {CABILDO_BIN}")
-
-    if SETTINGS.exists():
-        shutil.copy(SETTINGS, SETTINGS.with_suffix(".json.bak"))
-    SETTINGS.write_text(json.dumps(data, indent=2) + "\n")
+    shared.patch_settings(SETTINGS, HOOK_BIN, CABILDO_BIN)
 
 
 def register_plugin() -> None:
-    """Install and enable the bundled push-delivery mod at user scope, reusing
-    the package's own `cabildo.mods.install` so the `claude plugin` sequence
-    lives in one place (the `cabildo plugin` CLI verb runs the same code).
-    Non-fatal: an older `claude` without `plugin` subcommands, or a failed
-    validate, is reported and skipped — messaging, presence and claims work
-    without the mod; it only adds the idle-wake doorbell.
-    """
-    print("• installing the cabildo-push mod (user scope)")
-    mods = _mods()
-    # The module runs the same commands `sh` would, echoing each; check=False
-    # because its exit codes ride along in the Result, not as a hard failure.
-    # mods.install is the single check: no bundled mod, no `claude`, or a failed
-    # validate each come back as ok=False with a reason, honouring CABILDO_MODS_DIR.
-    res = mods.install(lambda argv: sh(argv, check=False), scope="user")
-    if not res.ok:
-        print(f"  ! {res.reason} — skipping the mod (the bus still works)")
-    else:
-        for line in mods.step_warnings(res):
-            print(f"  ! {line}")
+    shared.register_plugin()
 
 
 def install_codex() -> None:
@@ -245,18 +133,6 @@ def _codex_config():
     return codex_config
 
 
-def _mods():
-    """Import cabildo.mods from the repo source — the single owner of the mod's
-    marketplace id and the `claude plugin` sequence, shared with the CLI verb.
-    """
-    src = str(REPO / "src")
-    if src not in sys.path:
-        sys.path.insert(0, src)
-    from cabildo import mods
-
-    return mods
-
-
 def _indent(text: str, prefix: str = "      ") -> str:
     return "\n".join(prefix + line if line else line for line in text.splitlines())
 
@@ -270,17 +146,7 @@ def preview(clients: tuple[str, ...]) -> None:
     print("• data dir: migrate ~/.agent-chat -> ~/.cabildo if the old one exists")
 
     if "claude" in clients:
-        print("\n• Claude: register the MCP server (user scope):")
-        print(f"    $ claude mcp add --scope user cabildo -- {MCP_BIN}")
-        print(f"• Claude: wire hooks into {SETTINGS} (existing entries preserved):")
-        for event, (event_arg, *_rest) in HOOKS.items():
-            print(f"    {event}: {hook_command(event_arg)}")
-        print(f"    env.CABILDO_BIN = {CABILDO_BIN}")
-        mods = _mods()
-        if mods.mods_dir() is not None:
-            print("• Claude: install the push-delivery mod (user scope):")
-            for argv in mods.plan(scope="user"):
-                print(f"    $ {' '.join(argv)}")
+        shared.preview_claude(SETTINGS, MCP_BIN, HOOK_BIN, CABILDO_BIN, print)
 
     if "codex" in clients:
         cc = _codex_config()

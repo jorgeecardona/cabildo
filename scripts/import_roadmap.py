@@ -56,7 +56,10 @@ def main(argv: list[str] | None = None) -> int:
     by_status: dict[str, int] = {}
     for t in tasks:
         by_status[t.status.value] = by_status.get(t.status.value, 0) + 1
-    print(f"parsed {len(tasks)} task(s) from {source}: " + ", ".join(f"{v} {k}" for k, v in by_status.items()))
+    print(
+        f"parsed {len(tasks)} task(s) from {source}: "
+        + ", ".join(f"{v} {k}" for k, v in by_status.items())
+    )
     for w in warnings:
         print(f"  warning: {w}")
 
@@ -64,10 +67,17 @@ def main(argv: list[str] | None = None) -> int:
         print("dry run: nothing written")
         return 0
 
-    folder = pathlib.Path(args.out).expanduser() if args.out else agenda.resolve_dir(args.scope, create=True)
+    folder = (
+        pathlib.Path(args.out).expanduser()
+        if args.out
+        else agenda.resolve_dir(args.scope, create=True)
+    )
     counts = agenda.import_tasks(folder, tasks, owner=args.owner)
     problems = agenda.check(folder)
-    print(f"wrote {sum(counts.values())} file(s) to {folder}: " + ", ".join(f"{v} {k}" for k, v in counts.items()))
+    print(
+        f"wrote {sum(counts.values())} file(s) to {folder}: "
+        + ", ".join(f"{v} {k}" for k, v in counts.items())
+    )
     print(f"check: {'clean' if not problems else f'{len(problems)} problem(s)'}")
     for problem in problems:
         print(f"  {problem}")

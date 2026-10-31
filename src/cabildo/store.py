@@ -111,7 +111,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- Last time the Stop hook fired the one-shot heartbeat nudge for this session
     -- (see notify.heartbeat_reason). Separate from time_injected_at so the
     -- mid-turn timeline line and the at-idle nudge keep independent cadences.
-    heartbeat_at REAL
+    heartbeat_at REAL,
+    -- Out of tokens: Claude Code rejected a turn with a rate limit (StopFailure hook).
+    -- `quota_kind` is the limit that hit (five_hour | seven_day | unknown) and
+    -- `quota_resets_at` is when it lifts (epoch s, 0 if unknown). The session is OUT
+    -- while quota_kind is set and quota_resets_at is 0 or in the future.
+    quota_kind TEXT,
+    quota_resets_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_pid ON sessions(claude_pid);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
@@ -385,7 +391,8 @@ CREATE TABLE IF NOT EXISTS session_notes (
     type          TEXT NOT NULL DEFAULT 'topic',
     text          TEXT NOT NULL,
     state         TEXT NOT NULL DEFAULT 'open',
-    parked_ref    TEXT
+    parked_ref    TEXT,
+    source        TEXT NOT NULL DEFAULT 'agent'   -- agent (note_add) | human (cabildo notes add)
 );
 CREATE INDEX IF NOT EXISTS idx_session_notes_session ON session_notes(session_id, state, id);
 
@@ -492,6 +499,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     rename (facts→decisions, messages.origin→provenance) is included.
     """
     have = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+    have_sessions = set(have)
     if "tag" not in have:
         conn.execute("ALTER TABLE sessions ADD COLUMN tag TEXT")
     if "client" not in have:
@@ -556,6 +564,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
     have = {r["name"] for r in conn.execute("PRAGMA table_info(topics)")}
     if "gated" not in have:
         conn.execute("ALTER TABLE topics ADD COLUMN gated INTEGER NOT NULL DEFAULT 0")
+
+    if "quota_kind" not in have_sessions:
+        conn.execute("ALTER TABLE sessions ADD COLUMN quota_kind TEXT")
+        conn.execute("ALTER TABLE sessions ADD COLUMN quota_resets_at REAL")
+    have_notes = {r["name"] for r in conn.execute("PRAGMA table_info(session_notes)")}
+    if "source" not in have_notes:
+        conn.execute("ALTER TABLE session_notes ADD COLUMN source TEXT NOT NULL DEFAULT 'agent'")
 
     conn.commit()
 
@@ -1067,16 +1082,19 @@ def add_note(
     handle: str | None = None,
     project: str | None = None,
     project_name: str | None = None,
+    source: str = "agent",
 ) -> int:
     """Record a session note (a loose end) and return its id. An unknown `type`
-    falls back to 'topic'; a new note is always 'open'.
+    falls back to 'topic'; a new note is always 'open'. `source` is 'human' for a
+    note the user typed with no model call, else 'agent'.
     """
     note_type = type if type in NOTE_TYPES else "topic"
     now = _now()
     cur = conn.execute(
         "INSERT INTO session_notes (created_at, updated_at, session_id, handle, project, "
-        "project_name, type, text, state, parked_ref) VALUES (?,?,?,?,?,?,?,?,'open',NULL)",
-        [now, now, session_id, handle, project, project_name, note_type, text],
+        "project_name, type, text, state, parked_ref, source) "
+        "VALUES (?,?,?,?,?,?,?,?,'open',NULL,?)",
+        [now, now, session_id, handle, project, project_name, note_type, text, source],
     )
     conn.commit()
     return int(cur.lastrowid or 0)
@@ -1089,6 +1107,7 @@ def list_notes(
     project_name: str | None = None,
     state: str | None = None,
     type: str | None = None,
+    source: str | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     """Session notes, OLDEST first — the order the loose ends arose, which is how
@@ -1109,6 +1128,9 @@ def list_notes(
     if type:
         q += " AND type=?"
         args.append(type)
+    if source:
+        q += " AND source=?"
+        args.append(source)
     q += " ORDER BY id ASC LIMIT ?"
     args.append(int(limit))
     return [dict(r) for r in conn.execute(q, args)]
@@ -1136,6 +1158,50 @@ def set_note_state(
         return None
     row = conn.execute("SELECT * FROM session_notes WHERE id=?", [note_id]).fetchone()
     return dict(row) if row else None
+
+
+# Out of tokens. The StopFailure hook marks a session; it is OUT until the limit
+# lifts. Nothing polls: `quota_out` compares the stored reset time to the clock.
+QUOTA_KINDS = ("five_hour", "seven_day", "unknown")
+
+
+def mark_out_of_tokens(
+    conn: sqlite3.Connection, session_id: str, *, kind: str, resets_at: float
+) -> None:
+    """Mark a session OUT: a rate limit of `kind` rejected its turn and lifts at
+    `resets_at` (epoch seconds, 0 if unknown). An unknown `kind` is stored as 'unknown'.
+    """
+    conn.execute(
+        "UPDATE sessions SET quota_kind=?, quota_resets_at=? WHERE session_id=?",
+        [kind if kind in QUOTA_KINDS else "unknown", float(resets_at), session_id],
+    )
+    conn.commit()
+
+
+def clear_out_of_tokens(conn: sqlite3.Connection, session_id: str) -> None:
+    """Clear the OUT mark: a turn completed, so the limit is no longer blocking."""
+    conn.execute(
+        "UPDATE sessions SET quota_kind=NULL, quota_resets_at=NULL "
+        "WHERE session_id=? AND quota_kind IS NOT NULL",
+        [session_id],
+    )
+    conn.commit()
+
+
+def quota_out(conn: sqlite3.Connection, session_id: str) -> dict[str, Any] | None:
+    """``{"kind", "resets_at"}`` while the session is OUT, else None. A mark whose
+    reset time has passed no longer counts. A mark with no reset time (0) stays until a
+    turn completes.
+    """
+    row = conn.execute(
+        "SELECT quota_kind, quota_resets_at FROM sessions WHERE session_id=?", [session_id]
+    ).fetchone()
+    if not row or not row["quota_kind"]:
+        return None
+    resets_at = float(row["quota_resets_at"] or 0)
+    if resets_at and resets_at <= _now():
+        return None
+    return {"kind": row["quota_kind"], "resets_at": resets_at}
 
 
 def get_ingest_cursor(conn: sqlite3.Connection, session_id: str) -> int:

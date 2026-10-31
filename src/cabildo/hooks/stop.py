@@ -41,6 +41,8 @@ def main() -> None:
 
     conn = store.connect()
     try:
+        # A turn completed, so a rate limit is not blocking this session any more.
+        store.clear_out_of_tokens(conn, session_id)
         # Urgent mail wins: it is a message someone is waiting on, and checking the
         # heartbeat first would spend this turn's single block on the clock instead.
         reason = notify.urgent_block_reason(conn, session_id)

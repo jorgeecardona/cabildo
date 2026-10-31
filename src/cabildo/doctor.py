@@ -73,6 +73,7 @@ HOOK_EVENTS = {
     "PreToolUse": "pre_tool_use",
     "PostToolUse": "post_tool_use",
     "Stop": "stop",
+    "StopFailure": "stop_failure",
     "SubagentStop": "subagent_stop",
     "SessionEnd": "session_end",
 }
@@ -133,9 +134,9 @@ def check_hooks() -> Check:
     try:
         settings = json.loads(p.read_text())
     except FileNotFoundError:
-        return Check("hooks", FAIL, f"no {p}", "run: python scripts/install.py")
+        return Check("hooks", FAIL, f"no {p}", "run: cabildo install")
     except (OSError, ValueError) as e:
-        return Check("hooks", FAIL, f"cannot read {p}: {e}", "run: python scripts/install.py")
+        return Check("hooks", FAIL, f"cannot read {p}: {e}", "run: cabildo install")
 
     wired = _wired_hook_args(settings)
     missing = [ev for ev, arg in HOOK_EVENTS.items() if arg not in wired]
@@ -145,7 +146,7 @@ def check_hooks() -> Check:
             "hooks",
             FAIL,
             f"{total - len(missing)}/{total} cabildo hooks wired — missing: {', '.join(missing)}",
-            "run: python scripts/install.py",
+            "run: cabildo install",
         )
     return Check("hooks", OK, f"{total}/{total} cabildo hooks wired in {p}")
 
@@ -182,7 +183,7 @@ def check_mcp_bus(cwd: str | os.PathLike) -> Check:
         "mcp.bus",
         FAIL,
         f"'{mcp_config.SERVER_KEY}' MCP server not registered at user or project scope",
-        "run: python scripts/install.py  (user scope), or `cabildo add .` (this folder)",
+        "run: cabildo install  (user scope), or `cabildo add .` (this folder)",
     )
 
 

@@ -510,6 +510,18 @@ def cmd_meter(args) -> int:
     return 0
 
 
+def cmd_install(args) -> int:
+    """Wire cabildo into the client(s): MCP server, hooks, and the push mod. Uses the
+    venv this command runs from, so it works from a pip install; re-running is a no-op.
+    """
+    from . import install
+
+    clients = {"both": ("claude", "codex"), "all": ("claude", "codex", "opencode")}.get(
+        args.client, (args.client,)
+    )
+    return install.run(clients, print_only=args.print_only)
+
+
 def cmd_plugin(args) -> int:
     """Install (or remove) the bundled Claude Code mod — push delivery, #30 —
     at user scope via `claude plugin`, the same steps `make install` runs. The
@@ -1778,6 +1790,23 @@ def cmd_notes(args) -> int:
     import datetime as _dt
 
     conn = store.connect()
+    if args.add:
+        sid = _resolve_me(conn, args)
+        if sid is None:
+            return 1
+        me = store.get_session(conn, sid)
+        nid = store.add_note(
+            conn,
+            text=args.add,
+            type=args.type or "topic",
+            session_id=sid,
+            handle=me["handle"] if me else None,
+            project=me["project"] if me else None,
+            project_name=me["project_name"] if me else None,
+            source="human",
+        )
+        print(f"{C.GREEN}noted{C.OFF} #{nid} for {sid[:8]}: {args.add}")
+        return 0
     if args.done is not None or args.park is not None:
         nid = args.done if args.done is not None else args.park
         state = "done" if args.done is not None else "parked"
@@ -2403,6 +2432,23 @@ def main(argv: list[str] | None = None) -> int:
     mt.add_argument("--json", action="store_true", help="machine-readable output")
     mt.set_defaults(fn=cmd_meter)
 
+    ins = sub.add_parser(
+        "install", help="wire cabildo into Claude Code: MCP server, hooks and the push mod"
+    )
+    ins.add_argument(
+        "--client",
+        choices=("claude", "codex", "opencode", "both", "all"),
+        default="claude",
+        help="which client(s) to wire (default: claude)",
+    )
+    ins.add_argument(
+        "--print",
+        dest="print_only",
+        action="store_true",
+        help="show what would be done and change nothing",
+    )
+    ins.set_defaults(fn=cmd_install)
+
     pg = sub.add_parser(
         "plugin", help="install the bundled Claude Code mod (push delivery) via `claude plugin`"
     )
@@ -2726,6 +2772,9 @@ def main(argv: list[str] | None = None) -> int:
         help="filter by type (topic/need/bug/idea/unfinished)",
     )
     nt.add_argument("--limit", type=int, default=50, help="max rows (default 50)")
+    nt.add_argument(
+        "--add", metavar="TEXT", help="write a note for --session with no model call (source=human)"
+    )
     nt.add_argument("--done", type=int, metavar="ID", help="mark note ID done and exit")
     nt.add_argument("--park", type=int, metavar="ID", help="mark note ID parked and exit")
     nt.add_argument("--ref", help="with --park: where it went (issue name / agenda item)")

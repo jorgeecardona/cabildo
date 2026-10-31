@@ -332,6 +332,12 @@ def session_banner(conn: sqlite3.Connection, session_id: str) -> str:
     if s["count"]:
         lines.append(f"📬 {s['count']} unread message(s) — call `inbox`.")
 
+    # Notes Jorge wrote for this session while it was out of tokens (no model call).
+    human = store.list_notes(conn, session_id=session_id, state="open", source="human")
+    if human:
+        lines.append(f"📝 {len(human)} note(s) from Jorge for this session:")
+        lines.extend(f"  #{n['id']} {n['text']}" for n in human[:10])
+
     reg = register_line(me["cwd"] if me else None, me["handle"] if me else None)
     if reg:
         lines.append(reg)

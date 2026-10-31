@@ -449,3 +449,37 @@ def list_sessions(root: Path | None = None, slug: str | None = None) -> list[dic
                 out.append(dig)
     out.sort(key=lambda x: x["mtime"], reverse=True)
     return out
+
+
+# How much of the transcript's end is read to find the rejection: the synthetic
+# rate-limit record is the last thing Claude Code writes when a turn is refused.
+_TAIL_BYTES = 256 * 1024
+
+
+def last_quota_rejection(path: str | Path) -> dict[str, Any] | None:
+    """The newest rate-limit rejection in a transcript, or None.
+
+    Claude Code writes a synthetic assistant record with ``quotaLimits.status ==
+    "rejected"`` when a turn is refused. Returns ``{"kind": <rateLimitType>, "resets_at":
+    <epoch seconds, 0 if absent>}``. Reads only the tail of the file.
+    """
+    try:
+        with Path(path).open("rb") as fh:
+            fh.seek(0, 2)
+            fh.seek(max(0, fh.tell() - _TAIL_BYTES))
+            tail = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in reversed(tail.splitlines()):
+        if '"quotaLimits"' not in line:
+            continue
+        try:
+            quota = json.loads(line).get("quotaLimits")
+        except ValueError:
+            continue
+        if isinstance(quota, dict) and quota.get("status") == "rejected":
+            return {
+                "kind": str(quota.get("rateLimitType") or "unknown"),
+                "resets_at": float(quota.get("resetsAt") or 0),
+            }
+    return None
