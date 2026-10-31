@@ -31,8 +31,19 @@ from textual.suggester import SuggestFromList
 from textual.widgets import ContentSwitcher, DataTable, Input, Label, Static
 from textual.worker import get_current_worker
 
-from cabildo import __version__
-from cabildo.sessionmux import agents, launch, legacy, notes, plan, rooms, sessions, state, usage
+from cabildo import __version__, store
+from cabildo.sessionmux import (
+    agents,
+    intents,
+    launch,
+    legacy,
+    notes,
+    plan,
+    rooms,
+    sessions,
+    state,
+    usage,
+)
 from cabildo.sessionmux.agents import AgentState
 from cabildo.sessionmux.hosting import ClaudePane, Target
 from cabildo.sessionmux.launch import Config
@@ -184,6 +195,57 @@ def fmt_plan(p: PlanUsage, pace: plan.PlanPace | None = None) -> list[str]:
         rate = (f"{at.rate:.1f}%/h" if at.ready else "-") if at else ""
         rows.append(grid(name, f"{lim.percent:.0f}%", rate, f"  {reset:<8}{when}").rstrip())
     return rows
+
+
+INTENT_LINES = (
+    7  # the intents group never takes more rows than this: the screen height is the limit
+)
+INTENT_POLL_SECONDS = 3.0
+INTENT_FAILED = ("failed", "rejected", "expired")
+
+
+def fmt_age(seconds: float) -> str:
+    """``45s``, ``3m``, ``2h`` or ``4d``: one unit, the largest that is not zero."""
+    s = max(0, int(seconds))
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if s >= size:
+            return f"{s // size}{unit}"
+    return f"{s}s"
+
+
+def fmt_intents(items: tuple[intents.Intent, ...], now: float) -> list[tuple[str, str]]:
+    """The intents group, as (line, style) pairs::
+
+        intents   state   age
+        push cabildo   running    2m
+        push timbre    pending    1m
+        push cabildo   failed    12m
+          working tree has uncommitted tracked changes
+
+    The queue first, then what finished lately. A failure shows its reason on the next row, in
+    red. Beyond ``INTENT_LINES`` rows the rest is counted (``+2 more``).
+    """
+    if not items:
+        return [("intents    none in the last hour", "")]
+    out: list[tuple[str, str]] = [(grid("intents", "state", "age"), "")]
+    shown = 0
+    for it in items:
+        failed = it.status in INTENT_FAILED
+        rows = [
+            (
+                f"{it.action[:5]:<5}{it.project[:12]:<13}{it.status:<9}{fmt_age(now - it.at):>4}",
+                "bold red" if failed else "",
+            )
+        ]
+        if failed and it.reason:
+            rows.append((f"  {it.reason}", "red"))
+        if len(out) + len(rows) > INTENT_LINES + 1:
+            break
+        out.extend(rows)
+        shown += 1
+    if shown < len(items):
+        out.append((f"+{len(items) - shown} more", "dim"))
+    return out
 
 
 def plan_style(p: PlanUsage) -> str:
@@ -484,6 +546,8 @@ class SwitcherApp(App[None]):
         self.reading = False  # a scan for a new scope is on its way
         self.plan_usage: PlanUsage | None = None  # the subscription's limits, once fetched
         self.plan_pace: plan.PlanPace | None = None  # how fast they fill
+        self.intents: tuple[intents.Intent, ...] = ()  # the push queue and its latest results
+        self._intents_seen = False  # the bus has been read once: show the group, even if empty
         self._modeline_text: Text | None = None  # what the mode line shows now
         self._columns_all: Scope | None = None  # the scope the header was made for
         self.live = LiveState()
@@ -540,6 +604,19 @@ class SwitcherApp(App[None]):
         if usage.available():
             self.set_interval(SAMPLE_SECONDS, self._sample_tick)
         self._plan_tick()
+        self._intents_tick()
+        self.set_interval(INTENT_POLL_SECONDS, self._intents_tick)
+
+    def _intents_tick(self) -> None:
+        self.run_worker(self._intents_fetch, thread=True, group="intents", exclusive=True)
+
+    def _intents_fetch(self) -> None:
+        self._to_ui(self._intents_got, intents.load(time.time()))
+
+    def _intents_got(self, found: tuple[intents.Intent, ...]) -> None:
+        if found != self.intents or not self._intents_seen:
+            self.intents, self._intents_seen = found, True
+            self._modeline()
 
     def _plan_tick(self) -> None:
         self.run_worker(self._plan_fetch, thread=True, group="plan", exclusive=True)
@@ -734,6 +811,8 @@ class SwitcherApp(App[None]):
         if self.plan_usage:
             style = plan_style(self.plan_usage)
             groups.append([(x, style) for x in fmt_plan(self.plan_usage, self.plan_pace)])
+        if self.intents or (self._intents_seen and store.db_path().exists()):
+            groups.append(fmt_intents(self.intents, time.time()))
         if usage.available():
             this = fmt_use("this one", use, self._row_first_mb(row) if row else None)
             everyone, me = self._usage_lines()

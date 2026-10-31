@@ -6,6 +6,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
+- **Push intents in the panel**: the left panel lists the push queue (running, then pending) and
+  the last three results from the past hour, with the failure reason under a failed one. It
+  refreshes every 3 seconds and reads the bus read-only.
 - **Tags in the panel**: press `t` on a session in the switcher to set comma-separated tags (kept
   in the panel's own file, not on the bus). Press `f` to filter the list by group or tag, for
   example `g:work t:urgent`. An empty filter shows all.

@@ -95,16 +95,25 @@ needs:
 
   - id: SWITCH-10
     text: >
-      When the operator opens the panel, they can see the state of each push intent (pending, running,
-      done, failed, with the reason), and more of the bus as the screen height allows.
+      When the operator opens the panel, they can see the push intents and the queue (pending, running,
+      done, failed, with the reason), so the left panel shows what cabildo is doing, not only the Claude
+      subscription.
     sources:
       - kind: primary
         who: Jorge Cardona
         date: 2026-10-31
         quote: "it would be great to see the state of the intents on the left panel"
+      - kind: primary
+        who: Jorge Cardona
+        date: 2026-10-31
+        quote: "as an user I want to see the push intents and the queue on the left panel, that left panel showuld show me not just info about the calude subscriptions but also about the cabildo working that might be useful as those intents"
       - kind: internal
         date: 2026-10-31
         locator: "principle P-5; intent 1920 failed on uncommitted files and the only signal was a DM"
+    proofs:
+      - "test:tests/sessionmux/test_intents.py::test_load_lists_the_queue_running_first_then_the_latest_finished"
+      - "test:tests/sessionmux/test_intents.py::test_the_group_shows_the_queue_and_a_failure_with_its_reason"
+      - "test:tests/sessionmux/test_intents.py::test_the_mode_line_shows_the_intents_group_and_grows_to_fit_it"
 
   - id: SWITCH-11
     text: >
