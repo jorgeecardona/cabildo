@@ -24,7 +24,9 @@ from typing import Any
 # writable store for the project registry below.
 # --------------------------------------------------------------------------- #
 def config_path() -> Path:
-    return Path(os.path.expanduser("~/.cabildo/cloud.json"))
+    """``cloud.json`` in ``CABILDO_HOME`` (default ``~/.cabildo``), like the bus DB."""
+    home = os.environ.get("CABILDO_HOME")
+    return Path(home or os.path.expanduser("~/.cabildo")) / "cloud.json"
 
 
 def load_config() -> dict:
