@@ -26,7 +26,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import actions, broker, ci_watch, config, desktop, lan, monitor, names, record, store
+from . import actions, broker, ci_watch, config, desktop, gitlab, lan, monitor, names, record, store
 
 # A 'running' intent older than this means the daemon died holding it.
 STALE_AFTER = actions.GATE_TIMEOUT + 300
@@ -187,6 +187,8 @@ def _start_ci_watch(intent: dict, result: dict) -> None:
     sha, url = result.get("sha"), result.get("remote_url")
     if result.get("pushed") is not True or not sha or not url:
         return
+    if config.ci_poll() > 0:
+        return  # the GitLab poller reports this pipeline, to the same pusher
     timeout = config.push_ci_watch(str(intent["params"].get("cwd") or "") or None)
     if timeout <= 0:
         return
@@ -197,7 +199,7 @@ def _start_ci_watch(intent: dict, result: dict) -> None:
 
 def _ci_watch_thread(intent: dict, url: str, sha: str, timeout: float) -> None:
     try:
-        body = ci_watch.watch(url, sha, timeout=timeout)
+        body = ci_watch.watch(url, sha, timeout=timeout, glab=gitlab.api)
         if body is None:
             return
         conn = store.connect()
@@ -215,6 +217,17 @@ def _ci_watch_thread(intent: dict, url: str, sha: str, timeout: float) -> None:
             conn.close()
     except Exception as e:  # a broken watch must not touch the daemon
         _log(f"  (ci watch for {sha[:12]} failed: {type(e).__name__}: {e})")
+
+
+def _ci_poll_thread() -> None:
+    try:
+        conn = store.connect()
+        try:
+            gitlab.poll(conn, log=_log)
+        finally:
+            conn.close()
+    except Exception as e:  # a broken poll must not touch the daemon
+        _log(f"gitlab poll failed: {type(e).__name__}: {e}")
 
 
 def _handle_on_thread(intent: dict, ctx: actions.Ctx) -> None:
@@ -466,6 +479,9 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
     last_reap = 0.0
     last_monitor = 0.0
     last_record = 0.0
+    last_ci = 0.0
+    ci_every = 0.0 if args.once else config.ci_poll()
+    ci_thread: threading.Thread | None = None
     try:
         while True:
             if stop is not None and stop.is_set():
@@ -507,6 +523,12 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
             if ctx.save_messages and now - last_record >= RECORD_MESSAGES_EVERY:
                 last_record = now
                 record.ingest(conn, log=_log)
+            # GitLab polls run on a thread with their own connection: a slow API
+            # must not hold up the intent queue. One poll at a time.
+            if ci_every and now - last_ci >= ci_every and not (ci_thread and ci_thread.is_alive()):
+                last_ci = now
+                ci_thread = threading.Thread(target=_ci_poll_thread, daemon=True)
+                ci_thread.start()
             if args.once:
                 if workers:
                     for t in workers:

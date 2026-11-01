@@ -179,7 +179,7 @@ def watch(
     try:
         result = wait_for_pipeline(repo, sha, timeout=timeout, glab=glab, sleep=sleep, now=now)
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
-        return None
+        return None  # GitlabError is a RuntimeError
     if result is None or result.status in ("success", "skipped"):
         return None
     return message(sha, result)

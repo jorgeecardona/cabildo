@@ -210,6 +210,20 @@ def push_timeout(cwd: str | None = None, project_name: str | None = None) -> flo
         return 300.0
 
 
+def ci_poll(cwd: str | None = None) -> float:
+    """``[ci].poll_s``: seconds between GitLab pipeline polls by the daemon.
+
+    Every failed pipeline of a repo with an active session is reported: a DM to
+    the agent that pushed the commit, else an urgent post to the project
+    channel. Default 60. 0 turns the poller off.
+    """
+    val = get(cwd, "ci", "poll_s", default=60.0)
+    try:
+        return max(0.0, float(val))
+    except (TypeError, ValueError):
+        return 60.0
+
+
 def push_ci_watch(cwd: str | None = None, project_name: str | None = None) -> float:
     """``[push].ci_watch_s``: seconds the daemon waits for the GitLab pipeline of a pushed commit.
 

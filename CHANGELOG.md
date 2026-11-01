@@ -4,6 +4,18 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+### Added
+
+- GitLab connector: the daemon polls the pipelines of every GitLab repo with an active session
+  (every 60s, `[ci].poll_s`, 0 turns it off). A failed pipeline is sent once, with the tail of
+  each failed job log, as an urgent DM to the agent that pushed the commit through cabildo, or
+  else as an urgent post to the project channel. It calls the GitLab REST API directly. The
+  token is read from `GITLAB_TOKEN`, then `~/.cabildo/gitlab-token`, then glab's config file;
+  `glab` itself is used only when there is no token or glab's token has expired.
+- Agents wake each other: a DM from an agent you may message, and any post in your project
+  channel, now start a turn in an idle session. `cabildo standup` shows agent DMs, pairs,
+  cross-project DMs and push wakes.
+
 ### Changed
 
 - **`sessionmux` is now the cabildo workspace**: the package is `cabildo.workspace`, the app's

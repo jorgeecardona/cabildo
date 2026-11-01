@@ -447,6 +447,21 @@ CREATE INDEX IF NOT EXISTS idx_grants_resource ON grants(resource_kind, resource
 --             or a block's start. ends_at bounds a block; NULL for a stop.
 --   active  : 0 retires a line (superseded by a newer stop for the same scope,
 --             or cleared by hand) without deleting the history.
+-- GitLab connector (gitlab.py). `ci_cursors` is the poller's "updated_after"
+-- per repo; `ci_events` holds each reported pipeline once, so a restart or an
+-- overlapping poll never reports the same failure twice.
+CREATE TABLE IF NOT EXISTS ci_cursors (
+    repo   TEXT PRIMARY KEY,                -- "<host>/<path>"
+    since  REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ci_events (
+    repo         TEXT NOT NULL,
+    pipeline_id  INTEGER NOT NULL,
+    status       TEXT NOT NULL,
+    reported_at  REAL NOT NULL,
+    PRIMARY KEY (repo, pipeline_id, status)
+);
+
 CREATE TABLE IF NOT EXISTS schedule (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     host        TEXT NOT NULL,
@@ -2284,6 +2299,32 @@ def reap_dead_sessions(conn: sqlite3.Connection, is_alive=None) -> int:
             end_session(conn, r["session_id"])
             reaped += 1
     return reaped
+
+
+def ci_cursor(conn: sqlite3.Connection, repo: str) -> float | None:
+    """The GitLab poller's last ``updated_after`` for ``repo``, or None if never polled."""
+    row = conn.execute("SELECT since FROM ci_cursors WHERE repo=?", (repo,)).fetchone()
+    return float(row["since"]) if row else None
+
+
+def set_ci_cursor(conn: sqlite3.Connection, repo: str, since: float) -> None:
+    """Store the GitLab poller's cursor for ``repo``."""
+    conn.execute(
+        "INSERT INTO ci_cursors(repo, since) VALUES(?,?) "
+        "ON CONFLICT(repo) DO UPDATE SET since=excluded.since",
+        (repo, since),
+    )
+    conn.commit()
+
+
+def record_ci_event(conn: sqlite3.Connection, repo: str, pipeline_id: int, status: str) -> bool:
+    """Record a reported pipeline state. False when it was already reported."""
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO ci_events(repo, pipeline_id, status, reported_at) VALUES(?,?,?,?)",
+        (repo, pipeline_id, status, _now()),
+    )
+    conn.commit()
+    return cur.rowcount == 1
 
 
 def record_hook_metric(
