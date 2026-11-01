@@ -10,7 +10,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   (`sessions_list`, `sessions_tag`, `sessions_suggest_tags`, `sessions_export`,
   `sessions_combine`, `sessions_trash`) and `cabildo sessions list|tag|export|combine|trash`.
   Export leaves out tool calls and injected text; trash is reversible and needs a started
-  combined session that lists the sources (#44).
+  combined session that lists the sources. In the workspace app, `space` selects conversations;
+  `t` tags the selection, `e` exports, `c` combines into a new conversation, `D` trashes the
+  sources (#44).
 
 - Workspaces: opening the workspace app in a folder makes it a workspace. Every session in that
   folder or below joins the room `ws:<folder>-<hash>`, so agents of different projects there can

@@ -16,6 +16,7 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Literal
 
 from rich.cells import cell_len
@@ -31,7 +32,7 @@ from textual.suggester import SuggestFromList
 from textual.widgets import ContentSwitcher, DataTable, Input, Label, Static
 from textual.worker import get_current_worker
 
-from cabildo import __version__, cloud, store
+from cabildo import __version__, cloud, sessions_ops, store
 from cabildo.workspace import (
     agents,
     intents,
@@ -368,7 +369,11 @@ KEYS = f"""\
    C-r          restart: its Claude ends and starts again on the conversation
    C-d          delete (asks yes or no)
    x            close: its Claude ends, the conversation stays
-   l  g  t      label / group / tags
+   l  g  t      label / group / tags  (t on a selection: a, b adds; -c removes)
+   SPC          select / unselect; e c D act on the selection, else on the filtered list
+   e            export the conversations' text to Markdown (logs/ by default)
+   c            combine them into one new conversation seeded with the export
+   D            trash the sources, once their combined conversation has started
    n            notes for this session, separated by ; (written with no model call)
    a            list this directory / with subfolders / all directories
    f            filter by group / tag  (g:work t:urgent; empty = all)
@@ -514,6 +519,10 @@ class SwitcherApp(App[None]):
         Binding("l", "edit_label", "Label"),
         Binding("g", "edit_group", "Group"),
         Binding("t", "edit_tags", "Tags"),
+        Binding("space", "toggle_select", "Select", show=False),
+        Binding("e", "export", "Export"),
+        Binding("c", "combine", "Combine"),
+        Binding("D", "trash_sources", "Trash sources", show=False),
         Binding("n", "note", "Note"),
         Binding("q", "quit", "Quit"),
         Binding("R", "reload", "Reload"),
@@ -542,6 +551,7 @@ class SwitcherApp(App[None]):
         self._start_filter = only
         self.proj = os.path.basename(cwd.rstrip("/")) or cwd
         self.rows: list[Row] = []
+        self.selected: set[str] = set()  # `space`: head session ids the bulk actions act on
         self.scope: Scope = "here"  # `a` rotates it: here, subfolders, all
         self.filter = Filter()  # `f`: the list shows only these groups / tags
         self.reading = False  # a scan for a new scope is on its way
@@ -726,10 +736,11 @@ class SwitcherApp(App[None]):
     # --- rendering -------------------------------------------------------
 
     @staticmethod
-    def _session_text(r: Row, width: int) -> Text:
+    def _session_text(r: Row, width: int, selected: bool = False) -> Text:
         """Two lines: title (+ tags), then where it works (cwd · branch) and its rooms, dimmed."""
         # Tags are chips (reverse-video cyan) so they do not read as part of the title.
-        text = Text((f"[{r.meta.group}] " if r.meta.group else "") + r.display_title)
+        text = Text("✓ " if selected else "", style="bold green")
+        text.append((f"[{r.meta.group}] " if r.meta.group else "") + r.display_title)
         for t in r.meta.tags:
             text.append("  ")
             text.append(f" {t} ", style=TAG_STYLE)
@@ -882,6 +893,7 @@ class SwitcherApp(App[None]):
         self._cursor_after_scan = None
         same_order = [r.head.session_id for r in rows] == [r.head.session_id for r in self.rows]
         self.rows = rows
+        self.selected &= {r.head.session_id for r in rows}
         if not (
             same_order and not moved and self._columns_all == self.scope and self._update_in_place()
         ):
@@ -893,7 +905,9 @@ class SwitcherApp(App[None]):
         """The rows' text cut to the width cap, and the list width they need."""
         age_width = max([3] + [len(r.age) for r in self.rows])  # "Age" header
         text_width = max(1, self._max_width() - CHROME - age_width)
-        texts = [self._session_text(r, text_width) for r in self.rows]
+        texts = [
+            self._session_text(r, text_width, r.head.session_id in self.selected) for r in self.rows
+        ]
         content = max([cell_len(line) for t in texts for line in t.plain.split("\n")], default=0)
         return texts, min(self._max_width(), max(MIN_WIDTH, content + age_width + CHROME))
 
@@ -1651,6 +1665,9 @@ class SwitcherApp(App[None]):
         )
 
     def action_edit_tags(self) -> None:
+        if self.selected:
+            self._bulk_tags()
+            return
         self._edit(
             "Tags (comma-separated):",
             lambda r: ", ".join(r.meta.tags),
@@ -1658,6 +1675,121 @@ class SwitcherApp(App[None]):
                 key, lambda m: replace(m, tags=tuple(t.strip() for t in v.split(",") if t.strip()))
             ),
         )
+
+    # --- bulk actions on the selection (#44) -------------------------------
+
+    def action_toggle_select(self) -> None:
+        """Add the row under the cursor to the selection, or take it out."""
+        r = self._current_row()
+        if not r:
+            return
+        self.selected ^= {r.head.session_id}
+        if not self._update_in_place():
+            self._render()
+        self.action_cursor_down()
+
+    def _targets(self) -> list[Row]:
+        """The selection; else, with a filter on, every row shown; else the row under the cursor."""
+        if self.selected:
+            return [r for r in self.rows if r.head.session_id in self.selected]
+        if self.filter.active:
+            return list(self.rows)
+        r = self._current_row()
+        return [r] if r else []
+
+    def _bulk_tags(self) -> None:
+        rows = self._targets()
+
+        def done(value: str | None) -> None:
+            if value is None:
+                return
+            words = [w.strip() for w in value.split(",") if w.strip()]
+            add = [w.lstrip("+") for w in words if not w.startswith("-")]
+            remove = [w[1:] for w in words if w.startswith("-")]
+            n = sessions_ops.tag(rows, add, remove)
+            self.notify(f"Tags changed on {n} of {len(rows)} conversations")
+            self.reload()
+
+        self.push_screen(EditScreen(f"Tags for {len(rows)} (a, b to add; -c to remove):", ""), done)
+
+    def action_export(self) -> None:
+        """Write the conversations' text to a Markdown file (the project's logs/ by default)."""
+        rows = self._targets()
+        if not rows:
+            return
+        default = os.path.join(self.cwd, "logs", f"sessions-{time.strftime('%Y-%m-%d-%H%M')}.md")
+
+        def done(value: str | None) -> None:
+            if not value or not value.strip():
+                return
+            path = Path(os.path.expanduser(value.strip()))
+            try:
+                out = sessions_ops.export(rows, path, roots=[Path(self.cwd)])
+            except sessions_ops.SessionsError as e:
+                self.notify(f"Not exported: {e}", severity="warning")
+                return
+            self.notify(f"Exported {len(rows)} conversations to {short_path(str(out), 50)}")
+
+        self.push_screen(EditScreen(f"Export {len(rows)} conversations to:", default), done)
+
+    def action_combine(self) -> None:
+        """Export the conversations and open one new Claude seeded with the export."""
+        rows = self._targets()
+        if len(rows) < 2:
+            self.notify("Select two or more conversations (space), or filter to them (f)")
+            return
+
+        async def done(answer: str | None) -> None:
+            if answer is None or answer.strip().lower() != "yes":
+                return
+            try:
+                made = sessions_ops.combine(rows, self.cwd)
+            except sessions_ops.SessionsError as e:
+                self.notify(f"Not combined: {e}", severity="warning")
+                return
+            command = (CLAUDE, *made.command[1:])
+            target = Target(
+                session_ids=(made.session_id,),
+                session_id=made.session_id,
+                command=command,
+                cwd=self.cwd,
+            )
+            self.selected = set()
+            self._show(await self._mount(target))
+            self.notify(f"Combined {len(rows)} conversations; D trashes them once it has started")
+            self.reload()
+
+        self.push_screen(
+            EditScreen(f"Combine {len(rows)} conversations into a new one? (yes or no)", ""), done
+        )
+
+    def action_trash_sources(self) -> None:
+        """Trash conversations that a started combined conversation lists (reversible)."""
+        rows = [r for r in self._targets() if not r.meta.combined_from]
+        if not rows:
+            return
+        busy = self._open_ids().union(sid for sid, st in self.live.agents.items() if st.alive)
+        if any(busy.intersection(r.ids) for r in rows):
+            self.notify("Close the open ones first (x)", severity="warning")
+            return
+        if not sessions_ops.covered(rows):
+            self.notify(
+                "No started combined conversation lists these: combine first (c)",
+                severity="warning",
+            )
+            return
+
+        def done(answer: str | None) -> None:
+            if answer is None or answer.strip().lower() != "yes":
+                return
+            dests = sessions_ops.trash(rows)
+            self.selected = set()
+            self.reload()
+            self.notify(
+                f"Trashed {len(dests)} conversations ({short_path(str(dests[0].parent), 40)})"
+            )
+
+        self.push_screen(EditScreen(f"Trash {len(rows)} combined sources? (yes or no)", ""), done)
 
 
 def _log_crash(exc: BaseException) -> None:
