@@ -65,4 +65,3 @@ def test_forget_empties_the_room(conn, tmp_path):
     assert store.forget_workspace(conn, str(tmp_path)) is True
     assert topic not in store.subscriptions_of(conn, "A")
     assert store.forget_workspace(conn, str(tmp_path)) is False
-
