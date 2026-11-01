@@ -48,10 +48,16 @@ const bucketA = atom({ plugin: 'cabildo-push', key: 'bucket' } as const, {
 })
 const lastHumanA = atom({ plugin: 'cabildo-push', key: 'lastHumanAt' } as const, 0)
 const awaitingA = atom({ plugin: 'cabildo-push', key: 'awaiting' } as const, {})
+// Wake labels held back by DND / human-present / empty bucket. A suppressed wake
+// is retried by the doorbell's retry tick instead of being dropped with the row.
+const deferredA = atom({ plugin: 'cabildo-push', key: 'deferred' } as const, [])
+// How often a held-back wake is retried while the doorbell waits for new rows.
+const RETRY_MS = 30_000
 
 // Module-level, reset on hot reload (fine): one doorbell loop per module, so a
 // second session.start never runs two loops on the same cursor.
 let doorbellRunning = false
+let retryRunning = false
 
 // --------------------------------------------------------------------------- //
 // Shelling the cabildo CLI
@@ -318,6 +324,7 @@ async function handleBatch(
     void $.prompt.submit({
       text: `cabildo: ${wakers.length} new message(s) from ${who} — call the inbox tool to read them.`,
     })
+    await update($, deferredA, () => []) // this turn drains the inbox, held wakes included
     await cab($, ['meter', `--session=${sid}`, '--event=push_wake', '--json']).catch(() => {})
     if (clears.length) {
       await update($, awaitingA, (a) => {
@@ -332,11 +339,44 @@ async function handleBatch(
   }
 
   // Suppressed (DND / human present / bucket empty): coalesce everything into a
-  // badge + toast and start no turn. Handed-off ask entries are intentionally
-  // left in place so the interrupt grant survives to a later, un-suppressed wake.
+  // badge + toast, start no turn, and remember the wakers so `retryDeferred`
+  // starts the turn once the gate opens.
+  if (wakers.length) {
+    const labels = wakers.map(safeLabel)
+    await update($, deferredA, (d) => uniq([...d, ...labels]))
+  }
+  // Handed-off ask entries are intentionally left in place so the interrupt grant survives to a later, un-suppressed wake.
   const pending = [...wakers, ...toasts]
   if (pending.length) notifyPending($, pending)
   return moved
+}
+
+// Start the turn a suppressed batch could not, once DND is off, the human has
+// been away HUMAN_DEFER_MS, and the bucket has a token. Runs on its own timer
+// because the doorbell is blocked in `cabildo wait` until a new row lands.
+async function retryDeferred($: EngineInterface): Promise<void> {
+  try {
+    for (;;) {
+      await $.clock.sleep(RETRY_MS)
+      const held = await read($, deferredA)
+      if (held.length === 0) continue
+      const now = await $.clock.now()
+      if (await isDnd($)) continue
+      if (now - (await read($, lastHumanA)) < HUMAN_DEFER_MS) continue
+      if (!(await spendToken($, now))) continue
+      await update($, deferredA, () => [])
+      void $.prompt.submit({
+        text: `cabildo: held message(s) from ${held.join(', ')} — call the inbox tool to read them.`,
+      })
+      const sid = await read($, sessionIdA)
+      if (sid) {
+        await cab($, ['meter', `--session=${sid}`, '--event=push_wake', '--json']).catch(() => {})
+      }
+      $.ui.status(undefined)
+    }
+  } catch {
+    // the module is unloading
+  }
 }
 
 async function pruneAwaiting($: EngineInterface, now: number): Promise<void> {
@@ -402,6 +442,12 @@ export const register: Register = (on) => {
     // arrives after start, not on the backlog.
     await ensureSession($)
     void runDoorbell($)
+    if (!retryRunning) {
+      retryRunning = true
+      void retryDeferred($).finally(() => {
+        retryRunning = false
+      })
+    }
     return next(e)
   })
 

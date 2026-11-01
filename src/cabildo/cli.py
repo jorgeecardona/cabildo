@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -287,20 +288,47 @@ def cmd_whoami(args) -> int:
 
 
 def _wakes(conn, sid: str, m: dict) -> bool:
-    """Whether this message may start a turn in an idle session by default: a DM
-    from an agent that shares a chatroom with ``sid`` or runs on a paired machine,
-    or an urgent post in a chatroom. Joining a room is the opt-in to talk; the
-    mod's token bucket still caps how often anything wakes it.
+    """Whether this message may start a turn in an idle session by default.
+
+    Wakes: a DM the sender was allowed to send (same project, linked or granted
+    project, shared chatroom, or a paired machine: the consent check is the
+    opt-in); a role message; an urgent post in any room the session is in; any
+    post in the session's own project channel; and a room post elsewhere that
+    names the session (``@handle`` or robot name). A plain post in another room
+    does not. The mod's token bucket still caps how often anything
+    wakes it.
     """
     sender = m["from_session"]
     if m["to_session"] == sid:
         row = store.get_session(conn, sender)
-        remote = row is not None and str(row["client"] or "").startswith(store.REMOTE_PREFIX)
-        return remote or store.share_a_room(conn, sid, sender)
+        if row is not None and str(row["client"] or "").startswith(store.REMOTE_PREFIX):
+            return True  # the pairing is the consent
+        return store.consent_error(conn, sender, to_session=sid) is None
     if m["to_role"]:
-        return bool(m["urgent"])  # an urgent question wakes its holders like a room post
-    topic = str(m["topic"] or "")
-    return bool(m["urgent"]) and bool(topic) and not topic.startswith("proj:")
+        return True  # addressed to a role this session holds
+    if m["urgent"]:
+        return True
+    if _is_my_project_channel(conn, sid, str(m["topic"] or "")):
+        return True  # project peers talking is the collaboration we want
+    return _names_me(conn, sid, str(m["body"] or ""))
+
+
+def _is_my_project_channel(conn, sid: str, topic: str) -> bool:
+    """Whether ``topic`` is the ``proj:`` channel of this session's own project."""
+    row = store.get_session(conn, sid)
+    project = row["project_name"] if row is not None else None
+    return bool(project) and topic == store.project_topic(project)
+
+
+def _names_me(conn, sid: str, body: str) -> bool:
+    """Whether ``body`` mentions this session as ``@handle`` or ``@robot-name``."""
+    row = store.get_session(conn, sid)
+    labels = [names.robot_name(sid)]
+    if row is not None and row["handle"]:
+        labels.append(str(row["handle"]))
+    return any(
+        re.search(rf"@{re.escape(n.lstrip('@'))}(?![\w-])", body, re.IGNORECASE) for n in labels
+    )
 
 
 def _pull_row(m: dict, preview_chars: int, *, wakes: bool = False) -> dict:

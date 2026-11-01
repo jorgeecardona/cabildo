@@ -353,6 +353,21 @@ def session_banner(conn: sqlite3.Connection, session_id: str) -> str:
         "Coordinate with other agents via: send / inbox / read / list_agents / "
         "claim / release / claims. Messages are NOT auto-read — mark them with `read`."
     )
+    # Push delivery wakes an idle peer, but only for a message that exists. Without
+    # a rule for when to send one, agents work alone and nothing ever wakes anyone.
+    lines.append(
+        "Start the conversation yourself — do not wait to be asked. DM the agent "
+        "(`send` with `to`, or `cabildo_ask` to wait for the reply) when: you are about "
+        "to edit a file or area another agent claimed or is working in; you change an "
+        "API, schema, CLI, or config that another project uses (find its agent with "
+        "`directory` / `list_agents`); you are blocked on something another agent "
+        "owns; or you finish work someone is waiting on. A DM to an agent you are "
+        "allowed to message wakes it if idle, and so does any post in your project "
+        "channel; a post in another room does not unless it names them (@name) or is "
+        "urgent. Answer a DM with `cabildo_reply`, not a room post. Keep it short, say "
+        "what you need. Do not reply only to acknowledge or thank: every message wakes "
+        "the other agent and costs a turn."
+    )
     # Only when there is someone to collide with. Told at SessionStart because
     # by the time an agent's `git push` is denied it has already committed, and
     # an agent that learns the rule from a refusal spends its next move

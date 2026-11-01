@@ -34,12 +34,37 @@ def collect(conn, *, hours: float = DEFAULT_HOURS) -> dict[str, Any]:
     cost = usage.summarize(since)
     return {
         "hours": hours,
+        "collaboration": _collaboration(conn, since),
         "messages": {"total": len(msgs), "by_sender": dict(by_sender.most_common())},
         "tasks_in_flight": tasks,  # slug -> holder handle
         "spawns": len(spawns),
         "agents_active": [store.display_name(a) for a in store.active_sessions(conn)],
         "cost_weighted": round(cost.get("totals", {}).get("weighted", 0.0), 1),
     }
+
+
+def _collaboration(conn, since: float) -> dict[str, int]:
+    """Agent-to-agent traffic in the window: DMs, distinct pairs, cross-project
+    DMs, and push wakes (turns the push plugin started from a message).
+
+    The human is left out: these numbers say whether agents talk to each other.
+    """
+    rows = conn.execute(
+        "SELECT m.from_session AS a, m.to_session AS b, "
+        "sa.project_name AS pa, sb.project_name AS pb "
+        "FROM messages m "
+        "LEFT JOIN sessions sa ON sa.session_id = m.from_session "
+        "LEFT JOIN sessions sb ON sb.session_id = m.to_session "
+        "WHERE m.created_at >= ? AND m.to_session IS NOT NULL "
+        "AND m.from_session != ? AND m.to_session != ?",
+        (since, store.HUMAN_SESSION, store.HUMAN_SESSION),
+    ).fetchall()
+    pairs = {frozenset((r["a"], r["b"])) for r in rows}
+    cross = sum(1 for r in rows if r["pa"] and r["pb"] and r["pa"] != r["pb"])
+    wakes = conn.execute(
+        "SELECT COUNT(*) FROM hook_metrics WHERE event = 'push_wake' AND at >= ?", (since,)
+    ).fetchone()[0]
+    return {"dms": len(rows), "pairs": len(pairs), "cross_project": cross, "push_wakes": wakes}
 
 
 def render(data: dict[str, Any]) -> str:
@@ -51,6 +76,11 @@ def render(data: dict[str, Any]) -> str:
     agents = data["agents_active"]
     lines.append(
         f"  agents active: {len(agents)}" + (f" — {', '.join(agents[:8])}" if agents else "")
+    )
+    c = data["collaboration"]
+    lines.append(
+        f"  agent DMs: {c['dms']} between {c['pairs']} pair(s), "
+        f"{c['cross_project']} cross-project; push wakes: {c['push_wakes']}"
     )
     lines.append(f"  spawned: {data['spawns']}")
     tasks = data["tasks_in_flight"]

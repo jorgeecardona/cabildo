@@ -51,3 +51,20 @@ def test_collect_is_empty_on_a_quiet_bus(conn):
     assert d["messages"]["total"] == 0
     assert d["tasks_in_flight"] == {}
     assert "none claimed" in standup.render(d)
+
+
+def test_collect_counts_agent_dms_pairs_cross_project_and_wakes(conn):
+    make_session(conn, "a", handle="alice", project="/r/alpha", project_name="alpha")
+    make_session(conn, "b", handle="bob", project="/r/alpha", project_name="alpha")
+    make_session(conn, "c", handle="cleo", project="/r/beta", project_name="beta")
+    for frm, to in [("a", "b"), ("b", "a"), ("a", "c")]:
+        store.post_message(conn, from_session=frm, from_handle=None, body="x", to_session=to)
+    _msg(conn, "a", "alice", "room post is not a DM")
+    store.record_hook_metric(
+        conn, session_id="b", event="push_wake", injected_chars=0, elapsed_ms=None
+    )
+    c = standup.collect(conn, hours=24)["collaboration"]
+    assert c == {"dms": 3, "pairs": 2, "cross_project": 1, "push_wakes": 1}
+    assert "agent DMs: 3 between 2 pair(s), 1 cross-project; push wakes: 1" in standup.render(
+        standup.collect(conn, hours=24)
+    )

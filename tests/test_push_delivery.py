@@ -238,3 +238,54 @@ def test_pull_wakes_for_a_paired_machines_agent(conn, capsys):
     store.replace_remote_sessions(conn, "nodeA", [{"session_id": "R", "project_name": "x"}])
     store.post_message(conn, from_session="R", from_handle=None, body="dm", to_session="B")
     assert _pull_rows(capsys, "B")["dm"]["wakes"] is True
+
+
+def test_pull_wakes_for_a_dm_from_the_same_project(conn, capsys):
+    # The project channel is not a chatroom, so this used to fall through: two
+    # agents of one project could not wake each other by DM.
+    make_session(conn, "A", handle="alice", project="/repo/alpha", project_name="alpha")
+    make_session(conn, "B", handle="bob", project="/repo/alpha", project_name="alpha")
+    store.unsubscribe(conn, "A", "general")
+    store.unsubscribe(conn, "B", "general")
+    conn.commit()
+    store.post_message(conn, from_session="A", from_handle="alice", body="dm", to_session="B")
+    assert _pull_rows(capsys, "B")["dm"]["wakes"] is True
+
+
+def test_pull_wakes_for_an_urgent_post_in_the_project_channel(conn, capsys):
+    make_session(conn, "A", handle="alice", project="/repo/alpha", project_name="alpha")
+    make_session(conn, "B", handle="bob", project="/repo/alpha", project_name="alpha")
+    topic = store.project_topic("alpha")
+    store.post_message(
+        conn, from_session="A", from_handle="alice", body="loud", topic=topic, urgent=True
+    )
+    store.post_message(conn, from_session="A", from_handle="alice", body="chat", topic=topic)
+    rows = _pull_rows(capsys, "B")
+    assert rows["loud"]["wakes"] is True
+    assert rows["chat"]["wakes"] is True  # own project channel wakes
+
+
+def test_pull_wakes_for_a_room_post_that_names_the_session(conn, capsys):
+    make_session(conn, "A", handle="alice", project="/repo/alpha", project_name="alpha")
+    make_session(conn, "B", handle="bob", project="/repo/beta", project_name="beta")
+    store.post_message(
+        conn, from_session="A", from_handle="alice", body="hey @bob look", topic="general"
+    )
+    store.post_message(
+        conn, from_session="A", from_handle="alice", body="bob is fine", topic="general"
+    )
+    rows = _pull_rows(capsys, "B")
+    assert rows["hey @bob look"]["wakes"] is True
+    assert rows["bob is fine"]["wakes"] is False
+
+
+def test_pull_wakes_for_a_plain_post_in_the_own_project_channel_only(conn, capsys):
+    make_session(conn, "A", handle="alice", project="/repo/alpha", project_name="alpha")
+    make_session(conn, "B", handle="bob", project="/repo/alpha", project_name="alpha")
+    store.post_message(
+        conn, from_session="A", from_handle="alice", body="mine", topic=store.project_topic("alpha")
+    )
+    store.post_message(conn, from_session="A", from_handle="alice", body="other", topic="general")
+    rows = _pull_rows(capsys, "B")
+    assert rows["mine"]["wakes"] is True
+    assert rows["other"]["wakes"] is False
