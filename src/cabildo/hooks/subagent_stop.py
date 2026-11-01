@@ -63,6 +63,7 @@ def main() -> None:
             body=body,
             topic=topic,
             project=root,
+            auto=True,
         )
     finally:
         conn.close()

@@ -164,6 +164,9 @@ CREATE TABLE IF NOT EXISTS messages (
     -- 'lan'    => pulled from a peer over the LAN (see lan.py).
     -- 'wan'    => pulled from an explicit remote peer over a tunnel (see wan.py).
     provenance    TEXT NOT NULL DEFAULT 'local',
+    -- 1 => posted by a hook, not written by an agent (e.g. "subagent finished").
+    -- A notice like that is history, not a request: it never wakes anyone.
+    auto          INTEGER NOT NULL DEFAULT 0,
     -- A globally-unique id minted at the row's birth, stable across machines.
     -- The autoincrement `id` is only meaningful on the machine that generated
     -- it; `guid` is what lets two peers dedup the same message instead of
@@ -591,6 +594,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE messages ADD COLUMN to_role TEXT")
     if "reply_to" not in have_messages:
         conn.execute("ALTER TABLE messages ADD COLUMN reply_to TEXT")
+    if "auto" not in have_messages:
+        conn.execute("ALTER TABLE messages ADD COLUMN auto INTEGER NOT NULL DEFAULT 0")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_to_role ON messages(to_role)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to)")
 
@@ -1409,8 +1414,11 @@ def post_message(
     provenance: str = "local",
     guid: str | None = None,
     created_at: float | None = None,
+    auto: bool = False,
 ) -> int:
     """Insert a message and return its local id.
+
+    ``auto`` marks a notice a hook posted on its own; it never wakes a session.
 
     Exactly one of ``topic`` / ``to_session`` / ``to_role`` addresses it. A
     ``to_role`` message is a question for whoever holds that role (see
@@ -1434,8 +1442,8 @@ def post_message(
     ts = _now() if created_at is None else created_at
     cur = conn.execute(
         "INSERT INTO messages(created_at, from_session, from_handle, topic, to_session, "
-        "to_role, reply_to, project, body, urgent, provenance, guid, received_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(guid) DO NOTHING",
+        "to_role, reply_to, project, body, urgent, provenance, guid, received_at, auto) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(guid) DO NOTHING",
         (
             ts,
             from_session,
@@ -1450,6 +1458,7 @@ def post_message(
             provenance,
             guid,
             _now(),
+            1 if auto else 0,
         ),
     )
     conn.commit()

@@ -289,3 +289,17 @@ def test_pull_wakes_for_a_plain_post_in_the_own_project_channel_only(conn, capsy
     rows = _pull_rows(capsys, "B")
     assert rows["mine"]["wakes"] is True
     assert rows["other"]["wakes"] is False
+
+
+def test_pull_does_not_wake_for_a_hook_notice_in_the_project_channel(conn, capsys):
+    make_session(conn, "A", handle="alice", project="/repo/alpha", project_name="alpha")
+    make_session(conn, "B", handle="bob", project="/repo/alpha", project_name="alpha")
+    store.post_message(
+        conn,
+        from_session="A",
+        from_handle="alice",
+        body="subagent finished",
+        topic=store.project_topic("alpha"),
+        auto=True,
+    )
+    assert _pull_rows(capsys, "B")["subagent finished"]["wakes"] is False

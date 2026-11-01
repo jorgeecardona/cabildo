@@ -299,6 +299,8 @@ def _wakes(conn, sid: str, m: dict) -> bool:
     wakes it.
     """
     sender = m["from_session"]
+    if m.get("auto"):
+        return False  # a hook's notice ("subagent finished") is history, not a request
     if m["to_session"] == sid:
         row = store.get_session(conn, sender)
         if row is not None and str(row["client"] or "").startswith(store.REMOTE_PREFIX):

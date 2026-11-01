@@ -100,3 +100,35 @@ def test_banner_injects_the_role_description_verbatim(conn):
 def test_banner_has_no_role_line_without_a_role(conn):
     make_session(conn, "dev", handle="dev", project=P, project_name="x")
     assert "Your role" not in notify.session_banner(conn, "dev")
+
+
+def test_wake_preview_shows_project_mail_and_daemon_first_line_only(conn):
+    from cabildo import notify
+
+    make_session(conn, "A", handle="alice", project="/repo/alpha", project_name="alpha")
+    make_session(conn, "B", handle="bob", project="/repo/alpha", project_name="alpha")
+    make_session(conn, "C", handle="cleo", project="/repo/beta", project_name="beta")
+    store.post_message(
+        conn, from_session="A", from_handle="alice", body="need  you\n now", to_session="B"
+    )
+    store.post_message(
+        conn,
+        from_session="daemon",
+        from_handle="daemon",
+        body="❌ pipeline failed\nSECRET LOG LINE",
+        to_session="B",
+    )
+    store.post_message(
+        conn, from_session="C", from_handle="cleo", body="other project", to_session="B"
+    )
+    text = notify.wake_preview_text(conn, "B")
+    assert text is not None
+    assert "need you now" in text
+    assert "❌ pipeline failed" in text
+    assert "SECRET LOG LINE" not in text
+    assert "other project" not in text
+    assert "+1 more" in text
+    unread = store.inbox(conn, "B", unread_only=True)
+    assert len(unread) == 3  # previews never mark read
+    assert notify.is_wake_prompt("cabildo: 1 new message(s) from @x — call the inbox tool")
+    assert not notify.is_wake_prompt("fix the bug")

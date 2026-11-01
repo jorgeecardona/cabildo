@@ -1029,10 +1029,13 @@ def inbox(
     limit: int = DEFAULT_INBOX_LIMIT,
     full: bool = False,
     budget_chars: int = INBOX_BUDGET_CHARS,
+    mark_read: bool = False,
 ) -> dict[str, Any]:
     """Read messages addressed to you (direct messages + channels you follow).
-    Defaults to unread only. This does NOT mark anything read — call `read` for
-    that.
+    Defaults to unread only. It does not mark anything read unless
+    mark_read=True, which marks exactly the returned messages read in the same
+    call (one call instead of `inbox` + `read`). A truncated preview marked read
+    is still readable with `get_message`.
 
     Returns {"messages": [...], "more": N}. Each item has an `id`: pass it to
     `read` to clear it, or to `get_message` for the full body. Bodies are
@@ -1082,6 +1085,8 @@ def inbox(
                 if truncated:
                     item["truncated"] = True  # get_message(id) for the rest
             out.append(item)
+        if mark_read and msgs:
+            store.mark_read(conn, sid, message_ids=[m["id"] for m in msgs])
         return {"messages": out, "more": more}
 
 

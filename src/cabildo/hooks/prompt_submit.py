@@ -39,8 +39,11 @@ def main() -> None:
         # Conditions too: a turn that never makes a tool call would otherwise
         # never reach PostToolUse, and "the machine is out of RAM" is exactly
         # the kind of thing the user's next instruction depends on.
+        # A turn the push plugin started gets the mail itself, not a pointer to it.
+        wake = notify.is_wake_prompt(str(data.get("prompt") or ""))
+        mail = notify.wake_preview_text(conn, session_id) if wake else None
         line = notify._join(
-            notify.unread_line(conn, session_id),
+            mail or notify.unread_line(conn, session_id),
             notify.condition_text(conn, session_id),
             notify.timeline_text(conn, session_id, config.timeline_interval(cwd)),
         )
