@@ -50,7 +50,7 @@ const lastHumanA = atom({ plugin: 'cabildo-push', key: 'lastHumanAt' } as const,
 const awaitingA = atom({ plugin: 'cabildo-push', key: 'awaiting' } as const, {})
 // Wake labels held back by DND / human-present / empty bucket. A suppressed wake
 // is retried by the doorbell's retry tick instead of being dropped with the row.
-const deferredA = atom({ plugin: 'cabildo-push', key: 'deferred' } as const, [])
+const deferredA = atom({ plugin: 'cabildo-push', key: 'deferred' } as const, [] as number[])
 // How often a held-back wake is retried while the doorbell waits for new rows.
 const RETRY_MS = 30_000
 
@@ -342,8 +342,8 @@ async function handleBatch(
   // badge + toast, start no turn, and remember the wakers so `retryDeferred`
   // starts the turn once the gate opens.
   if (wakers.length) {
-    const labels = wakers.map(safeLabel)
-    await update($, deferredA, (d) => uniq([...d, ...labels]))
+    const ids = wakers.map((m) => m.id)
+    await update($, deferredA, (d) => [...new Set([...d, ...ids])])
   }
   // Handed-off ask entries are intentionally left in place so the interrupt grant survives to a later, un-suppressed wake.
   const pending = [...wakers, ...toasts]
@@ -358,20 +358,46 @@ async function retryDeferred($: EngineInterface): Promise<void> {
   try {
     for (;;) {
       await $.clock.sleep(RETRY_MS)
-      const held = await read($, deferredA)
-      if (held.length === 0) continue
+      if ((await read($, deferredA)).length === 0) continue
       const now = await $.clock.now()
       if (await isDnd($)) continue
       if (now - (await read($, lastHumanA)) < HUMAN_DEFER_MS) continue
-      if (!(await spendToken($, now))) continue
-      await update($, deferredA, () => [])
-      void $.prompt.submit({
-        text: `cabildo: held message(s) from ${held.join(', ')} — call the inbox tool to read them.`,
-      })
       const sid = await read($, sessionIdA)
-      if (sid) {
-        await cab($, ['meter', `--session=${sid}`, '--event=push_wake', '--json']).catch(() => {})
+      if (!sid) continue
+      // Take the held ids and clear them in one update, so a second retry loop
+      // (left over from a plugin reload) finds nothing and cannot wake twice.
+      let held: number[] = []
+      await update($, deferredA, (d) => {
+        held = d
+        return []
+      })
+      if (held.length === 0) continue
+      // The session may have read them in a human turn meanwhile: wake only for
+      // ids that are still unread.
+      const r = (await cab($, [
+        'pull',
+        `--session=${sid}`,
+        `--after=${Math.min(...held) - 1}`,
+        '--preview-chars=0',
+        '--json',
+      ]).catch(() => null)) as { messages: PullRow[] } | null
+      const unread = (r?.messages ?? []).filter((m) => held.includes(m.id) && !m.read)
+      if (unread.length === 0) {
+        $.ui.status(undefined)
+        continue
       }
+      if (!(await spendToken($, now))) {
+        const ids = unread.map((m) => m.id)
+        await update($, deferredA, (d) => [...new Set([...d, ...ids])])
+        continue
+      }
+      const who = uniq(unread.map(safeLabel)).join(', ')
+      void $.prompt.submit({
+        text: `cabildo: ${unread.length} held message(s) from ${who} — call the inbox tool to read them.`,
+      })
+      await cab($, ['meter', `--session=${sid}`, '--event=push_wake_retry', '--json']).catch(
+        () => {},
+      )
       $.ui.status(undefined)
     }
   } catch {

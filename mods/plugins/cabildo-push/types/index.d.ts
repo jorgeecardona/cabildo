@@ -30,9 +30,9 @@ declare module 'claude-code' {
       lastHumanAt: number
       // target session id -> the ask awaiting a reply from it.
       awaiting: Record<string, PushAsk>
-      // Labels of senders whose wake was held back by DND, a present human, or an
-      // empty bucket; retried on a timer so a suppressed wake is not lost.
-      deferred: string[]
+      // Ids of messages whose wake was held back by DND, a present human, or an
+      // empty bucket; retried on a timer, and only while still unread.
+      deferred: number[]
     }
   }
 }
