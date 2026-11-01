@@ -158,6 +158,7 @@ def fmt_use(label: str, use: Use | None, first_mb: float | None = None) -> str:
 
 
 USE_HEADER = grid("", "cpu", "mem")
+TAG_STYLE = "bold black on dark_cyan"
 Scope = Literal["here", "subfolders", "all"]
 SCOPES: tuple[Scope, ...] = ("here", "subfolders", "all")  # the order `a` goes through
 SCOPE_NAMES = {"here": "{proj}", "subfolders": "{proj}/…", "all": "all directories"}
@@ -727,12 +728,14 @@ class SwitcherApp(App[None]):
     @staticmethod
     def _session_text(r: Row, width: int) -> Text:
         """Two lines: title (+ tags), then where it works (cwd · branch) and its rooms, dimmed."""
-        line = (f"[{r.meta.group}] " if r.meta.group else "") + r.display_title
-        if r.meta.tags:
-            line += "  " + " ".join(f"·{t}" for t in r.meta.tags)
+        # Tags are chips (reverse-video cyan) so they do not read as part of the title.
+        text = Text((f"[{r.meta.group}] " if r.meta.group else "") + r.display_title)
+        for t in r.meta.tags:
+            text.append("  ")
+            text.append(f" {t} ", style=TAG_STYLE)
         if r.notes:
-            line += f"  ✎ {notes.label(r.notes)}"
-        line = line[:width]
+            text.append(f"  ✎ {notes.label(r.notes)}")
+        text.truncate(width)
         # branch and rooms each get a third of the width at most; the cwd takes what is left
         room_text = rooms.label(r.rooms)
         if len(room_text) > width // 3:
@@ -744,7 +747,6 @@ class SwitcherApp(App[None]):
         room_left = width - len(tail)
         where = (short_path(r.cwd, room_left) if room_left >= 2 else "") + tail
         where = where if room_left >= 2 else where.lstrip(" ·")
-        text = Text(line)
         text.append("\n" + where, style="dim")
         return text
 
