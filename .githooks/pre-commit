@@ -33,6 +33,24 @@ if printf '%s\n' "${staged[@]}" | grep -qE '^src/.*\.py$'; then
     fi
 fi
 
+# 1b. bump the cabildo-push plugin version when its files change. `claude plugin
+#     update` (run by `cabildo install`) is a no-op on an unchanged version, so a
+#     mod change without a bump never reaches the plugin cache.
+plugin_json=mods/plugins/cabildo-push/.claude-plugin/plugin.json
+if printf '%s\n' "${staged[@]}" | grep -qE '^mods/plugins/cabildo-push/' \
+    && ! git diff --cached -- "$plugin_json" | grep -qE '^\+.*"version"'; then
+    python3 - "$plugin_json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+major, minor, patch = (int(x) for x in d["version"].split("."))
+d["version"] = f"{major}.{minor}.{patch + 1}"
+open(p, "w").write(json.dumps(d, indent=2) + "\n")
+print(f"pre-commit: cabildo-push plugin -> {d['version']}")
+PY
+    git add "$plugin_json"
+fi
+
 # 2. lint staged Python (fast; pyright + tests run in pre-push)
 mapfile -t py < <(printf '%s\n' "${staged[@]}" | grep -E '\.py$' || true)
 if [[ ${#py[@]} -gt 0 ]]; then
