@@ -6,6 +6,15 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
+- Workspaces: opening the workspace app in a folder makes it a workspace. Every session in that
+  folder or below joins the room `ws:<folder>-<hash>`, so agents of different projects there can
+  DM each other and wake each other. A plain post in the room does not wake anyone; `@name` or
+  urgent does. `cabildo workspace --forget` removes the folder.
+- A turn started by the push plugin shows previews of the new messages, so the agent can act
+  without calling `inbox`. `inbox(mark_read=True)` reads and marks in one call.
+- The daemon fails a push left "running" by a daemon that was restarted, at once instead of
+  after 35 minutes.
+
 - GitLab connector: the daemon polls the pipelines of every GitLab repo with an active session
   (every 60s, `[ci].poll_s`, 0 turns it off). A failed pipeline is sent once, with the tail of
   each failed job log, as an urgent DM to the agent that pushed the commit through cabildo, or

@@ -84,6 +84,24 @@ def _worker_name() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
 
 
+def _reap_dead_workers(conn) -> int:
+    """Fail 'running' intents taken by a daemon on this host whose process is gone.
+
+    A restart (systemd stop, a crash) can skip the exit-time reap, and the age-based
+    reap waits ``STALE_AFTER`` (35 min) while the row blocks its lane.
+    """
+    host = socket.gethostname()
+    n = 0
+    for (w,) in conn.execute(
+        "SELECT DISTINCT worker FROM intents WHERE status='running' AND worker LIKE ?",
+        (host + ":%",),
+    ).fetchall():
+        pid = str(w).rsplit(":", 1)[-1]
+        if pid.isdigit() and int(pid) != os.getpid() and not Path(f"/proc/{pid}").exists():
+            n += store.reap_stale_intents(conn, 0, worker=str(w))
+    return n
+
+
 def _log(msg: str) -> None:
     print(f"{time.strftime('%H:%M:%S')} {msg}", flush=True)
 
@@ -402,7 +420,7 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
     store.register_session(conn, DAEMON_SESSION, cwd=os.getcwd())
     store.set_handle(conn, DAEMON_SESSION, DAEMON_HANDLE)
 
-    n = store.reap_stale_intents(conn, STALE_AFTER)
+    n = store.reap_stale_intents(conn, STALE_AFTER) + _reap_dead_workers(conn)
     if n:
         _log(f"failed {n} stale intent(s) left 'running' by a dead daemon")
     store.join_room_all(conn)

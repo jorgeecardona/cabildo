@@ -1680,6 +1680,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("working_dir", nargs="?", help="default: the current directory")
     parser.add_argument("-a", "--all", action="store_true", help="list every directory")
     parser.add_argument(
+        "--forget",
+        action="store_true",
+        help="stop treating the directory as a workspace (empties its room) and exit",
+    )
+    parser.add_argument(
         "-G", "--group", action="append", default=[], help="only this group (repeatable)"
     )
     parser.add_argument(
@@ -1699,6 +1704,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return args
 
 
+def _register_workspace(cwd: str) -> None:
+    """Make ``cwd`` a workspace on the bus, so the sessions under it share a room.
+
+    Best-effort: the app works without the bus.
+    """
+    try:
+        from cabildo import store
+
+        conn = store.connect()
+        try:
+            store.register_workspace(conn, cwd)
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     started_in = os.getcwd()  # a reload runs the same command line from here
     args = parse_args(sys.argv[1:] if argv is None else argv)
@@ -1712,7 +1734,18 @@ def main(argv: list[str] | None = None) -> int:
     except launch.ConfigError as exc:
         print(f"workspace: {exc}", file=sys.stderr)
         return 2
+    if args.forget:
+        from cabildo import store
+
+        conn = store.connect()
+        try:
+            gone = store.forget_workspace(conn, cwd)
+        finally:
+            conn.close()
+        print(f"workspace: {'forgot' if gone else 'was not a workspace:'} {cwd}")
+        return 0
     os.chdir(cwd)  # every Claude starts here: --resume looks up the transcript by cwd
+    _register_workspace(cwd)
     try:
         moved = tuple(f"Moved {line}" for line in legacy.move_old_files())
     except OSError as exc:

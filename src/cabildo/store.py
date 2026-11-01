@@ -10,6 +10,7 @@ resolved paths. `time.time()` floats are used for all timestamps.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
@@ -453,6 +454,16 @@ CREATE INDEX IF NOT EXISTS idx_grants_resource ON grants(resource_kind, resource
 -- GitLab connector (gitlab.py). `ci_cursors` is the poller's "updated_after"
 -- per repo; `ci_events` holds each reported pipeline once, so a restart or an
 -- overlapping poll never reports the same failure twice.
+-- Workspaces: folders the workspace app was opened in. A session whose cwd is
+-- the folder or below it joins the room `ws:<name>-<hash>`, and sharing a room
+-- is what lets two agents of different projects DM and wake each other. The
+-- row outlives the app: it says "this folder is a workspace", not "the app runs".
+CREATE TABLE IF NOT EXISTS workspaces (
+    path        TEXT PRIMARY KEY,
+    created_at  REAL NOT NULL,
+    last_seen   REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS ci_cursors (
     repo   TEXT PRIMARY KEY,                -- "<host>/<path>"
     since  REAL NOT NULL
@@ -729,6 +740,7 @@ def register_session(
     # machines. [chat] room renames it; an empty room turns the auto-join off.
     ensure_topic(conn, DEFAULT_TOPIC)  # keep the room available to join
     _join_room(conn, session_id)
+    _join_workspaces(conn, session_id)
     # The effective name after this upsert: a caller that didn't pass one leaves
     # the stored value in place (COALESCE above), so fall back to the old name.
     new_pname = project_name or old_pname
@@ -768,6 +780,70 @@ def _join_room(conn: sqlite3.Connection, session_id: str) -> None:
             subscribe(conn, session_id, name)
     except Exception:
         pass
+
+
+def workspace_topic(path: str) -> str:
+    """The room of the workspace at ``path``: its folder name plus a short hash of
+    the full path, so two folders both named ``api`` stay two rooms.
+    """
+    name = "".join(c if c.isalnum() or c in "-_." else "-" for c in os.path.basename(path))
+    digest = hashlib.sha1(path.encode()).hexdigest()[:6]  # noqa: S324 - a name, not security
+    return f"ws:{name or 'root'}-{digest}"
+
+
+def _contains(folder: str, cwd: str) -> bool:
+    return cwd == folder or cwd.startswith(folder.rstrip("/") + "/")
+
+
+def _join_workspaces(conn: sqlite3.Connection, session_id: str) -> None:
+    """Join every workspace room whose folder contains this session's cwd.
+
+    All of them, not only the innermost: that is what the app's "subfolders"
+    scope shows. A paired machine's session is skipped (its cwd is another
+    machine's, and the pairing is already the consent).
+    """
+    row = conn.execute(
+        "SELECT cwd, client FROM sessions WHERE session_id=?", (session_id,)
+    ).fetchone()
+    if row is None or not row["cwd"] or str(row["client"] or "").startswith(REMOTE_PREFIX):
+        return
+    cwd = os.path.realpath(str(row["cwd"]))
+    for w in conn.execute("SELECT path FROM workspaces").fetchall():
+        if _contains(w["path"], cwd):
+            topic = workspace_topic(w["path"])
+            ensure_topic(conn, topic, created_by=session_id)
+            subscribe(conn, session_id, topic)
+
+
+def register_workspace(conn: sqlite3.Connection, path: str) -> str:
+    """Record ``path`` as a workspace and put its running sessions in its room.
+
+    Returns the room name. Called by the workspace app when it starts.
+    """
+    path = os.path.realpath(path)
+    now = _now()
+    conn.execute(
+        "INSERT INTO workspaces(path, created_at, last_seen) VALUES (?,?,?) "
+        "ON CONFLICT(path) DO UPDATE SET last_seen=excluded.last_seen",
+        (path, now, now),
+    )
+    ensure_topic(conn, workspace_topic(path))
+    for r in conn.execute(
+        "SELECT session_id FROM sessions WHERE status='active' AND last_seen_at>=?",
+        (now - ACTIVE_WINDOW,),
+    ).fetchall():
+        _join_workspaces(conn, r["session_id"])
+    conn.commit()
+    return workspace_topic(path)
+
+
+def forget_workspace(conn: sqlite3.Connection, path: str) -> bool:
+    """Drop the workspace at ``path`` and empty its room. False if it was not one."""
+    path = os.path.realpath(path)
+    cur = conn.execute("DELETE FROM workspaces WHERE path=?", (path,))
+    conn.execute("DELETE FROM subscriptions WHERE topic=?", (workspace_topic(path),))
+    conn.commit()
+    return cur.rowcount == 1
 
 
 def join_room_all(conn: sqlite3.Connection) -> int:
