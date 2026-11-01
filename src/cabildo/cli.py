@@ -36,6 +36,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -1709,6 +1710,40 @@ def cmd_opencode(args) -> int:
     return 0
 
 
+def cmd_session_ops(args) -> int:
+    """`cabildo sessions <cmd>`: tag, list, export, combine and trash Claude Code sessions."""
+    from . import sessions_ops
+
+    root = None if args.all else os.path.abspath(args.dir)
+    try:
+        if args.sessions_cmd == "list":
+            for r in sessions_ops.rows(root, tag=args.tag, query=args.query):
+                d = sessions_ops.describe(r)
+                tags = ",".join(r.meta.tags) or "-"
+                print(f"{str(d['id'])[:8]}  {d['date']}  {tags:20}  {d['title']}")
+            return 0
+        rows = sessions_ops.select(root, ids=args.ids, tag=args.tag)
+        if args.sessions_cmd == "tag":
+            n = sessions_ops.tag(rows, args.add, args.remove)
+            print(f"{n} session(s) changed")
+        elif args.sessions_cmd == "export":
+            out = Path(args.out).resolve() if args.out else None
+            roots = [Path(root)] if root else []
+            print(sessions_ops.export(rows, out, roots=roots, force=args.force))
+        elif args.sessions_cmd == "combine":
+            done = sessions_ops.combine(rows, root or os.getcwd(), start=args.start)
+            print(f"combined {len(rows)} session(s) into {done.session_id}")
+            print(f"export: {done.export_path}")
+            print(done.resume if done.started else shlex.join(done.command))
+        else:
+            for d in sessions_ops.trash(rows, force=args.force):
+                print(d)
+    except sessions_ops.SessionsError as e:
+        print(f"cabildo sessions: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_standup(args) -> int:
     """Who touched what over a window, from cabildo's own record — messages, tasks in
     flight, spawns, active agents, and token cost.
@@ -2511,6 +2546,32 @@ def main(argv: list[str] | None = None) -> int:
     se.add_argument("-a", "--all", action="store_true", help="every project, not just this one")
     se.add_argument("-n", "--limit", type=int, default=20, help="max sessions to show")
     se.set_defaults(fn=cmd_sessions)
+    se_sub = se.add_subparsers(dest="sessions_cmd")
+    for name, help_ in (
+        ("list", "sessions of this folder and its subfolders, with tags"),
+        ("tag", "add or remove tags"),
+        ("export", "write the conversation text to Markdown"),
+        ("combine", "export, then one new session seeded with it"),
+        ("trash", "move to the workspace trash (needs a started combined session)"),
+    ):
+        sp = se_sub.add_parser(name, help=help_)
+        sp.add_argument("--dir", default=".", help="project folder (default: here)")
+        sp.add_argument("--all", action="store_true", help="every folder, not only --dir")
+        sp.add_argument("-t", "--tag", help="select by tag")
+        if name == "list":
+            sp.add_argument("-q", "--query", help="match title, label, first prompt")
+        else:
+            sp.add_argument("ids", nargs="*", help="session ids or 8-char prefixes")
+        if name == "tag":
+            sp.add_argument("--add", action="append", default=[], help="tag to add")
+            sp.add_argument("--remove", action="append", default=[], help="tag to remove")
+        if name == "export":
+            sp.add_argument("-o", "--out", help="output file (under --dir or the data dir)")
+        if name in ("export", "trash"):
+            sp.add_argument("--force", action="store_true", help="overwrite / skip the check")
+        if name == "combine":
+            sp.add_argument("--start", action="store_true", help="run its first turn now")
+        sp.set_defaults(fn=cmd_session_ops)
 
     sp = sub.add_parser("spawn", help="queue a headless agent in its own worktree")
     sp.add_argument("role", help="pm | qa | ux")

@@ -119,6 +119,7 @@ class Meta:
     label: str = ""
     group: str = ""
     tags: tuple[str, ...] = ()
+    combined_from: tuple[str, ...] = ()  # session ids this one was combined from (#44)
 
 
 @dataclass(frozen=True)
@@ -645,10 +646,14 @@ def read_meta(path: Path) -> dict[str, Meta]:
         if not isinstance(m, dict):
             continue
         label, group, tags = m.get("label", ""), m.get("group", ""), m.get("tags", [])
+        src = m.get("combined_from", [])
         out[sid] = Meta(
             label=label if isinstance(label, str) else "",
             group=group if isinstance(group, str) else "",
             tags=tuple(t for t in tags if isinstance(t, str)) if isinstance(tags, list) else (),
+            combined_from=(
+                tuple(x for x in src if isinstance(x, str)) if isinstance(src, list) else ()
+            ),
         )
     return out
 
@@ -659,8 +664,9 @@ def save_meta(meta: dict[str, Meta]) -> None:
     xdgdirs.make_dirs(path.parent, xdgdirs.data_home())
     payload = {
         sid: {"label": m.label, "group": m.group, "tags": list(m.tags)}
+        | ({"combined_from": list(m.combined_from)} if m.combined_from else {})
         for sid, m in meta.items()
-        if m.label or m.group or m.tags
+        if m.label or m.group or m.tags or m.combined_from
     }
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")

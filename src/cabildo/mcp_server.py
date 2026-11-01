@@ -1417,6 +1417,168 @@ def standup(hours: float = 24.0) -> str:
         return _standup.render(_standup.collect(conn, hours=hours))
 
 
+# --------------------------------------------------------------------------- #
+# Claude Code sessions: tag, list, export, combine, trash (#44)
+# --------------------------------------------------------------------------- #
+def _sessions_scope(all_projects: bool) -> tuple[str, str | None]:
+    """The caller's session id and the folder its session tools see (None: all)."""
+    with store.connect() as conn:
+        sid = _me(conn)
+        row = store.get_session(conn, sid)
+    root = (row["project"] or row["cwd"]) if row else None
+    return sid, None if all_projects else (root or os.getcwd())
+
+
+def _sessions_select(
+    ids: list[str] | None, tag: str | None, all_projects: bool
+) -> tuple[str, str | None, list[Any]]:
+    from . import sessions_ops
+
+    sid, root = _sessions_scope(all_projects)
+    return sid, root, sessions_ops.select(root, ids=ids or (), tag=tag)
+
+
+@mcp.tool()
+def sessions_list(
+    tag: str | None = None, query: str | None = None, all_projects: bool = False
+) -> dict[str, Any]:
+    """Claude Code sessions (conversations) of this project: id, title, date, tags, cwd.
+
+    ``tag`` keeps those with that tag; ``query`` matches title, label and first prompt.
+    ``all_projects`` lists every folder instead of this project and its subfolders.
+    """
+    from . import sessions_ops
+
+    _sid, root = _sessions_scope(all_projects)
+    rows = sessions_ops.rows(root, tag=tag, query=query)
+    return {"count": len(rows), "sessions": [sessions_ops.describe(r) for r in rows]}
+
+
+@mcp.tool()
+def sessions_tag(
+    ids: list[str],
+    add: list[str] | None = None,
+    remove: list[str] | None = None,
+    all_projects: bool = False,
+) -> dict[str, Any]:
+    """Add and remove tags on sessions (ids or 8-char prefixes from ``sessions_list``)."""
+    from . import sessions_ops
+
+    try:
+        _sid, _root, rows = _sessions_select(ids, None, all_projects)
+        changed = sessions_ops.tag(rows, add or (), remove or ())
+    except sessions_ops.SessionsError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "changed": changed}
+
+
+@mcp.tool()
+def sessions_suggest_tags(
+    ids: list[str] | None = None, untagged: bool = True, all_projects: bool = False
+) -> dict[str, Any]:
+    """Title and first prompt of sessions, so you can propose tags. Writes nothing.
+
+    Without ``ids`` it returns the sessions with no tags (all of them when
+    ``untagged`` is False). Apply your tags with ``sessions_tag``.
+    """
+    from . import sessions_ops
+
+    _sid, root = _sessions_scope(all_projects)
+    try:
+        rows = (
+            sessions_ops.select(root, ids=ids)
+            if ids
+            else [r for r in sessions_ops.rows(root) if not (untagged and r.meta.tags)]
+        )
+    except sessions_ops.SessionsError as e:
+        return {"ok": False, "error": str(e)}
+    return {
+        "ok": True,
+        "sessions": [
+            sessions_ops.describe(r) | {"first_text": sessions_ops.first_text(r)} for r in rows
+        ],
+    }
+
+
+@mcp.tool()
+def sessions_export(
+    ids: list[str] | None = None,
+    tag: str | None = None,
+    out: str | None = None,
+    force: bool = False,
+    all_projects: bool = False,
+) -> dict[str, Any]:
+    """Write the user and assistant text of sessions (by ``ids`` or ``tag``) to Markdown.
+
+    ``out`` is an absolute path under this project (for example its ``logs/``) or
+    the cabildo data dir; default is a new file in the data dir. An existing file
+    is kept unless ``force``. Tool calls and injected text are left out.
+    """
+    from pathlib import Path
+
+    from . import sessions_ops
+
+    try:
+        _sid, root, rows = _sessions_select(ids, tag, all_projects)
+        roots = [Path(root)] if root else []
+        path = sessions_ops.export(rows, Path(out) if out else None, roots=roots, force=force)
+    except sessions_ops.SessionsError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "path": str(path), "sessions": len(rows)}
+
+
+@mcp.tool()
+def sessions_combine(
+    ids: list[str] | None = None,
+    tag: str | None = None,
+    start: bool = True,
+    all_projects: bool = False,
+) -> dict[str, Any]:
+    """Combine sessions (by ``ids`` or ``tag``) into one new session seeded with their export.
+
+    The new session gets the sources' tags plus ``combined`` and records them as
+    ``combined_from``. With ``start`` (default) a headless first turn runs now, in
+    this project, so the session exists; open it with the returned ``resume`` line.
+    """
+    from . import sessions_ops
+
+    try:
+        _sid, root, rows = _sessions_select(ids, tag, all_projects)
+        done = sessions_ops.combine(rows, root or os.getcwd(), start=start)
+    except sessions_ops.SessionsError as e:
+        return {"ok": False, "error": str(e)}
+    return {
+        "ok": True,
+        "session_id": done.session_id,
+        "export": str(done.export_path),
+        "combined_from": len(rows),
+        "started": done.started,
+        "resume": done.resume,
+    }
+
+
+@mcp.tool()
+def sessions_trash(
+    ids: list[str] | None = None,
+    tag: str | None = None,
+    force: bool = False,
+    all_projects: bool = False,
+) -> dict[str, Any]:
+    """Move sessions (by ``ids`` or ``tag``) to the workspace trash. Reversible: RESTORE.txt.
+
+    Refused for the calling session, and unless a started combined session lists
+    all of them (``force`` skips only that check). Combined sessions are left out.
+    """
+    from . import sessions_ops
+
+    try:
+        sid, _root, rows = _sessions_select(ids, tag, all_projects)
+        dests = sessions_ops.trash(rows, keep=sid, force=force)
+    except sessions_ops.SessionsError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "trashed": len(dests), "trash": [str(d) for d in dests]}
+
+
 def _merge_issue_tools() -> None:
     """Register the issues/agenda tools onto this one `cabildo` server.
 

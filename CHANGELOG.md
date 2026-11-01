@@ -6,6 +6,12 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
+- Sessions can tag, list, export, combine and trash old Claude Code sessions through MCP tools
+  (`sessions_list`, `sessions_tag`, `sessions_suggest_tags`, `sessions_export`,
+  `sessions_combine`, `sessions_trash`) and `cabildo sessions list|tag|export|combine|trash`.
+  Export leaves out tool calls and injected text; trash is reversible and needs a started
+  combined session that lists the sources (#44).
+
 - Workspaces: opening the workspace app in a folder makes it a workspace. Every session in that
   folder or below joins the room `ws:<folder>-<hash>`, so agents of different projects there can
   DM each other and wake each other. A plain post in the room does not wake anyone; `@name` or
