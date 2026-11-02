@@ -36,6 +36,7 @@ from cabildo import __version__, cloud, sessions_ops, store
 from cabildo.workspace import (
     agents,
     intents,
+    keys,
     launch,
     legacy,
     notes,
@@ -356,34 +357,21 @@ class EditScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-MACOS = sys.platform == "darwin"
+def keys_help(globals_: keys.GlobalKeys) -> str:
+    """The ``?`` screen, with the global keys this app has bound."""
+    return KEYS.format(
+        version=__version__,
+        show=globals_.help("show_list").ljust(12),
+        toggle=globals_.help("toggle_list").ljust(12),
+    )
 
 
-def global_keys(*, macos: bool) -> tuple[str, str]:
-    """Return the Textual key lists for show_list and toggle_list.
-
-    Alt works on Linux. On macOS, Command arrives as ``super`` only in a terminal with the
-    kitty keyboard protocol (kitty, WezTerm, Ghostty, iTerm2 with CSI u). When Option is
-    not set to send Meta, Option-s types ``ß`` and Option-z types ``Ω`` (US layout), so those
-    characters are bound too. They are bound on macOS only: on Linux they are text (#45).
-    """
-    if not macos:
-        return "alt+s", "alt+z"
-    return "super+s,alt+s,ß", "super+z,alt+z,Ω"
-
-
-SHOW_KEYS, TOGGLE_KEYS = global_keys(macos=MACOS)
-GLOBAL_HELP = (
-    "Cmd-s / Opt-s" if MACOS else "Alt-s       ",
-    "Cmd-z / Opt-z" if MACOS else "Alt-z       ",
-)
-
-KEYS = f"""\
- workspace {__version__}
+KEYS = """\
+ workspace {version}
 
  Anywhere (also inside Claude)
-   {GLOBAL_HELP[0]} show the list and focus it
-   {GLOBAL_HELP[1]} hide / show the list
+   {show} show the list and focus it
+   {toggle} hide / show the list
 
  In the list
    RET          open the conversation (the first time: start its Claude)
@@ -413,8 +401,12 @@ KEYS = f"""\
 class KeysScreen(ModalScreen[None]):
     """`?`: the app's keys, emacs describe-bindings style. Any key closes it."""
 
+    def __init__(self, text: str) -> None:
+        super().__init__()
+        self.text = text
+
     def compose(self) -> ComposeResult:
-        yield Static(KEYS, id="keys")
+        yield Static(self.text, id="keys")
 
     def on_key(self, event) -> None:
         event.stop()
@@ -527,8 +519,11 @@ class SwitcherApp(App[None]):
     BINDINGS = [
         # anywhere, even while Claude has the keys. Alt + a letter only: Textual reads
         # Alt + a digit or < > as other characters.
-        Binding(SHOW_KEYS, "show_list", "List", priority=True),
-        Binding(TOGGLE_KEYS, "toggle_list", "Hide/show list", priority=True),
+        # the keys come from keys.py (per platform, or [keys] in config.toml) via set_keymap
+        Binding("alt+s", "show_list", "List", priority=True, id="workspace.show_list"),
+        Binding(
+            "alt+z", "toggle_list", "Hide/show list", priority=True, id="workspace.toggle_list"
+        ),
         # in the list only (inside Claude every key is Claude's)
         Binding("enter", "resume", "Open"),
         Binding("ctrl+n", "new", "New"),
@@ -566,7 +561,8 @@ class SwitcherApp(App[None]):
     ) -> None:
         super().__init__()
         self.cwd = cwd
-        self.config = config or Config()  # how Claude starts (launch.py)
+        self.config = config or Config()  # how Claude starts (launch.py), the global keys
+        self.set_keymap(self.config.keys.keymap())
         self._notes = notes  # shown once at start (e.g. files moved)
         # from the command line (-a, -G, -t); None: as at the last run
         self._start_all_dirs = all_dirs
@@ -1435,7 +1431,7 @@ class SwitcherApp(App[None]):
         self.push_screen(EditScreen("Filter:", self.filter.text(), choices, words=True), done)
 
     def action_toggle_keys(self) -> None:
-        self.push_screen(KeysScreen())
+        self.push_screen(KeysScreen(keys_help(self.config.keys)))
 
     def action_quit(self) -> None:  # type: ignore[override]
         """Close every Claude, then the app; asks first while any Claude runs."""

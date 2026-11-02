@@ -15,7 +15,13 @@ DISABLE_TELEMETRY = "1"
 [groups.work.launch]
 model = "claude-opus-5-5[1m]"
 permission-mode = "plan"
+
+[keys]
+show-list = ["alt+s", "ß"]
 ```
+
+``[keys]`` sets the global keys (see ``keys.py``); an action left out keeps its platform
+default.
 
 The values apply when Claude starts (new, resume, restart), never to ``claude attach``: an
 attached session is already running.
@@ -28,6 +34,7 @@ import tomllib
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 
+from cabildo.workspace import keys
 from cabildo.workspace.xdgdirs import APP, config_home
 
 
@@ -90,6 +97,7 @@ class Config:
 
     launch: Launch = PLAIN
     groups: dict[str, Launch] = field(default_factory=dict)
+    keys: keys.GlobalKeys = field(default_factory=keys.default)
 
     def launch_for(self, group: str) -> Launch:
         """The default, with the group's own values over it."""
@@ -100,7 +108,8 @@ class Config:
         """``cabildo workspace --model``: this model for every conversation, groups included."""
         if not model:
             return self
-        return Config(
+        return replace(
+            self,
             launch=replace(self.launch, model=model),
             groups={g: replace(lc, model=model) for g, lc in self.groups.items()},
         )
@@ -124,14 +133,18 @@ def load(path: Path | None = None) -> Config:
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"{path}: {exc}") from exc
     try:
-        _known(data, {"launch", "groups"}, "")
+        _known(data, {"launch", "groups", "keys"}, "")
         groups = _table(data.get("groups", {}), "groups")
         by_group: dict[str, Launch] = {}
         for name, table in groups.items():
             table = _table(table, f"groups.{name}")
             _known(table, {"launch"}, f"groups.{name}.")
             by_group[name.casefold()] = _launch(table.get("launch", {}), f"groups.{name}.launch")
-        return Config(launch=_launch(data.get("launch", {}), "launch"), groups=by_group)
+        return Config(
+            launch=_launch(data.get("launch", {}), "launch"),
+            groups=by_group,
+            keys=_keys(data.get("keys", {})),
+        )
     except ConfigError as exc:
         raise ConfigError(f"{path}: {exc}") from None
 
@@ -163,6 +176,25 @@ def _launch(raw: object, where: str) -> Launch:
     if not all(isinstance(v, str) for v in env.values()):
         raise ConfigError(f"{where}.env values must be strings")
     return Launch(**values, env=tuple(env.items()))  # type: ignore[arg-type]
+
+
+def _keys(raw: object) -> keys.GlobalKeys:
+    """``[keys]``: each action set replaces that action's platform default."""
+    table = _table(raw, "keys")
+    _known(table, {"show-list", "toggle-list"}, "keys.")
+    base = keys.default()
+    values: dict[str, tuple[str, ...]] = {}
+    for name in ("show-list", "toggle-list"):
+        if name not in table:
+            continue
+        items = table[name]
+        if not (isinstance(items, list) and items and all(isinstance(i, str) for i in items)):
+            raise ConfigError(f"keys.{name} is not a non-empty list of strings")
+        bad = [i for i in items if not keys.valid(i)]
+        if bad:
+            raise ConfigError(f"keys.{name}: {bad[0]!r} is not a key name")
+        values[name.replace("-", "_")] = tuple(items)
+    return replace(base, **values)
 
 
 def _table(raw: object, where: str) -> dict[str, object]:
