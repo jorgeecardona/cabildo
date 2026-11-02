@@ -1,7 +1,8 @@
 """Subscription usage limits (Claude Pro / Max) for the logged-in account.
 
 Claude Code keeps the subscription's OAuth token in ``.credentials.json`` in its config
-dir. The same endpoint Claude Code's ``/usage`` reads returns how much of the 5-hour and
+dir; on macOS it keeps the same JSON in the login Keychain, service ``Claude Code-credentials``
+(#46). The same endpoint Claude Code's ``/usage`` reads returns how much of the 5-hour and
 the 7-day limit is used. It is not a documented API: any failure returns None and the
 mode line leaves the row out. An API-key login has no ``claudeAiOauth`` entry, so no row.
 
@@ -18,6 +19,8 @@ import http.client
 import itertools
 import json
 import os
+import subprocess
+import sys
 import time
 import urllib.request
 from dataclasses import asdict, dataclass
@@ -48,10 +51,38 @@ class PlanUsage:
     seven_day: Limit | None
 
 
+KEYCHAIN_SERVICE = "Claude Code-credentials"
+
+
+def _keychain() -> str | None:
+    """The credentials JSON from the macOS login Keychain; None off macOS or without it."""
+    if sys.platform != "darwin":
+        return None
+    cmd = ["/usr/bin/security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"]
+    if user := os.environ.get("USER"):
+        cmd[2:2] = ["-a", user]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=5, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() or None
+
+
+def _credentials() -> str | None:
+    """The credentials JSON: the config dir's file first, then the macOS Keychain."""
+    try:
+        return (sessions.config_dir() / ".credentials.json").read_text()
+    except OSError:
+        return _keychain()
+
+
 def _token() -> tuple[str, str] | None:
     """The subscription name and a not-expired access token; None without one."""
+    raw = _credentials()
+    if raw is None:
+        return None
     try:
-        creds = json.loads((sessions.config_dir() / ".credentials.json").read_text())
+        creds = json.loads(raw)
         oauth = creds["claudeAiOauth"]
         token, plan = oauth["accessToken"], oauth.get("subscriptionType") or ""
         expires = float(oauth.get("expiresAt") or 0) / 1000  # milliseconds

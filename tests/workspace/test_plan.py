@@ -1,4 +1,5 @@
 import json
+import subprocess
 import time
 
 from cabildo.workspace import plan, xdgdirs
@@ -303,3 +304,49 @@ def test_two_reads_of_the_same_sample_show_the_same_pace(monkeypatch):
     first = plan.shared(not_before=0)
     monkeypatch.setattr(time, "time", lambda: first.taken_at + 40)  # read 40 s later
     assert first == plan.shared(not_before=0)
+
+
+def test_macos_reads_the_token_from_the_keychain(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))  # no .credentials.json here
+    monkeypatch.setenv("USER", "jorge")
+    monkeypatch.setattr(plan.sys, "platform", "darwin")
+    oauth = {"accessToken": "kc", "subscriptionType": "max", "expiresAt": 0}
+    calls = []
+
+    def run(cmd, **_kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, json.dumps({"claudeAiOauth": oauth}) + "\n")
+
+    monkeypatch.setattr(plan.subprocess, "run", run)
+    assert plan._token() == ("max", "kc")
+    assert calls == [
+        [
+            "/usr/bin/security",
+            "find-generic-password",
+            "-a",
+            "jorge",
+            "-s",
+            "Claude Code-credentials",
+            "-w",
+        ]
+    ]
+
+
+def test_linux_never_asks_the_keychain(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(plan.sys, "platform", "linux")
+    monkeypatch.setattr(
+        plan.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError)
+    )
+    assert plan._token() is None
+
+
+def test_keychain_miss_is_no_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(plan.sys, "platform", "darwin")
+
+    def run(cmd, **_kw):
+        raise subprocess.CalledProcessError(44, cmd)  # security: item not found
+
+    monkeypatch.setattr(plan.subprocess, "run", run)
+    assert plan._token() is None

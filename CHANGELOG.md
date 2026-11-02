@@ -150,6 +150,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Fixed
 
+- Workspace app on macOS: the subscription usage row shows again. The token is read from the
+  login Keychain when there is no `.credentials.json` (#46).
 - The "subagent finished" note is posted once per session title instead of once per subagent; it
   had made up 60% of the messages on a paired bus.
 - Quiet log: the address check no longer logs "handshake not done yet".
