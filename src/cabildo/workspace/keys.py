@@ -5,6 +5,7 @@ replaces them, one list of Textual key names per action:
 
 ```toml
 [keys]
+modifier = "ctrl"   # ctrl+s and ctrl+z instead of the platform default
 show-list = ["alt+s", "ß"]
 toggle-list = ["alt+z", "Ω"]
 ```
@@ -51,6 +52,16 @@ MAC = GlobalKeys(show_list=("alt+s", "ß"), toggle_list=("alt+z", "Ω"))
 def default(*, macos: bool = MACOS) -> GlobalKeys:
     """The keys for this platform when the config sets none."""
     return MAC if macos else LINUX
+
+
+MODIFIERS = ("alt", "ctrl", "super", "meta", "hyper")
+
+
+def with_modifier(modifier: str) -> GlobalKeys:
+    """``modifier+s`` and ``modifier+z``, with no other key. ``show-list`` / ``toggle-list``
+    set after it still win.
+    """
+    return GlobalKeys(show_list=(f"{modifier}+s",), toggle_list=(f"{modifier}+z",))
 
 
 _MODS = {"alt": "Alt", "ctrl": "C", "shift": "S", "super": "Cmd", "meta": "M", "hyper": "H"}

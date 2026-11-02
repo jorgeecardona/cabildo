@@ -7,7 +7,7 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 ### Added
 
 - Workspace app: the global keys (show the list, hide/show it) are set per platform and can be
-  changed in `config.toml` under `[keys]` (`show-list`, `toggle-list`). On macOS Option-s and
+  changed in `config.toml` under `[keys]`: `modifier` for both, or `show-list`, `toggle-list`. On macOS Option-s and
   Option-z work as typed (`ß`, `Ω`); Cmd-s and Cmd-z do not, the terminal keeps them (#45).
 
 - Sessions can tag, list, export, combine and trash old Claude Code sessions through MCP tools

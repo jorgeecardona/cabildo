@@ -17,6 +17,7 @@ model = "claude-opus-5-5[1m]"
 permission-mode = "plan"
 
 [keys]
+modifier = "ctrl"  # ctrl+s and ctrl+z; or set each action:
 show-list = ["alt+s", "ß"]
 ```
 
@@ -181,8 +182,13 @@ def _launch(raw: object, where: str) -> Launch:
 def _keys(raw: object) -> keys.GlobalKeys:
     """``[keys]``: each action set replaces that action's platform default."""
     table = _table(raw, "keys")
-    _known(table, {"show-list", "toggle-list"}, "keys.")
+    _known(table, {"modifier", "show-list", "toggle-list"}, "keys.")
     base = keys.default()
+    if "modifier" in table:
+        mod = table["modifier"]
+        if not (isinstance(mod, str) and mod in keys.MODIFIERS):
+            raise ConfigError(f"keys.modifier is not one of {', '.join(keys.MODIFIERS)}")
+        base = keys.with_modifier(mod)
     values: dict[str, tuple[str, ...]] = {}
     for name in ("show-list", "toggle-list"):
         if name not in table:

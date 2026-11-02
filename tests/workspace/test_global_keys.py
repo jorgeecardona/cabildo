@@ -79,3 +79,16 @@ def test_configured_key_hides_the_list_and_the_default_no_longer_does(
         assert not side.display
 
     drive(monkeypatch, scenario, config=config)
+
+
+def test_modifier_rebinds_both_and_an_action_still_wins(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('[keys]\nmodifier = "ctrl"\ntoggle-list = ["f12"]\n', encoding="utf-8")
+    assert launch.load(path).keys == keys.GlobalKeys(("ctrl+s",), ("f12",))
+
+
+def test_unknown_modifier_is_an_error(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text('[keys]\nmodifier = "cmd"\n', encoding="utf-8")
+    with pytest.raises(launch.ConfigError, match=r"keys\.modifier"):
+        launch.load(path)
