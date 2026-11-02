@@ -10,6 +10,7 @@ resolved paths. `time.time()` floats are used for all timestamps.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -20,7 +21,7 @@ import time
 import uuid
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from . import names
 
@@ -135,13 +136,20 @@ CREATE TABLE IF NOT EXISTS topics (
     -- 1 => a private room: a listen/send grant is required to join or post.
     -- 0 (default) => open-join, today's #general model. A proj:<name> channel
     -- stays gated by project identity, not by this flag.
-    gated       INTEGER NOT NULL DEFAULT 0
+    gated       INTEGER NOT NULL DEFAULT 0,
+    -- Which paired machines receive the channel's posts (docs/channels.md):
+    -- 'local' never leaves this machine, 'project' goes to a peer with an agent
+    -- in `project` (or in [lan] share), 'shared' goes to every paired peer.
+    scope       TEXT NOT NULL DEFAULT 'local',
+    folder      TEXT                  -- the workspace folder of a folder channel
 );
 
 CREATE TABLE IF NOT EXISTS subscriptions (
     session_id  TEXT NOT NULL,
     topic       TEXT NOT NULL,
     joined_at   REAL NOT NULL,
+    -- 'joined' (join_topic), 'project' or 'folder' (derived from the session row)
+    how         TEXT NOT NULL DEFAULT 'joined',
     PRIMARY KEY (session_id, topic)
 );
 
@@ -599,6 +607,27 @@ def _migrate(conn: sqlite3.Connection) -> None:
     have = {r["name"] for r in conn.execute("PRAGMA table_info(topics)")}
     if "gated" not in have:
         conn.execute("ALTER TABLE topics ADD COLUMN gated INTEGER NOT NULL DEFAULT 0")
+    if "scope" not in have:
+        # One-time backfill from the old name prefixes. Other channels synced to
+        # every paired peer before, so they stay 'shared'; #general and workspace
+        # channels become 'local' ([chat] share_general turns #general back on).
+        conn.execute("ALTER TABLE topics ADD COLUMN scope TEXT NOT NULL DEFAULT 'local'")
+        conn.execute(
+            "UPDATE topics SET scope='project', project=COALESCE(project, substr(name, 6)) "
+            "WHERE name LIKE 'proj:%'"
+        )
+        conn.execute(
+            "UPDATE topics SET scope='shared' "
+            "WHERE name NOT LIKE 'proj:%' AND name NOT LIKE 'ws:%' AND name<>?",
+            (DEFAULT_TOPIC,),
+        )
+    if "folder" not in have:
+        conn.execute("ALTER TABLE topics ADD COLUMN folder TEXT")
+    have_subs = {r["name"] for r in conn.execute("PRAGMA table_info(subscriptions)")}
+    if "how" not in have_subs:
+        conn.execute("ALTER TABLE subscriptions ADD COLUMN how TEXT NOT NULL DEFAULT 'joined'")
+        conn.execute("UPDATE subscriptions SET how='project' WHERE topic LIKE 'proj:%'")
+        conn.execute("UPDATE subscriptions SET how='folder' WHERE topic LIKE 'ws:%'")
 
     have_messages = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
     if "to_role" not in have_messages:
@@ -644,19 +673,63 @@ def dest_label(m: dict[str, Any]) -> str:
 # --------------------------------------------------------------------------- #
 # Sessions
 # --------------------------------------------------------------------------- #
+Scope = Literal["local", "project", "shared"]
+SCOPES: tuple[Scope, ...] = ("local", "project", "shared")
+
+
+@dataclasses.dataclass(frozen=True)
+class Channel:
+    """One row of ``topics``: where messages go, and which paired machines get them."""
+
+    name: str
+    scope: Scope
+    project: str | None  # the project key; set when ``scope`` is ``project``
+    gated: bool
+    folder: str | None = None
+
+
+def implied_scope(name: str) -> tuple[Scope, str | None]:
+    """The scope and project key a channel named ``name`` gets when nothing else says.
+
+    Only a ``proj:<name>`` channel gets ``project``; every other name is ``local``.
+    """
+    if name.startswith("proj:"):
+        return "project", name[len("proj:") :].strip().lower() or None
+    return "local", None
+
+
 def ensure_topic(
-    conn: sqlite3.Connection, name: str, project: str | None = None, created_by: str | None = None
+    conn: sqlite3.Connection,
+    name: str,
+    project: str | None = None,
+    created_by: str | None = None,
+    *,
+    scope: Scope = "local",
+    folder: str | None = None,
 ) -> None:
+    """Create the channel ``name`` if it is missing. An existing row is left as it is."""
     conn.execute(
-        "INSERT OR IGNORE INTO topics(name, project, created_by, created_at) VALUES (?,?,?,?)",
-        (name, project, created_by, _now()),
+        "INSERT OR IGNORE INTO topics(name, project, created_by, created_at, scope, folder) "
+        "VALUES (?,?,?,?,?,?)",
+        (name, project, created_by, _now(), scope, folder),
     )
 
 
-def subscribe(conn: sqlite3.Connection, session_id: str, topic: str) -> None:
+def channel(conn: sqlite3.Connection, name: str) -> Channel | None:
+    """The channel ``name``, or None when no such row exists."""
+    r = conn.execute(
+        "SELECT name, scope, project, gated, folder FROM topics WHERE name=?", (name,)
+    ).fetchone()
+    if r is None:
+        return None
+    scope = r["scope"] if r["scope"] in SCOPES else "local"
+    return Channel(r["name"], scope, r["project"], bool(r["gated"]), r["folder"])
+
+
+def subscribe(conn: sqlite3.Connection, session_id: str, topic: str, how: str = "joined") -> None:
     conn.execute(
-        "INSERT OR IGNORE INTO subscriptions(session_id, topic, joined_at) VALUES (?,?,?)",
-        (session_id, topic, _now()),
+        "INSERT OR IGNORE INTO subscriptions(session_id, topic, joined_at, how) VALUES (?,?,?,?)",
+        (session_id, topic, _now(), how),
     )
 
 
@@ -761,8 +834,9 @@ def register_session(
         if isolated:
             unsubscribe(conn, session_id, pt)
         else:
-            ensure_topic(conn, pt, project=project, created_by=session_id)
-            subscribe(conn, session_id, pt)
+            key = new_pname.strip().lower()
+            ensure_topic(conn, pt, project=key, created_by=session_id, scope="project")
+            subscribe(conn, session_id, pt, how="project")
     conn.commit()
 
 
@@ -777,6 +851,10 @@ def _join_room(conn: sqlite3.Connection, session_id: str) -> None:
         name = config.chat_room()
         if name:
             ensure_topic(conn, name, created_by=session_id)
+            # The config decides, every time: flipping [chat] share_general applies
+            # at the next session start without a migration.
+            scope = "shared" if config.share_general() else "local"
+            conn.execute("UPDATE topics SET scope=? WHERE name=?", (scope, name))
             subscribe(conn, session_id, name)
     except Exception:
         pass
@@ -811,8 +889,8 @@ def _join_workspaces(conn: sqlite3.Connection, session_id: str) -> None:
     for w in conn.execute("SELECT path FROM workspaces").fetchall():
         if _contains(w["path"], cwd):
             topic = workspace_topic(w["path"])
-            ensure_topic(conn, topic, created_by=session_id)
-            subscribe(conn, session_id, topic)
+            ensure_topic(conn, topic, created_by=session_id, folder=w["path"])
+            subscribe(conn, session_id, topic, how="folder")
 
 
 def register_workspace(conn: sqlite3.Connection, path: str) -> str:
@@ -827,7 +905,7 @@ def register_workspace(conn: sqlite3.Connection, path: str) -> str:
         "ON CONFLICT(path) DO UPDATE SET last_seen=excluded.last_seen",
         (path, now, now),
     )
-    ensure_topic(conn, workspace_topic(path))
+    ensure_topic(conn, workspace_topic(path), folder=path)
     for r in conn.execute(
         "SELECT session_id FROM sessions WHERE status='active' AND last_seen_at>=?",
         (now - ACTIVE_WINDOW,),
@@ -1800,7 +1878,7 @@ def _msg_dict(r: sqlite3.Row) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 def list_topics(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = conn.execute(
-        "SELECT t.name, t.project, t.gated, "
+        "SELECT t.name, t.project, t.gated, t.scope, t.folder, "
         "(SELECT COUNT(*) FROM subscriptions s WHERE s.topic=t.name) AS subscribers, "
         "(SELECT COUNT(*) FROM messages m WHERE m.topic=t.name) AS messages "
         "FROM topics t ORDER BY t.name"
@@ -1817,6 +1895,15 @@ def set_topic_gated(conn: sqlite3.Connection, topic: str, gated: bool = True) ->
     """
     ensure_topic(conn, topic)
     conn.execute("UPDATE topics SET gated=? WHERE name=?", (1 if gated else 0, topic))
+    conn.commit()
+
+
+def set_topic_scope(conn: sqlite3.Connection, topic: str, scope: Scope) -> None:
+    """Set which paired machines receive ``topic``'s posts. Ensures the topic exists first."""
+    if scope not in SCOPES:
+        raise ValueError(f"scope must be one of {', '.join(SCOPES)}")
+    ensure_topic(conn, topic)
+    conn.execute("UPDATE topics SET scope=? WHERE name=?", (scope, topic))
     conn.commit()
 
 

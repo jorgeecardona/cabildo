@@ -148,6 +148,13 @@ def chat_room() -> str | None:
     return str(name or "").lstrip("#").strip() or None
 
 
+def share_general() -> bool:
+    """``[chat] share_general``: whether #general posts go to paired machines. Default False."""
+    t = _read(_global_path()).get("chat")
+    val = t.get("share_general", False) if isinstance(t, dict) else False
+    return val is True or str(val).strip().lower() in ("1", "true", "yes", "on")
+
+
 def project_isolated(cwd: str | None = None, project_name: str | None = None) -> bool:
     """``[project.<name>].isolated`` for this project: default False.
 

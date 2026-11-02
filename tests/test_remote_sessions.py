@@ -111,6 +111,7 @@ def test_join_room_all_brings_in_sessions_that_were_already_open(conn):
 def test_a_room_post_leaves_the_machine_even_from_an_excluded_project(conn):
     from cabildo import lan
 
+    store.ensure_topic(conn, "general", scope="shared")
     store.post_message(
         conn,
         from_session="s1",
@@ -170,8 +171,60 @@ def test_a_project_channel_goes_only_where_the_peer_has_that_project(conn):
 
 def test_rooms_go_to_every_peer_but_relayed_rows_do_not(conn):
     _local(conn, "s1", "ana")
+    store.set_topic_scope(conn, "general", "shared")
     _say(conn, "room post", topic="general")
     store.post_message(
         conn, from_session="rx", from_handle=None, body="relayed", topic="general", provenance="lan"
     )
     assert _serve(conn, "anyone") == {"room post"}
+
+
+def test_general_stays_local_by_default(conn):
+    _local(conn, "s1", "ana")
+    _say(conn, "room post", topic="general")
+    assert _serve(conn, "anyone") == set()
+
+
+def test_the_scope_column_decides_not_the_name(conn):
+    _local(conn, "s1", "ana")
+    store.ensure_topic(conn, "proj:x", scope="local")
+    store.ensure_topic(conn, "team", scope="shared")
+    _say(conn, "named like a project", topic="proj:x")
+    _say(conn, "team post", topic="team")
+    assert _serve(conn, "anyone", share={"x"}) == {"team post"}
+
+
+def test_share_general_makes_general_shared(conn, monkeypatch):
+    from cabildo import config
+
+    monkeypatch.setattr(config, "share_general", lambda: True)
+    _local(conn, "s1", "ana")
+    _say(conn, "room post", topic="general")
+    assert _serve(conn, "anyone") == {"room post"}
+
+
+def test_migration_backfills_scope_from_old_names(tmp_path):
+    import sqlite3
+
+    db = sqlite3.connect(tmp_path / "old.db")
+    db.row_factory = sqlite3.Row
+    db.executescript(
+        "CREATE TABLE topics(name TEXT PRIMARY KEY, project TEXT, created_by TEXT,"
+        " created_at REAL NOT NULL, gated INTEGER NOT NULL DEFAULT 0);"
+        "CREATE TABLE subscriptions(session_id TEXT NOT NULL, topic TEXT NOT NULL,"
+        " joined_at REAL NOT NULL, PRIMARY KEY(session_id, topic));"
+        "INSERT INTO topics(name, created_at) VALUES"
+        " ('proj:alpha', 0), ('ws:a-123abc', 0), ('general', 0), ('war-room', 0);"
+        "INSERT INTO subscriptions VALUES ('s1', 'proj:alpha', 0), ('s1', 'ws:a-123abc', 0);"
+    )
+    db.executescript(store.SCHEMA)
+    store._migrate(db)
+    scopes = {r["name"]: (r["scope"], r["project"]) for r in db.execute("SELECT * FROM topics")}
+    assert scopes == {
+        "proj:alpha": ("project", "alpha"),
+        "ws:a-123abc": ("local", None),
+        "general": ("local", None),
+        "war-room": ("shared", None),
+    }
+    hows = {r["topic"]: r["how"] for r in db.execute("SELECT * FROM subscriptions")}
+    assert hows == {"proj:alpha": "project", "ws:a-123abc": "folder"}

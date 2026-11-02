@@ -93,7 +93,7 @@ for line in sys.stdin:
         print(json.dumps({"pin": svc.pairing.open().pin}), flush=True)
     elif cmd["op"] == "join":
         c = store.connect()
-        store.ensure_topic(c, cmd["topic"], created_by="sa")
+        store.ensure_topic(c, cmd["topic"], created_by="sa", scope="shared")
         store.subscribe(c, "sa", cmd["topic"])
         c.commit()
         c.close()
@@ -412,7 +412,7 @@ def test_an_open_topic_joins_three_agents_in_three_projects_on_two_machines(
                 claude_pid=100 + len(sid),
                 owner_pid=100 + len(sid),
             )
-            store.ensure_topic(conn, "war-room", created_by=sid)
+            store.ensure_topic(conn, "war-room", created_by=sid, scope="shared")
             store.subscribe(conn, sid, "war-room")
         conn.commit()
         pair.join(svc.me, "127.0.0.1", port, hello["pin"], my_port)

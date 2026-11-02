@@ -294,11 +294,14 @@ def select_all(
 
     What a peer gets, and nothing else:
 
-    - room posts (any topic that is not ``proj:``), always;
+    - a post in a ``shared`` channel, always;
     - a DM whose recipient is one of ``peer``'s own agents (stored here as
       ``client='lan:<peer>'``): DMs between two local agents stay home;
-    - a ``proj:<name>`` post when ``peer`` has an agent in project ``name``, or
-      ``name`` is in ``share`` (``[lan] share``): the same repo open on both machines.
+    - a post in a ``project`` channel when ``peer`` has an agent in that project, or
+      the project is in ``share`` (``[lan] share``): the same repo open on both machines.
+
+    A post in a ``local`` channel never leaves. The channel's ``scope`` column
+    decides, never its name (docs/channels.md).
 
     ``exclude`` (``[lan] exclude``) still withholds project channels and DMs of a
     project. The daemon's own DMs never leave (a pair result holds a live PIN).
@@ -318,6 +321,10 @@ def select_all(
         f"SELECT {_MSG_COLS}, provenance FROM messages WHERE id>? ORDER BY id LIMIT ?",
         (since, limit),
     ).fetchall()
+    channels = {
+        c["name"]: (c["scope"], c["project"])
+        for c in conn.execute("SELECT name, scope, project FROM topics")
+    }
     out: list[dict[str, Any]] = []
     max_id = since
     for r in rows:
@@ -333,11 +340,17 @@ def select_all(
             # A question belongs to its project: same gate as a project channel.
             if not key or key in exclude or not (key in their_projects or key in share):
                 continue
-        elif str(topic).startswith("proj:"):
-            name = cloud.project_key(str(topic)[len("proj:") :])
-            if name in exclude or not (name in their_projects or name in share):
+        else:
+            # A post to a name with no topics row (never joined here) falls back to
+            # the scope its name would get on creation.
+            scope, project = channels.get(topic) or store.implied_scope(str(topic))
+            if scope == "project":
+                name = cloud.project_key(project) if project else None
+                if not name or name in exclude or not (name in their_projects or name in share):
+                    continue
+            elif scope != "shared":
                 continue
-        # else: a room post belongs to the room, never to its sender's project.
+            # a shared post belongs to the channel, never to its sender's project.
         d = {k: r[k] for k in _MSG_FIELDS}
         d["urgent"] = bool(d["urgent"])
         d["project"] = key

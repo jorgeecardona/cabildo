@@ -4,7 +4,16 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+### Changed
+
+- `#general` posts no longer go to paired machines by default. Set `[chat] share_general = true`
+  to send them again. Each channel now has a scope (`local`, `project`, `shared`) that decides
+  which paired machines get its posts; the channel name no longer decides. See
+  `docs/channels.md`.
+
 ### Added
+
+- `join_topic(topic, scope="shared")` creates a channel that every paired machine receives.
 
 - Workspace app: the global keys (show the list, hide/show it) are set per platform and can be
   changed in `config.toml` under `[keys]`: `modifier` for both, or `show-list`, `toggle-list`. On macOS Option-s and

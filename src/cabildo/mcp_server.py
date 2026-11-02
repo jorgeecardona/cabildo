@@ -176,15 +176,21 @@ def _visible_projects(conn, sid: str) -> set[str] | None:
         return None
 
 
-def _proj_topic_name(topic: str | None) -> str | None:
-    """If `topic` is a per-project channel (proj:<name>), return <name> lowered,
-    else None. The proj:<name> channel is a project's private space, so it's the
-    unit Dial A gates on.
+def _proj_topic_name(conn, topic: str | None) -> str | None:
+    """The project key of a ``project`` channel, else None.
+
+    The channel's ``scope`` column decides; a name with no topics row falls back to
+    ``store.implied_scope``. A project channel is that project's private space, so
+    it is the unit Dial A gates on.
     """
     t = (topic or "").lstrip("#").strip()
-    if t.startswith("proj:"):
-        return t[len("proj:") :].strip().lower()
-    return None
+    if not t:
+        return None
+    ch = store.channel(conn, t)
+    scope, project = (ch.scope, ch.project) if ch else store.implied_scope(t)
+    if scope != "project":
+        return None
+    return (project or "").strip().lower() or None
 
 
 def _may_reach_project(
@@ -486,15 +492,21 @@ def list_topics() -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-def join_topic(topic: str) -> dict[str, Any]:
-    """Subscribe to a topic/channel so you receive its messages. Creates it if
-    it doesn't exist. Use topics to organize coordination by idea/thread.
+def join_topic(topic: str, scope: str = "local") -> dict[str, Any]:
+    """Subscribe to a channel so you receive its messages. Creates it if it doesn't
+    exist. Use channels to organize coordination by idea/thread.
+
+    ``scope`` applies only when this call creates the channel: ``local`` (default)
+    keeps its posts on this machine, ``shared`` sends them to every paired machine.
+    A ``project`` channel comes from the session's project, never from this call.
     """
     topic = topic.lstrip("#")
+    if scope not in ("local", "shared"):
+        return {"ok": False, "error": "scope must be 'local' or 'shared'"}
     with store.connect() as conn:
         sid = _me(conn)
         my_project = _project_name(conn, sid)
-        pj = _proj_topic_name(topic)
+        pj = _proj_topic_name(conn, topic)
         if pj is not None and not _may_reach_project(conn, my_project, pj, "listen"):
             return {
                 "ok": False,
@@ -511,10 +523,21 @@ def join_topic(topic: str) -> dict[str, Any]:
                     "error": f"#{topic} is a gated topic — `request_access` for a "
                     f"'listen' grant to join",
                 }
-        store.ensure_topic(conn, topic, created_by=sid)
+        if pj is not None:
+            store.ensure_topic(conn, topic, project=pj, created_by=sid, scope="project")
+        else:
+            store.ensure_topic(
+                conn, topic, created_by=sid, scope="shared" if scope == "shared" else "local"
+            )
         store.subscribe(conn, sid, topic)
         conn.commit()
-        return {"ok": True, "topic": topic, "subscriptions": store.subscriptions_of(conn, sid)}
+        ch = store.channel(conn, topic)
+        return {
+            "ok": True,
+            "topic": topic,
+            "scope": ch.scope if ch else scope,
+            "subscriptions": store.subscriptions_of(conn, sid),
+        }
 
 
 @mcp.tool()
@@ -819,7 +842,7 @@ def send(
                     f"`cabildo project <yours> --link {tname.strip().lower()}`",
                 }
         else:
-            pj = _proj_topic_name(topic)
+            pj = _proj_topic_name(conn, topic)
             if pj is not None:
                 if not _may_reach_project(conn, my_project, pj, "send"):
                     return {
@@ -1170,7 +1193,7 @@ def history(
     with store.connect() as conn:
         sid = _me(conn)
         visible = _visible_projects(conn, sid)
-        pj = _proj_topic_name(topic)
+        pj = _proj_topic_name(conn, topic)
         if visible is not None and pj is not None and pj not in visible:
             return []
         between = None
