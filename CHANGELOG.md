@@ -6,6 +6,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
+- Workspace app on macOS: Cmd-s and Cmd-z show and hide the list in terminals that report
+  Command (kitty, WezTerm, Ghostty, iTerm2 with CSI u). Option-s and Option-z also work when
+  Option types `ß` and `Ω`. Linux keeps Alt-s and Alt-z (#45).
+
 - Sessions can tag, list, export, combine and trash old Claude Code sessions through MCP tools
   (`sessions_list`, `sessions_tag`, `sessions_suggest_tags`, `sessions_export`,
   `sessions_combine`, `sessions_trash`) and `cabildo sessions list|tag|export|combine|trash`.

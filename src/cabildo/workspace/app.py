@@ -356,12 +356,34 @@ class EditScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+MACOS = sys.platform == "darwin"
+
+
+def global_keys(*, macos: bool) -> tuple[str, str]:
+    """Return the Textual key lists for show_list and toggle_list.
+
+    Alt works on Linux. On macOS, Command arrives as ``super`` only in a terminal with the
+    kitty keyboard protocol (kitty, WezTerm, Ghostty, iTerm2 with CSI u). When Option is
+    not set to send Meta, Option-s types ``ß`` and Option-z types ``Ω`` (US layout), so those
+    characters are bound too. They are bound on macOS only: on Linux they are text (#45).
+    """
+    if not macos:
+        return "alt+s", "alt+z"
+    return "super+s,alt+s,ß", "super+z,alt+z,Ω"
+
+
+SHOW_KEYS, TOGGLE_KEYS = global_keys(macos=MACOS)
+GLOBAL_HELP = (
+    "Cmd-s / Opt-s" if MACOS else "Alt-s       ",
+    "Cmd-z / Opt-z" if MACOS else "Alt-z       ",
+)
+
 KEYS = f"""\
  workspace {__version__}
 
  Anywhere (also inside Claude)
-   Alt-s        show the list and focus it
-   Alt-z        hide / show the list
+   {GLOBAL_HELP[0]} show the list and focus it
+   {GLOBAL_HELP[1]} hide / show the list
 
  In the list
    RET          open the conversation (the first time: start its Claude)
@@ -505,8 +527,8 @@ class SwitcherApp(App[None]):
     BINDINGS = [
         # anywhere, even while Claude has the keys. Alt + a letter only: Textual reads
         # Alt + a digit or < > as other characters.
-        Binding("alt+s", "show_list", "List", priority=True),
-        Binding("alt+z", "toggle_list", "Hide/show list", priority=True),
+        Binding(SHOW_KEYS, "show_list", "List", priority=True),
+        Binding(TOGGLE_KEYS, "toggle_list", "Hide/show list", priority=True),
         # in the list only (inside Claude every key is Claude's)
         Binding("enter", "resume", "Open"),
         Binding("ctrl+n", "new", "New"),
