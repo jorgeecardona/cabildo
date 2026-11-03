@@ -399,7 +399,7 @@ def check_lan() -> list[Check]:
 
     peers = pair.load_peers()
     if not peers:
-        return [Check("lan", NA, 'no paired machines (pair with `request("pair")`)')]
+        return [Check("lan", NA, "no paired machines (pair with `cabildo pair`)")]
     status = lan.load_status()
     checks: list[Check] = []
     for node, peer in peers.items():

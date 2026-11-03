@@ -1212,8 +1212,8 @@ def pair(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
             "ok": True,
             "pin": w.pin,
             "reason": f"PIN {w.pin} (valid 10 minutes, 5 tries). On the other machine: "
-            f'request("pair", {{"pin": "{w.pin}"}}). If it finds nothing, add '
-            f'"host" and "port": {where}',
+            f'`cabildo pair {w.pin}` (or MCP request("pair", {{"pin": "{w.pin}"}})). '
+            f"If it finds nothing, add --host and --port: {where}",
         }
     if not re.fullmatch(r"\d{6}", pin):
         raise Reject("params.pin must be the 6 digits shown on the other machine")

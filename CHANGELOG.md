@@ -13,6 +13,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
+- `cabildo pair` pairs this machine with another on the LAN: without a PIN it prints one, with a
+  PIN it joins. It is the same as the MCP `request("pair")`.
 - `join_topic(topic, scope="shared")` creates a channel that every paired machine receives.
 
 - Workspace app: the global keys (show the list, hide/show it) are set per platform and can be

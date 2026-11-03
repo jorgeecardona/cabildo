@@ -42,6 +42,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from . import __version__, config, names, store
 from .store import HUMAN_HANDLE, HUMAN_SESSION
@@ -109,6 +110,38 @@ def ensure_human(conn) -> None:
 # --------------------------------------------------------------------------- #
 # Commands
 # --------------------------------------------------------------------------- #
+def cmd_pair(args) -> int:
+    """Pair this machine with another on the LAN through the daemon, the same as the
+    MCP ``request("pair")``. Without a PIN: print one to enter on the other machine.
+    """
+    params: dict[str, Any] = {}
+    if args.pin:
+        params["pin"] = args.pin
+    if args.host:
+        params |= {"host": args.host, "port": args.port}
+    conn = store.connect()
+    ensure_human(conn)
+    iid = store.request_intent(
+        conn,
+        from_session=HUMAN_SESSION,
+        from_handle=HUMAN_HANDLE,
+        project=None,
+        action="pair",
+        params=params | {"_from_session": HUMAN_SESSION, "_from_handle": HUMAN_HANDLE},
+    )
+    end = time.time() + args.wait
+    while time.time() < end:
+        row = conn.execute("SELECT * FROM intents WHERE id=?", (iid,)).fetchone()
+        d = store.intent_dict(row) if row else None
+        if d and d["status"] not in ("pending", "running"):
+            result = d.get("result") or {}
+            print(result.get("reason") or result.get("error") or json.dumps(result))
+            return 0 if d["status"] == "done" and result.get("ok", True) else 1
+        time.sleep(0.5)
+    print(f"no answer from the daemon in {args.wait:.0f}s (is it running? `cabildo doctor`)")
+    return 1
+
+
 def cmd_say(args) -> int:
     body = " ".join(args.text).strip()
     if not body:
@@ -2675,8 +2708,19 @@ def main(argv: list[str] | None = None) -> int:
     co.add_argument("--rate", type=float, help="€ per 1M tokens, for a rough € estimate")
     co.set_defaults(fn=cmd_cost)
 
+    pr = sub.add_parser(
+        "pair",
+        help="pair with another machine on the LAN: no PIN prints one, a PIN joins",
+    )
+    pr.add_argument("pin", nargs="?", help="the 6-digit PIN shown on the other machine")
+    pr.add_argument("--host", help="the other machine's address, when mDNS finds nothing")
+    pr.add_argument("--port", type=int, default=0, help="the other machine's port, with --host")
+    pr.add_argument("--wait", type=float, default=90.0, help="seconds to wait for the daemon")
+    pr.set_defaults(fn=cmd_pair)
+
     wn = sub.add_parser(
-        "wan", help="sync this bus with explicit remote peers over a tunnel (no cloud)"
+        "wan",
+        help="sync with remote peers over a tunnel; for machines on the same LAN use `pair`",
     )
     wn.add_argument(
         "-l", "--loop", action="store_true", help="keep serving + syncing (default: one round)"

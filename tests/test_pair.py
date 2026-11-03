@@ -450,3 +450,17 @@ def test_a_machine_that_is_already_paired_can_pair_again(home, machine_a):
     pin2 = window["pin"]
     again = pair.join(me, "127.0.0.1", port, pin2, _free_port())
     assert again.node == hello["node"]
+
+
+def test_cabildo_pair_queues_a_pair_intent_and_gives_up_without_a_daemon(home, capsys):
+    import argparse
+
+    from cabildo import cli
+
+    args = argparse.Namespace(pin="123456", host=None, port=0, wait=0.0)
+    assert cli.cmd_pair(args) == 1
+    conn = store.connect()
+    [intent] = store.list_intents(conn)
+    assert intent["action"] == "pair"
+    assert intent["params"]["pin"] == "123456"
+    assert "no answer from the daemon" in capsys.readouterr().out

@@ -42,6 +42,25 @@ channel.
 
 ## Pairing and mDNS
 
+Pair two machines on the same LAN:
+
+1. On machine A, print a PIN:
+
+   ```bash
+   cabildo pair
+   ```
+
+2. On machine B, enter it:
+
+   ```bash
+   cabildo pair 801130
+   ```
+
+An agent does the same with the MCP tool `request("pair")` and `request("pair", {"pin": ...})`.
+`cabildo wan` is a different thing: it syncs with peers you list by hand, over a tunnel.
+
+How it works:
+
 1. You pair two machines once. One machine shows a 6-digit PIN, the other enters it. After that
    each machine keeps the other's certificate, and the PIN is gone.
 2. mDNS is only how the second machine finds the first on the same local network, without typing
