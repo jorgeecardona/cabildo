@@ -464,3 +464,14 @@ def test_cabildo_pair_queues_a_pair_intent_and_gives_up_without_a_daemon(home, c
     assert intent["action"] == "pair"
     assert intent["params"]["pin"] == "123456"
     assert "no answer from the daemon" in capsys.readouterr().out
+
+
+def test_doctor_warns_when_general_goes_to_paired_machines(monkeypatch):
+    from cabildo import config, doctor
+
+    monkeypatch.setattr(config, "share_general", lambda: False)
+    assert doctor.check_share_general(2).status == doctor.OK
+    monkeypatch.setattr(config, "share_general", lambda: True)
+    c = doctor.check_share_general(2)
+    assert c.status == doctor.WARN
+    assert "2 paired machine(s)" in c.detail

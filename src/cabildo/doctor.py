@@ -423,7 +423,22 @@ def check_lan() -> list[Check]:
                     f"{st.pulled} sent, {st.merged} new · cursor {st.cursor}",
                 )
             )
+    checks.append(check_share_general(len(peers)))
     return checks
+
+
+def check_share_general(paired: int) -> Check:
+    """Whether ``#general`` posts go to the paired machines (``[chat] share_general``)."""
+    from . import config
+
+    if not config.share_general():
+        return Check("lan.general", OK, "#general stays on this machine")
+    return Check(
+        "lan.general",
+        WARN,
+        f"[chat] share_general = true: every #general post goes to {paired} paired machine(s)",
+        "set [chat] share_general = false in ~/.cabildo/config.toml to keep #general local",
+    )
 
 
 # --------------------------------------------------------------------------- #
