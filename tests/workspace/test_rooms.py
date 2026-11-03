@@ -50,7 +50,7 @@ def test_label_shows_each_topic_with_a_hash_and_nothing_for_no_rooms() -> None:
     assert rooms.label(NO_ROOMS) == ""
 
 
-def test_the_panel_row_shows_the_rooms_on_its_second_line(transcript) -> None:
+def test_the_panel_row_shows_the_rooms_on_its_third_line(transcript) -> None:
     from lines import user
 
     from cabildo.workspace import sessions
@@ -63,9 +63,9 @@ def test_the_panel_row_shows_the_rooms_on_its_second_line(transcript) -> None:
 
     [joined] = sessions.attach_rooms([row])
     text = SwitcherApp._session_text(joined, 100)
-    first, second = text.plain.split("\n")
+    first, _where, third = text.plain.split("\n")
     assert "Fix the login bug" in first
-    assert second.endswith("#general #proj:cabildo(project)")
+    assert third == "#general #proj:cabildo"
 
 
 def test_the_panel_row_without_a_bus_entry_has_no_rooms_text(transcript) -> None:
@@ -79,7 +79,7 @@ def test_the_panel_row_without_a_bus_entry_has_no_rooms_text(transcript) -> None
     assert "#" not in SwitcherApp._session_text(row, 80).plain
 
 
-def test_the_second_line_never_exceeds_the_width_and_keeps_the_rooms(transcript) -> None:
+def test_the_lines_never_exceed_the_width_and_keep_the_rooms(transcript) -> None:
     from dataclasses import replace
 
     from lines import user
@@ -93,10 +93,11 @@ def test_the_second_line_never_exceeds_the_width_and_keeps_the_rooms(transcript)
     for width in (14, 30, 40, 80):
         for n in (0, 2, 5):
             r = replace(row, rooms=Rooms("cabildo", topics[:n]))
-            second = SwitcherApp._session_text(r, width).plain.split("\n")[1]
-            assert len(second) <= width, (width, n, second)
-            if n and width >= 30:
-                assert "#" in second, (width, n, second)
+            lines = SwitcherApp._session_text(r, width).plain.split("\n")[1:]
+            assert all(len(line) <= width for line in lines), (width, n, lines)
+            assert len(lines) == (2 if n else 1), (width, n, lines)
+            if n:
+                assert lines[1].startswith("#"), (width, n, lines)
 
 
 def test_short_path_with_no_room_returns_at_most_an_ellipsis() -> None:
@@ -114,5 +115,10 @@ def test_load_handles_more_ids_than_sqlite_allows_in_one_query() -> None:
 
 
 def test_label_shows_the_scope_of_a_topic_that_leaves_the_machine() -> None:
+    r = Rooms("cabildo", ("general", "lan"), (("lan", "shared"),))
+    assert rooms.label(r) == "#general #lan(shared)"
+
+
+def test_label_leaves_out_the_project_scope_of_a_proj_topic() -> None:
     r = Rooms("cabildo", ("general", "proj:cabildo"), (("proj:cabildo", "project"),))
-    assert rooms.label(r) == "#general #proj:cabildo(project)"
+    assert rooms.label(r) == "#general #proj:cabildo"

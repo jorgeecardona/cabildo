@@ -31,7 +31,7 @@ from textual.suggester import SuggestFromList
 from textual.widgets import ContentSwitcher, DataTable, Input, Label, Static
 from textual.worker import get_current_worker
 
-from cabildo import __version__, cloud, sessions_ops, store
+from cabildo import __version__, cloud, names, sessions_ops, store
 from cabildo.workspace import (
     agents,
     intents,
@@ -750,7 +750,7 @@ class SwitcherApp(App[None]):
 
     @staticmethod
     def _session_text(r: Row, width: int, selected: bool = False) -> Text:
-        """Two lines: title (+ tags), then where it works (cwd · branch) and its rooms, dimmed."""
+        """Title (+ tags), then where it works (cwd · branch), then its rooms if any, dimmed."""
         # Tags are chips (reverse-video cyan) so they do not read as part of the title.
         text = Text("✓ " if selected else "", style="bold green")
         text.append((f"[{r.meta.group}] " if r.meta.group else "") + r.display_title)
@@ -760,18 +760,20 @@ class SwitcherApp(App[None]):
         if r.notes:
             text.append(f"  ✎ {notes.label(r.notes)}")
         text.truncate(width)
-        # branch and rooms each get a third of the width at most; the cwd takes what is left
-        room_text = rooms.label(r.rooms)
-        if len(room_text) > width // 3:
-            room_text = room_text[: max(width // 3 - 1, 0)] + "…"
+        # the branch gets a third of the width at most; the cwd takes what is left
         branch = ""
         if r.git_branch and r.git_branch != "HEAD":
             branch = r.git_branch[: width // 3]
-        tail = (f" · {branch}" if branch else "") + (f"  {room_text}" if room_text else "")
+        tail = f" · {branch}" if branch else ""
         room_left = width - len(tail)
         where = (short_path(r.cwd, room_left) if room_left >= 2 else "") + tail
         where = where if room_left >= 2 else where.lstrip(" ·")
         text.append("\n" + where, style="dim")
+        room_text = rooms.label(r.rooms)
+        if room_text:
+            if len(room_text) > width:
+                room_text = room_text[: max(width - 1, 0)] + "…"
+            text.append("\n" + room_text, style="dim")
         return text
 
     def _agent(self, r: Row) -> AgentState | None:
@@ -797,7 +799,7 @@ class SwitcherApp(App[None]):
 
     def _modeline(self) -> None:
         """Groups of lines, a rule between each. Line 1: what the main pane shows. Line 2:
-        its cwd (or the key hints). Then the shown conversation's model and context, its
+        its cabildo agent name, when a session is shown. Next: its cwd (or the key hints). Then the shown conversation's model and context, its
         last reply's effort (left out when not known), and tokens. Then, on a subscription, its
         usage limits. Last, a CPU and memory
         table, right-aligned: the shown conversation, all running ones (left out when the
@@ -832,7 +834,9 @@ class SwitcherApp(App[None]):
             bottom = "reading transcripts…"
         effort = fmt_effort(row.tokens) if row else ""
         ctx_style = context_style(row.tokens) if row else ""
-        groups: list[list[tuple[str, str]]] = [[(top, ""), (bottom, "")]]
+        # the cabildo name other agents address this one by (deterministic from the id)
+        agent = [(f"@ {names.robot_name(shown)}", "bold")] if shown else []
+        groups: list[list[tuple[str, str]]] = [[(top, ""), *agent, (bottom, "")]]
         if context or tokens:
             groups.append([(context, ctx_style), *([(effort, "")] if effort else []), (tokens, "")])
         if self.plan_usage:
@@ -939,7 +943,10 @@ class SwitcherApp(App[None]):
         for i, (r, text) in enumerate(zip(self.rows, texts, strict=True)):
             if table.get_cell_at(Coordinate(i, 1)) != r.age:
                 table.update_cell_at(Coordinate(i, 1), r.age)
-            if str(table.get_cell_at(Coordinate(i, 2))) != text.plain:
+            old = str(table.get_cell_at(Coordinate(i, 2)))
+            if old.count("\n") != text.plain.count("\n"):
+                return False  # the row height changes: only a rebuild sets it
+            if old != text.plain:
                 table.update_cell_at(Coordinate(i, 2), text)
         self._refresh_marks()
         self._refresh_use()
@@ -968,7 +975,7 @@ class SwitcherApp(App[None]):
                 text,
                 self._use_text(r),
                 key=r.head.session_id,
-                height=2,
+                height=text.plain.count("\n") + 1,
             )
         # its row is gone (e.g. `a` back to this directory): the shown conversation's row
         if not (saved and self._restore_cursor(saved)) and shown:

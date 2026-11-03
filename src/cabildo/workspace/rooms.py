@@ -27,12 +27,18 @@ CHUNK = 500
 
 
 def label(r: Rooms) -> str:
-    """The topics as ``#general #proj:cabildo(project)``, or an empty string for none.
+    """The topics as ``#general #lan(shared) #proj:cabildo``, or an empty string for none.
 
-    A topic whose posts go to paired machines shows its scope in parentheses.
+    A topic whose posts go to paired machines shows its scope in parentheses, except scope
+    ``project`` on a ``proj:`` topic, where the name already says it.
     """
     scope = dict(r.scopes)
-    return " ".join(f"#{t}({scope[t]})" if t in scope else f"#{t}" for t in r.topics)
+
+    def one(t: str) -> str:
+        s = scope.get(t)
+        return f"#{t}({s})" if s and not (s == "project" and t.startswith("proj:")) else f"#{t}"
+
+    return " ".join(one(t) for t in r.topics)
 
 
 def load(session_ids: Iterable[str]) -> dict[str, Rooms]:
