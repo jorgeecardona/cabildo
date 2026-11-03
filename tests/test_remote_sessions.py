@@ -228,3 +228,17 @@ def test_migration_backfills_scope_from_old_names(tmp_path):
     }
     hows = {r["topic"]: r["how"] for r in db.execute("SELECT * FROM subscriptions")}
     assert hows == {"proj:alpha": "project", "ws:a-123abc": "folder"}
+
+
+def test_a_session_that_leaves_a_workspace_folder_leaves_its_channel(conn, tmp_path):
+    ws = tmp_path / "ws"
+    (ws / "a").mkdir(parents=True)
+    other = tmp_path / "other"
+    other.mkdir()
+    store.register_session(conn, "s1", cwd=str(ws / "a"))
+    topic = store.register_workspace(conn, str(ws))
+    store.ensure_topic(conn, "mine")
+    store.subscribe(conn, "s1", "mine")
+    assert {topic, "mine"} <= set(_topics(conn, "s1"))
+    store.register_session(conn, "s1", cwd=str(other))
+    assert topic not in _topics(conn, "s1") and "mine" in _topics(conn, "s1")

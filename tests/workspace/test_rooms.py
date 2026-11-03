@@ -22,7 +22,11 @@ def register(session_id: str, project_name: str, *topics: str) -> None:
 def test_load_returns_project_and_sorted_topics_of_a_registered_session() -> None:
     register("s1", "cabildo", "proj:cabildo", "general", "design")
     found = rooms.load(["s1"])
-    assert found["s1"] == Rooms(project="cabildo", topics=("design", "general", "proj:cabildo"))
+    assert found["s1"] == Rooms(
+        project="cabildo",
+        topics=("design", "general", "proj:cabildo"),
+        scopes=(("proj:cabildo", "project"),),
+    )
 
 
 def test_load_leaves_out_a_session_the_bus_does_not_know() -> None:
@@ -58,10 +62,10 @@ def test_the_panel_row_shows_the_rooms_on_its_second_line(transcript) -> None:
     assert row.rooms == NO_ROOMS  # build_rows reads transcripts only; the app joins the bus
 
     [joined] = sessions.attach_rooms([row])
-    text = SwitcherApp._session_text(joined, 80)
+    text = SwitcherApp._session_text(joined, 100)
     first, second = text.plain.split("\n")
     assert "Fix the login bug" in first
-    assert second.endswith("#general #proj:cabildo")
+    assert second.endswith("#general #proj:cabildo(project)")
 
 
 def test_the_panel_row_without_a_bus_entry_has_no_rooms_text(transcript) -> None:
@@ -107,3 +111,8 @@ def test_load_handles_more_ids_than_sqlite_allows_in_one_query() -> None:
     register("s1", "cabildo", "general")
     ids = [f"x{i}" for i in range(1500)] + ["s1"]
     assert set(rooms.load(ids)) == {"s1"}
+
+
+def test_label_shows_the_scope_of_a_topic_that_leaves_the_machine() -> None:
+    r = Rooms("cabildo", ("general", "proj:cabildo"), (("proj:cabildo", "project"),))
+    assert rooms.label(r) == "#general #proj:cabildo(project)"

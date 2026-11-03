@@ -807,16 +807,30 @@ def register_session(
             "WHERE tag=? AND session_id IS NULL",
             (session_id, tag),
         )
+    _sync_derived_memberships(conn, session_id, cwd, old_pname, project_name or old_pname)
+    conn.commit()
+
+
+def _sync_derived_memberships(
+    conn: sqlite3.Connection,
+    session_id: str,
+    cwd: str | None,
+    old_pname: str | None,
+    new_pname: str | None,
+) -> None:
+    """Recompute the channels a session is in because of its session row.
+
+    These are the ``general`` room, its ``project`` channel, and the ``folder``
+    channel of each workspace that contains its cwd. A channel the session joined
+    with ``join_topic`` (``how='joined'``) is never touched here.
+    """
     # An agent's home is its OWN project channel (isolation by default) plus one
     # chatroom, #general, which every session joins: the project channel is for
-    # the repo, the room is for the swarm, across projects and across paired
-    # machines. [chat] room renames it; an empty room turns the auto-join off.
+    # the repo, the room is for the swarm, across projects. [chat] room renames
+    # it; an empty room turns the auto-join off.
     ensure_topic(conn, DEFAULT_TOPIC)  # keep the room available to join
     _join_room(conn, session_id)
     _join_workspaces(conn, session_id)
-    # The effective name after this upsert: a caller that didn't pass one leaves
-    # the stored value in place (COALESCE above), so fall back to the old name.
-    new_pname = project_name or old_pname
     # Reconcile a project change: a reused session that moved to a new project
     # must stop delivering into its former proj: channel (issue #26, leak #3).
     if old_pname and new_pname and old_pname.strip().lower() != new_pname.strip().lower():
@@ -837,7 +851,6 @@ def register_session(
             key = new_pname.strip().lower()
             ensure_topic(conn, pt, project=key, created_by=session_id, scope="project")
             subscribe(conn, session_id, pt, how="project")
-    conn.commit()
 
 
 def _join_room(conn: sqlite3.Connection, session_id: str) -> None:
@@ -886,6 +899,8 @@ def _join_workspaces(conn: sqlite3.Connection, session_id: str) -> None:
     if row is None or not row["cwd"] or str(row["client"] or "").startswith(REMOTE_PREFIX):
         return
     cwd = os.path.realpath(str(row["cwd"]))
+    # A session that moved out of a workspace folder leaves its folder channel.
+    conn.execute("DELETE FROM subscriptions WHERE session_id=? AND how='folder'", (session_id,))
     for w in conn.execute("SELECT path FROM workspaces").fetchall():
         if _contains(w["path"], cwd):
             topic = workspace_topic(w["path"])

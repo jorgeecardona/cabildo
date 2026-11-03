@@ -15,6 +15,9 @@ class Rooms:
 
     project: str | None
     topics: tuple[str, ...]
+    # (topic, scope) for the topics whose posts go to paired machines; a topic not
+    # listed is local (docs/channels.md)
+    scopes: tuple[tuple[str, str], ...] = ()
 
 
 NO_ROOMS = Rooms(project=None, topics=())
@@ -24,8 +27,12 @@ CHUNK = 500
 
 
 def label(r: Rooms) -> str:
-    """The topics as ``#general #proj:cabildo``, or an empty string for none."""
-    return " ".join(f"#{t}" for t in r.topics)
+    """The topics as ``#general #proj:cabildo(project)``, or an empty string for none.
+
+    A topic whose posts go to paired machines shows its scope in parentheses.
+    """
+    scope = dict(r.scopes)
+    return " ".join(f"#{t}({scope[t]})" if t in scope else f"#{t}" for t in r.topics)
 
 
 def load(session_ids: Iterable[str]) -> dict[str, Rooms]:
@@ -64,4 +71,18 @@ def _load_chunk(conn: sqlite3.Connection, ids: list[str]) -> dict[str, Rooms]:
         f"SELECT session_id, topic FROM subscriptions WHERE session_id IN ({marks})", ids
     ):
         topics.setdefault(sid, []).append(topic)
-    return {sid: Rooms(projects[sid], tuple(sorted(topics.get(sid, [])))) for sid in projects}
+    scopes = _scopes(conn)
+    out: dict[str, Rooms] = {}
+    for sid in projects:
+        mine = tuple(sorted(topics.get(sid, [])))
+        away = tuple((t, scopes[t]) for t in mine if scopes.get(t, "local") != "local")
+        out[sid] = Rooms(projects[sid], mine, away)
+    return out
+
+
+def _scopes(conn: sqlite3.Connection) -> dict[str, str]:
+    """Scope by topic name. Empty for a DB from before the ``scope`` column."""
+    try:
+        return dict(conn.execute("SELECT name, scope FROM topics"))
+    except sqlite3.OperationalError:
+        return {}
