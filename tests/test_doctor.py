@@ -397,6 +397,7 @@ def test_lan_reports_each_paired_machine_and_its_last_pull(env):
             "n2" * 16: lan.SyncStatus(time.time(), 0, 0, 0, "unreachable: timed out"),
         }
     )
-    ok, bad = doctor.check_lan()
+    ok, bad, general = doctor.check_lan()
     assert ok.status == doctor.OK and "7 sent, 0 new" in ok.detail
     assert bad.status == doctor.WARN and "unreachable" in bad.detail
+    assert general.name == "lan.general"
