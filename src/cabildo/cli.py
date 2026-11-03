@@ -565,8 +565,6 @@ def cmd_plugin(args) -> int:
     `claude` is missing or the manifest fails to validate, it says so and the
     bus still works without it.
     """
-    import shlex
-
     from . import mods
 
     def run(argv: list[str]) -> int:
@@ -1711,30 +1709,27 @@ def cmd_opencode(args) -> int:
 
 
 def cmd_session_ops(args) -> int:
-    """`cabildo sessions <cmd>`: tag, list, export, combine and trash Claude Code sessions."""
+    """`cabildo sessions <cmd>`: find, read, tag and trash Claude Code sessions."""
     from . import sessions_ops
 
     root = None if args.all else os.path.abspath(args.dir)
     try:
         if args.sessions_cmd == "list":
-            for r in sessions_ops.rows(root, tag=args.tag, query=args.query):
+            found = sessions_ops.rows(root, tag=args.tag, query=args.query, contains=args.contains)
+            for r in found:
                 d = sessions_ops.describe(r)
                 tags = ",".join(r.meta.tags) or "-"
                 print(f"{str(d['id'])[:8]}  {d['date']}  {tags:20}  {d['title']}")
             return 0
         rows = sessions_ops.select(root, ids=args.ids, tag=args.tag)
-        if args.sessions_cmd == "tag":
+        if args.sessions_cmd == "read":
+            for r in rows:
+                print(f"# {r.display_title}\n")
+                for t in sessions_ops.conversation(r):
+                    print(f"## {t.role} {t.timestamp[:16]}\n\n{t.text}\n")
+        elif args.sessions_cmd == "tag":
             n = sessions_ops.tag(rows, args.add, args.remove)
             print(f"{n} session(s) changed")
-        elif args.sessions_cmd == "export":
-            out = Path(args.out).resolve() if args.out else None
-            roots = [Path(root)] if root else []
-            print(sessions_ops.export(rows, out, roots=roots, force=args.force))
-        elif args.sessions_cmd == "combine":
-            done = sessions_ops.combine(rows, root or os.getcwd(), start=args.start)
-            print(f"combined {len(rows)} session(s) into {done.session_id}")
-            print(f"export: {done.export_path}")
-            print(done.resume if done.started else shlex.join(done.command))
         else:
             for d in sessions_ops.trash(rows, force=args.force):
                 print(d)
@@ -2550,9 +2545,8 @@ def main(argv: list[str] | None = None) -> int:
     for name, help_ in (
         ("list", "sessions of this folder and its subfolders, with tags"),
         ("tag", "add or remove tags"),
-        ("export", "write the conversation text to Markdown"),
-        ("combine", "export, then one new session seeded with it"),
-        ("trash", "move to the workspace trash (needs a started combined session)"),
+        ("read", "print the user and assistant text"),
+        ("trash", "move to the workspace trash (needs a session made from them)"),
     ):
         sp = se_sub.add_parser(name, help=help_)
         sp.add_argument("--dir", default=".", help="project folder (default: here)")
@@ -2560,17 +2554,14 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("-t", "--tag", help="select by tag")
         if name == "list":
             sp.add_argument("-q", "--query", help="match title, label, first prompt")
+            sp.add_argument("-c", "--contains", help="match any user or assistant text")
         else:
             sp.add_argument("ids", nargs="*", help="session ids or 8-char prefixes")
         if name == "tag":
             sp.add_argument("--add", action="append", default=[], help="tag to add")
             sp.add_argument("--remove", action="append", default=[], help="tag to remove")
-        if name == "export":
-            sp.add_argument("-o", "--out", help="output file (under --dir or the data dir)")
-        if name in ("export", "trash"):
-            sp.add_argument("--force", action="store_true", help="overwrite / skip the check")
-        if name == "combine":
-            sp.add_argument("--start", action="store_true", help="run its first turn now")
+        if name == "trash":
+            sp.add_argument("--force", action="store_true", help="skip the made-from check")
         sp.set_defaults(fn=cmd_session_ops)
 
     sp = sub.add_parser("spawn", help="queue a headless agent in its own worktree")

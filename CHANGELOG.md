@@ -19,13 +19,12 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   changed in `config.toml` under `[keys]`: `modifier` for both, or `show-list`, `toggle-list`. On macOS Option-s and
   Option-z work as typed (`ß`, `Ω`); Cmd-s and Cmd-z do not, the terminal keeps them (#45).
 
-- Sessions can tag, list, export, combine and trash old Claude Code sessions through MCP tools
-  (`sessions_list`, `sessions_tag`, `sessions_suggest_tags`, `sessions_export`,
-  `sessions_combine`, `sessions_trash`) and `cabildo sessions list|tag|export|combine|trash`.
-  Export leaves out tool calls and injected text; trash is reversible and needs a started
-  combined session that lists the sources. In the workspace app, `space` selects conversations;
-  `t` tags the selection, `e` exports, `c` combines into a new conversation, `D` trashes the
-  sources (#44).
+- Sessions can find, read, tag and trash old Claude Code sessions, and start a new one from
+  text the agent writes, through MCP tools (`sessions_list` with `tag`, `query`, `contains`;
+  `sessions_read`; `sessions_tag`; `sessions_create`; `sessions_trash`) and
+  `cabildo sessions list|read|tag|trash`. How to group or summarize sessions is the agent's
+  choice. Trash is reversible and only takes sessions a started `sessions_create` session
+  lists in `made_from`. In the workspace app, `space` selects, `t` tags and `D` trashes (#44).
 
 - Workspaces: opening the workspace app in a folder makes it a workspace. Every session in that
   folder or below joins the room `ws:<folder>-<hash>`, so agents of different projects there can

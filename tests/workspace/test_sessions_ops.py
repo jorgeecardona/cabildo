@@ -71,44 +71,45 @@ def test_turns_skip_bad_lines_tools_and_sidechains(tmp_path: Path) -> None:
     ]
 
 
-def test_export_oldest_first_and_path_rules(transcript: Transcript, tmp_path: Path) -> None:
-    _two(transcript)
-    rows = ops.select(PROJECT, ids=["bbbb", "aaaa"])
-    path = ops.export(rows)
-    text = path.read_text()
-    assert text.index("plan the trip") < text.index("fix the bug")
-    assert "Booked." in text
-    with pytest.raises(ops.SessionsError, match="exists"):
-        ops.export(rows, path)
-    with pytest.raises(ops.SessionsError, match="under the project"):
-        ops.export(rows, tmp_path / "elsewhere.md")
-    logs = tmp_path / "proj" / "logs" / "x.md"
-    assert ops.export(rows, logs, roots=[tmp_path / "proj"]) == logs
-
-
-def test_combine_records_sources_and_trash_needs_a_started_combined(
+def test_contains_searches_all_text_and_conversation_reads_the_chain(
     transcript: Transcript,
 ) -> None:
     _two(transcript)
+    assert [r.chain[0].session_id for r in ops.rows(PROJECT, contains="BOOKED")] == ["aaaa1111"]
+    row = ops.select(PROJECT, ids=["aaaa"])[0]
+    assert [(t.role, t.text) for t in ops.conversation(row)] == [
+        ("user", "plan the trip"),
+        ("assistant", "Booked."),
+    ]
+
+
+def test_create_records_made_from_and_trash_needs_it_started(
+    transcript: Transcript, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launched: list[list[str]] = []
+    monkeypatch.setattr(ops.subprocess, "Popen", lambda argv, **_kw: launched.append(argv))
+    _two(transcript)
     rows = ops.select(PROJECT, ids=["aaaa", "bbbb"])
     ops.tag(rows, add=["old"])
-    rows = ops.select(PROJECT, tag="old")
-    done = ops.combine(rows, PROJECT)
-    meta = sessions.load_meta()[done.session_id]
+    with pytest.raises(ops.SessionsError):
+        ops.create(PROJECT, "  ")
+    made = ops.create(
+        PROJECT, "my notes", made_from=[i for r in rows for i in r.ids], tags=["old", "merged"]
+    )
+    assert launched == [["claude", "-p", "--session-id", made.session_id, "my notes"]]
+    meta = sessions.load_meta()[made.session_id]
     assert set(meta.combined_from) == {"aaaa1111", "bbbb2222"}
-    assert meta.tags == ("old", "combined")
-    assert done.export_path.exists()
-    assert done.command[:3] == ("claude", "--session-id", done.session_id)
+    assert meta.tags == ("old", "merged")
 
-    with pytest.raises(ops.SessionsError, match="combine them"):
-        ops.trash(rows)  # combined session not started yet
+    with pytest.raises(ops.SessionsError, match="sessions_create"):
+        ops.trash(rows)  # its transcript does not exist yet
 
-    transcript(done.session_id, user("summarize"), mtime=300)  # now it exists
-    selected = ops.select(PROJECT, tag="old")  # also picks the combined session
+    transcript(made.session_id, user("my notes"), mtime=300)  # now it has started
+    selected = ops.select(PROJECT, tag="old")  # also picks the new session
     assert len(selected) == 3
     with pytest.raises(ops.SessionsError, match="calling session"):
         ops.trash(selected, keep="aaaa1111")
     trashed = ops.trash(selected)
-    assert len(trashed) == 2  # the combined session is left out
-    assert [r.chain[0].session_id for r in ops.rows(PROJECT)] == [done.session_id]
+    assert len(trashed) == 2  # the new session is kept
+    assert [r.chain[0].session_id for r in ops.rows(PROJECT)] == [made.session_id]
     assert all((d / "RESTORE.txt").exists() for d in trashed)

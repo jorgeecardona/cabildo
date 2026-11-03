@@ -1,4 +1,4 @@
-"""Selection and the bulk actions in the workspace: tags, export, combine, trash (#44)."""
+"""Selection and the bulk actions in the workspace: tags and trash (#44)."""
 
 from __future__ import annotations
 
@@ -40,37 +40,12 @@ def test_space_selects_and_t_tags_the_selection(transcript, monkeypatch) -> None
     assert "cccc3333" not in meta
 
 
-def test_e_exports_the_selection(transcript, monkeypatch) -> None:
+def test_d_needs_a_started_session_made_from_the_selection(transcript, monkeypatch) -> None:
     _three(transcript)
-    out = sessions.data_dir() / "x.md"
 
     async def scenario(app, pilot) -> None:
-        await pilot.press("space", "space", "e")
-        await _answer(app, pilot, str(out))
-
-    drive(monkeypatch, scenario)
-    text = out.read_text()
-    assert "one" in text
-    assert "two" in text
-    assert "three" not in text
-
-
-def test_c_combines_into_a_new_pane_and_d_needs_it_started(
-    transcript, monkeypatch, fake_claude
-) -> None:
-    _three(transcript)
-    made: list[str] = []
-
-    async def scenario(app, pilot) -> None:
-        await pilot.press("space", "space", "c")
-        await _answer(app, pilot, "yes")
-        made.extend(sid for sid, m in sessions.load_meta().items() if m.combined_from)
-        assert app.selected == set()
-        await pilot.press("space", "space")  # the sources again (the new one has no row yet)
-        await pilot.press("D")
+        await pilot.press("space", "space", "D")
         await settle(app, pilot)
-        assert len(sessions_ops.rows(None)) == 3  # not started: nothing trashed
+        assert len(sessions_ops.rows(None)) == 3  # refused: nothing made from them
 
     drive(monkeypatch, scenario)
-    assert len(made) == 1
-    assert set(sessions.load_meta()[made[0]].combined_from) == {"aaaa1111", "bbbb2222"}

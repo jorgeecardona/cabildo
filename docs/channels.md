@@ -51,5 +51,5 @@ channel.
 
 ## Tags
 
-A tag is a label on a conversation in the workspace app: `sessions_tag`, `sessions_suggest_tags`,
-and the `t` key. Tags never change where messages go.
+A tag is a label on a conversation in the workspace app: `sessions_tag` (MCP) and the
+`t` key. Tags never change where messages go.

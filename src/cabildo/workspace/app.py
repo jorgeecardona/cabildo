@@ -16,7 +16,6 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from pathlib import Path
 from typing import Literal
 
 from rich.cells import cell_len
@@ -380,10 +379,8 @@ KEYS = """\
    C-d          delete (asks yes or no)
    x            close: its Claude ends, the conversation stays
    l  g  t      label / group / tags  (t on a selection: a, b adds; -c removes)
-   SPC          select / unselect; e c D act on the selection, else on the filtered list
-   e            export the conversations' text to Markdown (logs/ by default)
-   c            combine them into one new conversation seeded with the export
-   D            trash the sources, once their combined conversation has started
+   SPC          select / unselect; t and D act on the selection, else on the filtered list
+   D            trash them, once a session made from them (sessions_create) has started
    n            notes for this session, separated by ; (written with no model call)
    a            list this directory / with subfolders / all directories
    f            filter by group / tag  (g:work t:urgent; empty = all)
@@ -537,8 +534,6 @@ class SwitcherApp(App[None]):
         Binding("g", "edit_group", "Group"),
         Binding("t", "edit_tags", "Tags"),
         Binding("space", "toggle_select", "Select", show=False),
-        Binding("e", "export", "Export"),
-        Binding("c", "combine", "Combine"),
         Binding("D", "trash_sources", "Trash sources", show=False),
         Binding("n", "note", "Note"),
         Binding("q", "quit", "Quit"),
@@ -1730,59 +1725,8 @@ class SwitcherApp(App[None]):
 
         self.push_screen(EditScreen(f"Tags for {len(rows)} (a, b to add; -c to remove):", ""), done)
 
-    def action_export(self) -> None:
-        """Write the conversations' text to a Markdown file (the project's logs/ by default)."""
-        rows = self._targets()
-        if not rows:
-            return
-        default = os.path.join(self.cwd, "logs", f"sessions-{time.strftime('%Y-%m-%d-%H%M')}.md")
-
-        def done(value: str | None) -> None:
-            if not value or not value.strip():
-                return
-            path = Path(os.path.expanduser(value.strip()))
-            try:
-                out = sessions_ops.export(rows, path, roots=[Path(self.cwd)])
-            except sessions_ops.SessionsError as e:
-                self.notify(f"Not exported: {e}", severity="warning")
-                return
-            self.notify(f"Exported {len(rows)} conversations to {short_path(str(out), 50)}")
-
-        self.push_screen(EditScreen(f"Export {len(rows)} conversations to:", default), done)
-
-    def action_combine(self) -> None:
-        """Export the conversations and open one new Claude seeded with the export."""
-        rows = self._targets()
-        if len(rows) < 2:
-            self.notify("Select two or more conversations (space), or filter to them (f)")
-            return
-
-        async def done(answer: str | None) -> None:
-            if answer is None or answer.strip().lower() != "yes":
-                return
-            try:
-                made = sessions_ops.combine(rows, self.cwd)
-            except sessions_ops.SessionsError as e:
-                self.notify(f"Not combined: {e}", severity="warning")
-                return
-            command = (CLAUDE, *made.command[1:])
-            target = Target(
-                session_ids=(made.session_id,),
-                session_id=made.session_id,
-                command=command,
-                cwd=self.cwd,
-            )
-            self.selected = set()
-            self._show(await self._mount(target))
-            self.notify(f"Combined {len(rows)} conversations; D trashes them once it has started")
-            self.reload()
-
-        self.push_screen(
-            EditScreen(f"Combine {len(rows)} conversations into a new one? (yes or no)", ""), done
-        )
-
     def action_trash_sources(self) -> None:
-        """Trash conversations that a started combined conversation lists (reversible)."""
+        """Trash conversations that a started session lists in made_from (reversible)."""
         rows = [r for r in self._targets() if not r.meta.combined_from]
         if not rows:
             return
@@ -1792,7 +1736,7 @@ class SwitcherApp(App[None]):
             return
         if not sessions_ops.covered(rows):
             self.notify(
-                "No started combined conversation lists these: combine first (c)",
+                "No started session lists these in made_from (MCP sessions_create)",
                 severity="warning",
             )
             return
@@ -1807,7 +1751,7 @@ class SwitcherApp(App[None]):
                 f"Trashed {len(dests)} conversations ({short_path(str(dests[0].parent), 40)})"
             )
 
-        self.push_screen(EditScreen(f"Trash {len(rows)} combined sources? (yes or no)", ""), done)
+        self.push_screen(EditScreen(f"Trash {len(rows)} conversations? (yes or no)", ""), done)
 
 
 def _log_crash(exc: BaseException) -> None:

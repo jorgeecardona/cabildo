@@ -1,4 +1,8 @@
-"""Operations on Claude Code sessions: tag, list, export, combine, trash (#44).
+"""Operations on Claude Code sessions: find, read, tag, create, trash (#44).
+
+The tools give an agent access to old sessions and nothing more: how to group or
+summarize them is the agent's decision. ``create`` starts a new session from text the
+agent wrote, and records which sessions it was made from so ``trash`` can check it.
 
 The CLI, the workspace app and the MCP tools all call these functions. A session is
 addressed by any id of its conversation (a chain of transcripts joined by
@@ -8,8 +12,8 @@ addressed by any id of its conversation (a chain of transcripts joined by
 from __future__ import annotations
 
 import json
-import os
 import re
+import shlex
 import subprocess
 import time
 import uuid
@@ -43,7 +47,7 @@ class SessionsError(ValueError):
 
 @dataclass(frozen=True)
 class Turn:
-    """One message of a conversation, as exported."""
+    """One message of a conversation: user or assistant text, no tool calls."""
 
     role: str  # "user" or "assistant"
     text: str
@@ -51,19 +55,16 @@ class Turn:
 
 
 @dataclass(frozen=True)
-class Combined:
-    """A combined session prepared from an export; it exists once ``command`` runs."""
+class Created:
+    """A new session started from the agent's text."""
 
     session_id: str
-    export_path: Path
     cwd: str
-    command: tuple[str, ...]  # starts it interactively in ``cwd``
-    started: bool = False  # True when a headless first turn was launched
 
     @property
     def resume(self) -> str:
-        """The shell line that opens the combined session."""
-        return f"cd {self.cwd} && claude --resume {self.session_id}"
+        """The shell line that opens it."""
+        return f"cd {shlex.quote(self.cwd)} && claude --resume {self.session_id}"
 
 
 # --------------------------------------------------------------------------- #
@@ -74,11 +75,13 @@ def rows(
     *,
     tag: str | None = None,
     query: str | None = None,
+    contains: str | None = None,
     subfolders: bool = True,
 ) -> list[ws.Row]:
-    """The conversations of ``cwd`` (None: every directory), filtered by tag and query.
+    """The conversations of ``cwd`` (None: every directory), filtered by tag and text.
 
-    ``query`` matches the title, label and first prompt without case.
+    ``query`` matches the title, label and first prompt; ``contains`` matches any user
+    or assistant text (slower: it reads every transcript). Both ignore case.
     """
     only = ws.Filter(tags=(tag,)) if tag else ws.NO_FILTER
     out = ws.build_rows(cwd, only=only, subfolders=subfolders)
@@ -91,6 +94,9 @@ def rows(
             or q in r.meta.label.casefold()
             or any(q in clean(s.first_prompt).casefold() for s in r.chain)
         ]
+    if contains:
+        c = contains.casefold()
+        out = [r for r in out if any(c in t.text.casefold() for t in conversation(r))]
     return out
 
 
@@ -182,6 +188,11 @@ def turns(path: Path) -> list[Turn]:
     return out
 
 
+def conversation(row: ws.Row) -> list[Turn]:
+    """Every turn of a conversation, across its chain, oldest first."""
+    return [t for s in row.chain for t in turns(s.path)]
+
+
 def first_text(row: ws.Row) -> str:
     """The first human prompt of a conversation, cut to ``FIRST_TEXT_CHARS``."""
     for s in row.chain:
@@ -204,98 +215,37 @@ def describe(row: ws.Row) -> dict[str, object]:
 
 
 # --------------------------------------------------------------------------- #
-# Export, combine, trash
+# Create, trash
 # --------------------------------------------------------------------------- #
-def export_text(selected: list[ws.Row]) -> str:
-    """Markdown of every selected conversation, oldest first: a header, then each turn."""
-    parts: list[str] = []
-    for r in sorted(selected, key=lambda r: r.chain[0].mtime):
-        head = f"## {r.display_title}\n\n"
-        head += f"- session: {', '.join(r.ids)}\n- cwd: {r.cwd}\n"
-        if r.meta.tags:
-            head += f"- tags: {', '.join(r.meta.tags)}\n"
-        parts.append(head)
-        for s in r.chain:
-            for t in turns(s.path):
-                who = "User" if t.role == "user" else "Claude"
-                parts.append(f"### {who} ({t.timestamp[:16].replace('T', ' ')})\n\n{t.text}\n")
-    return "\n".join(parts)
-
-
-def exports_dir() -> Path:
-    """Where exports go when no path is given."""
-    return ws.data_dir() / "exports"
-
-
-def export(
-    selected: list[ws.Row],
-    out: Path | None = None,
+def create(
+    cwd: str,
+    prompt: str,
     *,
-    roots: Iterable[Path] = (),
-    force: bool = False,
-) -> Path:
-    """Write ``export_text`` to ``out`` (default: a new file in ``exports_dir``).
+    made_from: Iterable[str] = (),
+    tags: Iterable[str] = (),
+) -> Created:
+    """Start a new session in ``cwd`` whose first message is ``prompt``.
 
-    Raises:
-        SessionsError: nothing selected; ``out`` is relative, outside the data dir and
-            ``roots``, or exists and ``force`` is not set.
+    It runs one headless turn (``claude -p --session-id``, detached), so the session
+    exists and can be resumed. ``made_from`` (session ids) and ``tags`` go in the
+    sidecar; ``trash`` accepts a session only once a started one lists it there.
     """
-    if not selected:
-        raise SessionsError("no sessions to export")
-    if out is None:
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        out = exports_dir() / f"{stamp}-{selected[0].chain[0].session_id[:8]}-{len(selected)}.md"
-    if not out.is_absolute():
-        raise SessionsError(f"export path must be absolute: {out}")
-    allowed = [ws.data_dir(), *roots]
-    if not any(out.resolve().is_relative_to(Path(r).resolve()) for r in allowed):
-        raise SessionsError(f"export path must be under the project or {ws.data_dir()}")
-    if out.exists() and not force:
-        raise SessionsError(f"{out} exists; pass force to overwrite")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(f"# Exported sessions\n\n{export_text(selected)}", encoding="utf-8")
-    return out
-
-
-def combine(selected: list[ws.Row], cwd: str, *, start: bool = False) -> Combined:
-    """Export the conversations and prepare one new session seeded with that export.
-
-    The sources are recorded as ``combined_from`` in the sidecar, with the union of
-    their tags plus ``combined``. With ``start``, a headless first turn runs in ``cwd``
-    (detached) so the transcript exists; otherwise ``Combined.command`` starts it.
-    """
-    if not selected:
-        raise SessionsError("no sessions to combine")
+    if not prompt.strip():
+        raise SessionsError("the new session needs a first message")
     sid = str(uuid.uuid4())
-    path = export(selected, exports_dir() / f"combined-{sid[:8]}.md")
-    tags: list[str] = []
-    for r in selected:
-        tags += [t for t in r.meta.tags if t not in tags]
-    if "combined" not in tags:
-        tags.append("combined")
-    ws.update_meta(
-        sid,
-        lambda m: replace(
-            m, tags=tuple(tags), combined_from=tuple(i for r in selected for i in r.ids)
-        ),
+    src = tuple(i for i in made_from if i)
+    tag_list = tuple(dict.fromkeys(t.strip() for t in tags if t.strip()))
+    if src or tag_list:
+        ws.update_meta(sid, lambda m: replace(m, tags=tag_list, combined_from=src))
+    subprocess.Popen(
+        ["claude", "-p", "--session-id", sid, prompt],
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
-    prompt = (
-        f"Read {path}. It holds {len(selected)} earlier conversations, combined. "
-        "Summarize what was decided and what is still open, then continue from there."
-    )
-    done = Combined(sid, path, cwd, ("claude", "--session-id", sid, prompt))
-    if start:
-        subprocess.Popen(
-            ["claude", "-p", "--session-id", sid, prompt],
-            cwd=cwd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-            env={**os.environ, "CABILDO_COMBINED": "1"},
-        )
-        done = replace(done, started=True)
-    return done
+    return Created(sid, cwd)
 
 
 def _transcript_exists(session_id: str) -> bool:
@@ -324,11 +274,11 @@ def trash(selected: list[ws.Row], *, keep: str | None = None, force: bool = Fals
     """
     selected = [r for r in selected if not r.meta.combined_from]
     if not selected:
-        raise SessionsError("no sessions to trash (combined sessions are never trashed here)")
+        raise SessionsError("no sessions to trash (sessions made from others are kept)")
     if keep and any(keep in r.ids for r in selected):
         raise SessionsError("refusing to trash the calling session")
     if not force and not covered(selected):
         raise SessionsError(
-            "no started combined session lists these sessions: combine them and start it first"
+            "no started session lists these in made_from: create one with sessions_create first"
         )
     return [ws.trash(r) for r in selected]
