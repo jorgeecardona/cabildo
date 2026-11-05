@@ -16,14 +16,14 @@ This issue is one feature — a **fleet-aware attention engine** — with severa
 
 ## MEASURED
 
-- Prior art confirms the mechanism and that the user is not alone: Axios "'They operate like slot machines': AI agents are scrambling power users' brains" (https://www.axios.com/2026/04/04/ai-agents-burnout-addiction-claude-code-openclaw); "The Slot-Machine Was the Point" (https://dev.to/arthurpro/the-slot-machine-was-the-point-4fm1); "Your coding agent is a slot machine" (https://dev.to/desty2k/your-coding-agent-is-a-slot-machine-1a2h); "The Slot Machine in Your IDE" (https://www.mrlatte.net/en/stories/2026/03/18/ai-coding-is-gambling/). One correction to the folk model: these tools pay out ~80% of the time, not ~5% like a slot — the variability is lower but reward *frequency* (dozens of cycles/hour) is far higher, which is what removes the natural stopping point.
-- On 2026-10-04, `cabildo standup --hours 12` reported **8 agents active** concurrently. The "eight windows" is real, not felt.
+- Prior art confirms the mechanism and that the user is not alone: Axios "'They operate like slot machines': AI agents are scrambling power users' brains" (https://www.axios.com/2026/04/04/ai-agents-burnout-addiction-claude-code-openclaw); "The Slot-Machine Was the Point" (https://dev.to/arthurpro/the-slot-machine-was-the-point-4fm1); "Your coding agent is a slot machine" (https://dev.to/desty2k/your-coding-agent-is-a-slot-machine-1a2h); "The Slot Machine in Your IDE" (https://www.mrlatte.net/en/stories/2026/03/18/ai-coding-is-gambling/). The ~80% versus ~5% payout comparison in those posts is a blog claim, not a measurement.
+- On 2026-10-04, the `standup` tool with `hours=12` listed 8 names active in those 12 hours, and one of them was `@daemon`. This does not measure how many ran at the same time.
 - cabildo already has the primitives this needs: hook-level nudging on tool use (the trunk guard, `_deny_commit_on_trunk` in `src/cabildo/guard.py`) proves an advisory message can be injected at a session's next tool call; `record_decision`/`read_decisions` store STRUCTURED decisions (not prose); `standup`/`history` hold activity over time; the bus delivers across all projects on the machine.
 - Constraint confirmed by the user and by the model: an **idle** session cannot be interrupted. A nudge can only land on a session's **next tool call**. An actively-coding session fires tools constantly, so this is fine for the active case and is exactly why the signal must be schedule-anchored, not clock-triggered.
 
 ## Research (what the evidence actually supports — 2026-10-04)
 
-Full briefing: a dedicated research pass is saved at `scratchpad/compulsion-research.md`; the load-bearing findings:
+These findings come from a subagent's report. The full briefing was in a temporary folder and no longer exists, and the sources were not re-read when this section was written.
 
 - **The gambling analogy is grounded but overstated.** Gambling disorder is the *only* formally recognized behavioral addiction in DSM-5; ICD-11 Gaming Disorder (2019) is contested; "AI coding addiction" has **no diagnostic status and no clinical literature**. The dopamine / reward-prediction-error basis of variable-ratio reinforcement is MEASURED (Schultz); its application to agentic coding is INFERRED, not demonstrated.
 - **One direct empirical study exists** — Santos et al., arXiv 2608.05561 (2026), n=119 engineers — and found *functional dependence* common but *clinical impaired control* uncommon. So the realistic target is habit/overuse, not a clinical disorder.
@@ -78,6 +78,13 @@ Observed true on the real fleet:
 4. The viewer shows per-session one-line headline + open-decisions (8 lines, not 20 pages), with full prose only on drill-down; the overview shows a day timeline with the stop line and the reckoning (M tasks vs minutes-left, and what to drop to land the rest).
 5. The GNOME panel glance shows the needs-you count + stop countdown and opens the overview; disabling/breaking the extension leaves the data and the `cabildo watch` view intact.
 6. With commitment mode enrolled for a hard stop at T, crossing T is NOT dismissable in one click (friction confirmation, or guard-level denial at the strongest setting); with no enrollment, no block is ever imposed.
+
+## State on 2026-11-05
+
+- Built: `cabildo stop <time>` and the fleet wind-down nudge (ff1e027, `src/cabildo/notify.py`).
+- Not found by a search of `src/`: commitment mode and the reckoning.
+- Not checked: the other faces (bedtime signal, calendar import, GNOME panel glance, day
+  timeline, headline feed). Search terms matched files for these, but no file was read.
 
 ## Open design note
 
