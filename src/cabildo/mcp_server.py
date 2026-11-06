@@ -157,8 +157,7 @@ def _project_name(conn, sid: str) -> str | None:
 def _visible_projects(conn, sid: str) -> set[str] | None:
     """Dial A: the set of project *names* this session may see and talk to on
     the local bus — itself plus any peers its owner explicitly linked. Projects
-    are isolated by default, so a name only appears here once linked
-    (`cabildo project <yours> --link <other>`).
+    are isolated by default, so a name only appears here once the human links them.
 
     Returns None when we can't determine our own project (no name, or the
     registry is unreadable). Callers treat None as 'no restriction' and fall
@@ -436,7 +435,7 @@ def list_agents(all_projects: bool = False) -> list[dict[str, Any]]:
     """List other active agents. By default only agents on the SAME project
     (git repo) as you; set all_projects=True to also see agents on projects
     LINKED to yours. Projects are isolated on the bus, so you never see a
-    project you haven't linked (`cabildo project <yours> --link <other>`).
+    project that is not linked. To reach one, use `request_access`.
     """
     with store.connect() as conn:
         sid = _me(conn)
@@ -511,8 +510,7 @@ def join_topic(topic: str, scope: str = "local") -> dict[str, Any]:
             return {
                 "ok": False,
                 "error": f"#{topic} is project '{pj}'s private channel, not reachable "
-                f"from yours — `request_access` for a grant, or "
-                f"`cabildo project <yours> --link {pj}`",
+                "from yours — use `request_access` to ask for a grant",
             }
         # A gated (private) topic needs a 'listen' grant to join (issue #26).
         if pj is None and store.topic_is_gated(conn, topic) and (my_project or "").strip():
@@ -838,8 +836,7 @@ def send(
                 return {
                     "ok": False,
                     "error": f"'{to}' is on project '{tname.strip().lower()}', not "
-                    f"reachable from yours — `request_access` for a grant, or "
-                    f"`cabildo project <yours> --link {tname.strip().lower()}`",
+                    "reachable from yours — use `request_access` to ask for a grant",
                 }
         else:
             pj = _proj_topic_name(conn, topic)
@@ -848,8 +845,7 @@ def send(
                     return {
                         "ok": False,
                         "error": f"#{topic} is project '{pj}'s channel, not reachable "
-                        f"from yours — `request_access` for a grant, or "
-                        f"`cabildo project <yours> --link {pj}`",
+                        "from yours — use `request_access` to ask for a grant",
                     }
             elif topic and store.topic_is_gated(conn, topic) and (my_project or "").strip():
                 mine = (my_project or "").strip().lower()
