@@ -1348,43 +1348,22 @@ def cmd_branches(args) -> int:
     return 0
 
 
-def cmd_wan(args) -> int:
-    """Sync this project's bus with explicit remote peers over a tunnel — no cloud.
+def cmd_wan(_args) -> int:
+    """Print the WAN peers the daemon syncs with, and their last pull."""
+    from . import wan
 
-    Peers, token, and bind address come from [remote] config unless overridden by
-    flags. Pulls each peer's messages into the local bus (deduped by guid, stamped
-    provenance='wan' so they never leak up to the hosted mirror). One round by default;
-    --loop keeps serving + syncing. cabildo does not build the tunnel: point it at
-    addresses you can already reach (a VPN/mesh IP, or an SSH-forwarded localhost).
-    """
-    from . import config, wan
-    from .context import git_project
-
-    cwd = os.getcwd()
-    project = args.project or git_project(cwd)[1]
-    if not project:
-        print(f"{C.DIM}no project here; pass --project <name>{C.OFF}", file=sys.stderr)
-        return 2
-    peers = args.peer or config.remote_peers(cwd)
-    token = args.token or config.remote_token(cwd)
-    bind = args.bind or config.remote_bind(cwd)
-    interval = args.interval if args.interval is not None else config.remote_interval(cwd)
-    if not peers and not bind:
+    report = wan.peers_report()
+    if not report:
         print(
-            f"{C.DIM}no peers or bind: pass --peer/--bind or set [remote] in "
-            f".cabildo/config.toml{C.OFF}",
-            file=sys.stderr,
+            f"{C.DIM}no WAN peers: set [project.<name>.remote] in {store.home()}/config.toml, "
+            f"then restart the daemon{C.OFF}"
         )
-        return 2
-    return wan.run(
-        project,
-        peers=peers,
-        token=token,
-        bind=bind,
-        interval=interval,
-        loop=args.loop,
-        allow_insecure=args.insecure,
-    )
+        return 0
+    for r in report:
+        last = r["last_pull"]
+        state = "not pulled yet" if last is None else last["error"] or f"cursor {last['cursor']}"
+        print(f"{r['project']}  {r['address']}  {state}")
+    return 0
 
 
 def _known_projects() -> list[str]:
@@ -2718,35 +2697,7 @@ def main(argv: list[str] | None = None) -> int:
     pr.add_argument("--wait", type=float, default=90.0, help="seconds to wait for the daemon")
     pr.set_defaults(fn=cmd_pair)
 
-    wn = sub.add_parser(
-        "wan",
-        help="sync with remote peers over a tunnel; for machines on the same LAN use `pair`",
-    )
-    wn.add_argument(
-        "-l", "--loop", action="store_true", help="keep serving + syncing (default: one round)"
-    )
-    wn.add_argument(
-        "--interval",
-        type=float,
-        default=None,
-        help="loop seconds (default: [remote].interval or 30)",
-    )
-    wn.add_argument(
-        "--peer",
-        action="append",
-        help="remote host:port to pull (repeatable; default: [remote].peers)",
-    )
-    wn.add_argument(
-        "--bind", help="address to serve pulls on: host or host:port (default: [remote].bind)"
-    )
-    wn.add_argument("--token", help="shared bus token (default: [remote].token)")
-    wn.add_argument("--project", help="project to sync (default: the current git project)")
-    wn.add_argument(
-        "--insecure",
-        action="store_true",
-        help="allow a wildcard bind or a bind without a token (unauthenticated; "
-        "only behind a fully trusted network)",
-    )
+    wn = sub.add_parser("wan", help="show the WAN peers the daemon syncs with")
     wn.set_defaults(fn=cmd_wan)
 
     pr = sub.add_parser(

@@ -40,7 +40,7 @@ today; the rest are read generically and wired one call site at a time):
     [spawn]   model, max_agents, max_depth   # request spawn
     [record]  messages = true                # config.record_messages (daemon ingest)
     [roles]   <name> = "responsibilities"    # config.roles (agent-card roster)
-    [remote]  peers, token, bind, interval   # wan.py cross-machine sync
+    [project.<name>.remote]  peers, token, bind, interval   # wan.py, global file only
 """
 
 from __future__ import annotations
@@ -457,42 +457,19 @@ def watch_topic(cwd: str | None = None, project_name: str | None = None) -> str 
 
 
 # --------------------------------------------------------------------------- #
-# [remote] -- cross-machine sync over a tunnel (wan.py)
+# [project.<name>.remote] -- cross-machine sync over a tunnel (wan.py)
 # --------------------------------------------------------------------------- #
-def remote_peers(cwd: str | None = None, project_name: str | None = None) -> list[str]:
-    """``[remote].peers``: explicit ``"host:port"`` addresses to pull from over
-    the tunnel. A bare string is accepted as a one-element list; anything else
-    reads as no peers.
+def remote_tables() -> dict[str, dict[str, Any]]:
+    """``[project.<name>.remote]`` of the machine-wide config, by project name.
+
+    The daemon reads only this file: it cannot discover repos, and a token does not
+    belong in a repo's committed config.
     """
-    val = get(cwd, "remote", "peers", project_name=project_name, default=[])
-    if isinstance(val, str):
-        return [val]
-    if isinstance(val, list):
-        return [str(p) for p in val]
-    return []
-
-
-def remote_token(cwd: str | None = None, project_name: str | None = None) -> str | None:
-    """``[remote].token``: the shared bus token gating the pull handshake. ``None``
-    when unset (an open bus, only safe behind a trusted tunnel).
-    """
-    val = get(cwd, "remote", "token", project_name=project_name, default=None)
-    return str(val) if val else None
-
-
-def remote_bind(cwd: str | None = None, project_name: str | None = None) -> str | None:
-    """``[remote].bind``: the address to serve WAN pulls on (``"host"`` or
-    ``"host:port"``), the tunnel or loopback interface. ``None`` means pull-only:
-    do not serve.
-    """
-    val = get(cwd, "remote", "bind", project_name=project_name, default=None)
-    return str(val) if val else None
-
-
-def remote_interval(cwd: str | None = None, project_name: str | None = None) -> float:
-    """``[remote].interval``: seconds between WAN sync rounds. Defaults to 30."""
-    val = get(cwd, "remote", "interval", project_name=project_name, default=30.0)
-    try:
-        return float(val)
-    except (TypeError, ValueError):
-        return 30.0
+    projects = _read(_global_path()).get("project")
+    if not isinstance(projects, dict):
+        return {}
+    return {
+        name: section["remote"]
+        for name, section in projects.items()
+        if isinstance(section, dict) and isinstance(section.get("remote"), dict)
+    }

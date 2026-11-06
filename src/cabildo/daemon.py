@@ -26,7 +26,20 @@ import threading
 import time
 from pathlib import Path
 
-from . import actions, broker, ci_watch, config, desktop, gitlab, lan, monitor, names, record, store
+from . import (
+    actions,
+    broker,
+    ci_watch,
+    config,
+    desktop,
+    gitlab,
+    lan,
+    monitor,
+    names,
+    record,
+    store,
+    wan,
+)
 
 # A 'running' intent older than this means the daemon died holding it.
 STALE_AFTER = actions.GATE_TIMEOUT + 300
@@ -492,6 +505,7 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
     if not args.once:
         _write_info()
     lan_service = None if args.once else lan.start_service(_log)
+    wan_service = None if args.once else wan.start_service(_log)
 
     workers: list[threading.Thread] = []
     last_reap = 0.0
@@ -571,6 +585,8 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
                 _log(f"failed {n} intent(s) still running at exit")
         if lan_service is not None:
             lan_service.close()
+        if wan_service is not None:
+            wan_service.close()
         broker_stop.set()
         if broker_thread is not None:
             broker_thread.join(timeout=2)

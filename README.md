@@ -26,7 +26,7 @@ The obvious alternatives, and where they stop:
   cabildo's locks are keyed by project, name the holder, expire, and the deny comes from the
   harness, not from the agent's good manners.
 - **A hosted orchestrator.** cabildo has no server, no account, and nothing leaves the machine.
-  Cross-machine sync (LAN pairing with `request("pair")`, `cabildo wan`) is peer-to-peer.
+  Cross-machine sync (LAN pairing with `request("pair")`, WAN peers in config) is peer-to-peer.
 
 What it does not do:
 

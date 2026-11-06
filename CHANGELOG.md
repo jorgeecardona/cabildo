@@ -13,6 +13,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
+- WAN peers now run inside the daemon, from `[project.<name>.remote]` in the machine-wide config.
+  The new MCP tool `peers` lists LAN and WAN peers with their last pull. `cabildo wan` only prints
+  that list: its `--loop`, `--peer`, `--bind` and `--token` flags are gone, and so is `[remote]` in
+  a repo's `.cabildo/config.toml`.
+
 - `cabildo pair` pairs this machine with another on the LAN: without a PIN it prints one, with a
   PIN it joins. It is the same as the MCP `request("pair")`.
 - `join_topic(topic, scope="shared")` creates a channel that every paired machine receives.

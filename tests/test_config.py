@@ -132,38 +132,6 @@ def test_get_returns_default_when_hop_missing(homes):
     assert config.get(repo, "watch", "nope", project_name="proj", default=7) == 7
 
 
-def test_remote_reads_peers_token_bind_and_interval(homes):
-    _, repo, write_repo = homes
-    write_repo(
-        "[remote]\n"
-        'peers = ["100.64.0.2:48653", "box.example:48653"]\n'
-        'token = "s3cret"\n'
-        'bind = "127.0.0.1:48653"\n'
-        "interval = 15\n"
-    )
-    assert config.remote_peers(repo, project_name="proj") == [
-        "100.64.0.2:48653",
-        "box.example:48653",
-    ]
-    assert config.remote_token(repo, project_name="proj") == "s3cret"
-    assert config.remote_bind(repo, project_name="proj") == "127.0.0.1:48653"
-    assert config.remote_interval(repo, project_name="proj") == 15.0
-
-
-def test_remote_defaults_when_unset(homes):
-    _, repo, _ = homes
-    assert config.remote_peers(repo, project_name="proj") == []
-    assert config.remote_token(repo, project_name="proj") is None
-    assert config.remote_bind(repo, project_name="proj") is None
-    assert config.remote_interval(repo, project_name="proj") == 30.0
-
-
-def test_remote_peers_accepts_a_bare_string(homes):
-    _, repo, write_repo = homes
-    write_repo('[remote]\npeers = "100.64.0.2:48653"\n')
-    assert config.remote_peers(repo, project_name="proj") == ["100.64.0.2:48653"]
-
-
 def test_push_verify_and_timeout_defaults(homes):
     _, repo, _ = homes
     # Default: the daemon push skips the pre-push hook (issue #14) and waits 300s.

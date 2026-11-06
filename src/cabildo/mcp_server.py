@@ -1317,6 +1317,30 @@ def conditions() -> dict[str, Any]:
 # Control plane
 # --------------------------------------------------------------------------- #
 @mcp.tool()
+def peers() -> list[dict[str, Any]]:
+    """Other machines this bus syncs with, and the last pull from each.
+
+    `transport` is "lan" (paired with `request("pair")`) or "wan" (a peer over a tunnel, set
+    by the human in the machine-wide config). The daemon runs both. There is no CLI step.
+    """
+    from dataclasses import asdict
+
+    from . import lan, pair, wan
+
+    status = lan.load_status()
+    paired = [
+        {
+            "transport": "lan",
+            "node": node,
+            "address": f"{peer.host}:{peer.port}",
+            "last_pull": asdict(status[node]) if node in status else None,
+        }
+        for node, peer in pair.load_peers().items()
+    ]
+    return [*paired, *wan.peers_report()]
+
+
+@mcp.tool()
 def request(action: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     """Ask the daemon to do something deterministic on your behalf. Returns
     immediately with an intent id — this queues work, it does not run it.

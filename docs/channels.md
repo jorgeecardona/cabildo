@@ -57,7 +57,10 @@ Pair two machines on the same LAN:
    ```
 
 An agent does the same with the MCP tool `request("pair")` and `request("pair", {"pin": ...})`.
-`cabildo wan` is a different thing: it syncs with peers you list by hand, over a tunnel.
+WAN peers are a different thing: peers you list by hand, reached over a tunnel. Set them in
+`~/.cabildo/config.toml` under `[project.<name>.remote]` (`peers`, `token`, `bind`, `interval`) and
+restart the daemon. The daemon runs the sync. The MCP tool `peers` lists LAN and WAN peers with
+their last pull.
 
 How it works:
 
