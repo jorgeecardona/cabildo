@@ -33,7 +33,6 @@ const HUMAN_DEFER_MS = 120_000
 // the late reply off to the doorbell. Kept under a tool.call hook's 10 s
 // own-time budget (each $.clock.sleep counts against it).
 const ASK_WAIT_MS = 6_000
-const ASK_POLL_MS = 1_000
 // On the ask path we want the reply whole, not a preview.
 const ASK_PREVIEW = 100_000
 // An ask whose reply never comes is pruned after this, so a stale entry cannot
@@ -215,10 +214,15 @@ type WaitOut =
 // One `cabildo wait` child, run to its exit; its last stdout line, parsed.
 // Pieces are not lines, so the whole output is collected first. Null when it
 // printed nothing (it failed, or its parent check fired).
-async function waitOnce($: EngineInterface, sid: string, after: number): Promise<WaitOut | null> {
+async function waitOnce(
+  $: EngineInterface,
+  sid: string,
+  after: number,
+  extra: readonly string[] = [],
+): Promise<WaitOut | null> {
   const bin = (await $.env.get('CABILDO_BIN')) || 'cabildo'
   const child = $.process.spawn({
-    argv: [bin, 'wait', `--session=${sid}`, `--after=${after}`, '--json'],
+    argv: [bin, 'wait', `--session=${sid}`, `--after=${after}`, '--json', ...extra],
   })
   let out = ''
   for await (const { stream, text } of child) {
@@ -549,16 +553,20 @@ export const register: Register = (on) => {
       return toolResult(`${safeLabel(reply)} replied (#${reply.id}):\n${reply.preview}`)
     }
 
+    // One blocking `cabildo wait` per inbox change, not one `pull` per second (#37).
     const deadline = at + ASK_WAIT_MS
-    while ((await $.clock.now()) < deadline) {
-      await $.clock.sleep(ASK_POLL_MS)
-      let reply: PullRow | undefined
-      try {
-        reply = await lookForReply()
-      } catch {
-        continue
-      }
+    let after = askId
+    for (;;) {
+      const left = deadline - (await $.clock.now())
+      if (left <= 0) break
+      const r = await waitOnce($, sid, after, [
+        `--timeout=${left / 1000}`,
+        `--preview-chars=${ASK_PREVIEW}`,
+      ]).catch(() => null)
+      if (!r || r.rebound || r.messages.length === 0) break
+      const reply = r.messages.find((m) => m.from_session === target && m.to_session === sid)
       if (reply) return consume(reply)
+      after = r.cursor
     }
     // One final look so a reply in the last interval is not missed, then hand
     // off: the doorbell holds the cursor at this target, so a later reply still
