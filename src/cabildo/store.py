@@ -521,6 +521,29 @@ CREATE TABLE IF NOT EXISTS plan_samples (
     resets_at  REAL NOT NULL,                   -- 0 when the API gave no readable reset time
     PRIMARY KEY (account, limit_key, at)
 );
+
+-- One row per API message. Claude Code writes one transcript line per content block, each with
+-- the message's usage, and a resumed session can repeat lines in another file, so summing lines
+-- counts a message many times. `session_id` is the parent session for a subagent's messages.
+CREATE TABLE IF NOT EXISTS usage_messages (
+    message_id   TEXT PRIMARY KEY,
+    ts           REAL NOT NULL,
+    session_id   TEXT NOT NULL,
+    agent_id     TEXT,                          -- NULL for the session's main agent
+    project      TEXT NOT NULL,                 -- the transcript folder's name
+    model        TEXT NOT NULL,
+    input        INTEGER NOT NULL,
+    output       INTEGER NOT NULL,
+    cache_read   INTEGER NOT NULL,
+    cache_write  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_usage_messages_ts ON usage_messages(ts);
+
+-- How far each transcript file has been read into usage_messages.
+CREATE TABLE IF NOT EXISTS usage_cursors (
+    path         TEXT PRIMARY KEY,
+    byte_offset  INTEGER NOT NULL
+);
 """
 
 

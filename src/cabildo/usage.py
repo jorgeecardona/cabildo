@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import time
 from collections import defaultdict
 from collections.abc import Iterator
@@ -93,6 +94,84 @@ def records(since: float) -> Iterator[dict[str, Any]]:
                     }
         except OSError:
             continue
+
+
+def _usage_row(line: bytes, path: Path) -> tuple[Any, ...] | None:
+    """The ``usage_messages`` row of one transcript line, or None when it has no real usage.
+
+    ``<synthetic>`` messages are Claude Code's own rate-limit rejections: no API call was made.
+    """
+    if b'"usage"' not in line:
+        return None
+    try:
+        d = json.loads(line)
+        msg = d["message"]
+        u, message_id = msg["usage"], msg["id"]
+        ts = datetime.fromisoformat(d["timestamp"].replace("Z", "+00:00")).timestamp()
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+    model = msg.get("model") or "?"
+    if not u or not message_id or model == "<synthetic>":
+        return None
+    return (
+        message_id,
+        ts,
+        d.get("sessionId") or path.stem,
+        d.get("agentId"),
+        path.relative_to(PROJECTS).parts[0],
+        model,
+        u.get("input_tokens", 0),
+        u.get("output_tokens", 0),
+        u.get("cache_read_input_tokens", 0),
+        u.get("cache_creation_input_tokens", 0),
+    )
+
+
+def _ingest_file(conn: sqlite3.Connection, path: Path, offset: int) -> None:
+    """Read ``path`` from ``offset`` into ``usage_messages``. A line without its newline is still
+    being written, so the cursor stops before it. A file shorter than ``offset`` is read again.
+    """
+    with path.open("rb") as fh:
+        if fh.seek(0, os.SEEK_END) < offset:
+            offset = 0
+        fh.seek(offset)
+        rows = []
+        for line in fh:
+            if not line.endswith(b"\n"):
+                break
+            offset += len(line)
+            if (row := _usage_row(line, path)) is not None:
+                rows.append(row)
+    with conn:
+        # streamed lines of one message can show a partial output count: keep the largest
+        conn.executemany(
+            "INSERT INTO usage_messages (message_id, ts, session_id, agent_id, project, model, "
+            "input, output, cache_read, cache_write) VALUES (?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(message_id) DO UPDATE SET "
+            "input = max(input, excluded.input), output = max(output, excluded.output), "
+            "cache_read = max(cache_read, excluded.cache_read), "
+            "cache_write = max(cache_write, excluded.cache_write)",
+            rows,
+        )
+        conn.execute(
+            "INSERT INTO usage_cursors (path, byte_offset) VALUES (?, ?) "
+            "ON CONFLICT(path) DO UPDATE SET byte_offset = excluded.byte_offset",
+            (str(path), offset),
+        )
+
+
+def ingest(conn: sqlite3.Connection) -> None:
+    """Bring ``usage_messages`` up to date with every transcript, reading only new bytes."""
+    if not PROJECTS.is_dir():
+        return
+    cursors = dict(conn.execute("SELECT path, byte_offset FROM usage_cursors").fetchall())
+    for path in PROJECTS.rglob("*.jsonl"):
+        offset = cursors.get(str(path), 0)
+        try:
+            if path.stat().st_size != offset:
+                _ingest_file(conn, path, offset)
+        except OSError:
+            continue  # the file went away between the listing and the read
 
 
 def summarize(since: float) -> dict[str, Any]:
