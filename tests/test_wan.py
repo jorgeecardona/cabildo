@@ -207,17 +207,19 @@ def test_cursor_is_per_project_on_one_address(home, monkeypatch):
 def test_service_refuses_an_unsafe_bind(home):
     logs = []
     for bind, token in (("0.0.0.0", "t"), ("127.0.0.1", None)):  # noqa: S104
-        link = wan.Link("p", (), token, wan.Peer(bind, 0), 30.0)
+        peer = wan.Peer(bind, 0)
+        link = wan.Link("p", (), token, peer, 30.0)
         svc = wan.Service([link], logs.append)
-        svc._serve(link, link.bind)
+        svc._serve(link, peer)
         assert svc.servers == []
     assert all("refusing" in m for m in logs)
 
 
 def test_service_serves_on_loopback_and_a_peer_can_pull(home):
-    link = wan.Link("proj", (), "tok", wan.Peer("127.0.0.1", 0), 30.0)
+    peer = wan.Peer("127.0.0.1", 0)
+    link = wan.Link("proj", (), "tok", peer, 30.0)
     svc = wan.Service([link], lambda _m: None)
-    svc._serve(link, link.bind)
+    svc._serve(link, peer)
     try:
         host, port = svc.servers[0].getsockname()[:2]
         _rows, _top, node = lan.pull_from_peer(host, port, "proj", 0, "tok", "other")
