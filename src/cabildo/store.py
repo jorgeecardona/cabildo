@@ -510,6 +510,17 @@ CREATE TABLE IF NOT EXISTS schedule_deliveries (
     delivered_at  REAL NOT NULL,
     PRIMARY KEY (schedule_id, session_id)
 );
+
+-- Every fetched percent of a subscription limit. The workspace's own history keeps only recent
+-- samples in the runtime directory; fitting and backtesting a forecast need all past windows.
+CREATE TABLE IF NOT EXISTS plan_samples (
+    account    TEXT NOT NULL,                   -- hash of the Claude config dir
+    limit_key  TEXT NOT NULL,                   -- 'five_hour' or 'seven_day'
+    at         REAL NOT NULL,
+    percent    REAL NOT NULL,
+    resets_at  REAL NOT NULL,                   -- 0 when the API gave no readable reset time
+    PRIMARY KEY (account, limit_key, at)
+);
 """
 
 
@@ -2979,3 +2990,32 @@ def winddown_due(conn: sqlite3.Connection, schedule_id: int, session_id: str, st
     )
     conn.commit()
     return True
+
+
+# --------------------------------------------------------------------------- #
+# Subscription limit samples
+# --------------------------------------------------------------------------- #
+def add_plan_sample(
+    conn: sqlite3.Connection,
+    account: str,
+    limit_key: str,
+    at: float,
+    percent: float,
+    resets_at: float,
+) -> None:
+    """Record one fetched percent of a limit. A repeat of the same ``at`` is ignored."""
+    with conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO plan_samples (account, limit_key, at, percent, resets_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (account, limit_key, at, percent, resets_at),
+        )
+
+
+def plan_samples(conn: sqlite3.Connection, account: str, limit_key: str) -> list[sqlite3.Row]:
+    """All samples of one account's limit, oldest first."""
+    return conn.execute(
+        "SELECT at, percent, resets_at FROM plan_samples "
+        "WHERE account = ? AND limit_key = ? ORDER BY at",
+        (account, limit_key),
+    ).fetchall()

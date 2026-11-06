@@ -1,7 +1,10 @@
+import contextlib
 import json
+import sqlite3
 import subprocess
 import time
 
+from cabildo import store
 from cabildo.workspace import plan, xdgdirs
 from cabildo.workspace.app import fmt_plan, plan_style
 from cabildo.workspace.plan import Limit, PlanUsage
@@ -350,3 +353,25 @@ def test_keychain_miss_is_no_token(tmp_path, monkeypatch):
 
     monkeypatch.setattr(plan.subprocess, "run", run)
     assert plan._token() is None
+
+
+def test_persist_keeps_every_sample_of_each_limit_across_windows():
+    usage = plan.PlanUsage("max", plan.Limit(10.0, 1000.0), plan.Limit(40.0, 9000.0))
+    plan._persist("acct", usage, 100.0)
+    plan._persist("acct", plan.PlanUsage("max", plan.Limit(1.0, 2000.0), None), 200.0)
+    plan._persist("other", usage, 300.0)
+
+    with contextlib.closing(store.connect()) as conn:
+        five = [tuple(r) for r in store.plan_samples(conn, "acct", "five_hour")]
+        seven = [tuple(r) for r in store.plan_samples(conn, "acct", "seven_day")]
+
+    assert five == [(100.0, 10.0, 1000.0), (200.0, 1.0, 2000.0)]
+    assert seven == [(100.0, 40.0, 9000.0)]
+
+
+def test_persist_survives_a_database_error(monkeypatch):
+    def broken() -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "connect", broken)
+    plan._persist("acct", plan.PlanUsage("max", plan.Limit(1.0, 0.0), None), 1.0)

@@ -13,12 +13,14 @@ and show the same numbers. Another config dir, another account, has its own file
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import hashlib
 import http.client
 import itertools
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import time
@@ -27,6 +29,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
 
+from cabildo import store
 from cabildo.workspace import sessions, xdgdirs
 
 URL = "https://api.anthropic.com/api/oauth/usage"
@@ -328,8 +331,22 @@ def shared(not_before: float) -> Shared | None:
             return _shown(cached) if cached and fresh else None
         stored = Stored(usage, record(cached.history if cached else None, usage, now), now)
         _write_stored(path, stored)
+        _persist(account, usage, now)
         retry.unlink(missing_ok=True)
         return _shown(stored)
+
+
+def _persist(account: str, usage: PlanUsage, now: float) -> None:
+    """Add each limit's sample to the bus DB. A DB error only loses this sample: the mode line
+    does not depend on it.
+    """
+    try:
+        with contextlib.closing(store.connect()) as conn:
+            for key, lim in (("five_hour", usage.five_hour), ("seven_day", usage.seven_day)):
+                if lim is not None:
+                    store.add_plan_sample(conn, account, key, now, lim.percent, lim.resets_at)
+    except sqlite3.Error:
+        pass
 
 
 def _read_retry(path: os.PathLike[str]) -> tuple[float, float]:
