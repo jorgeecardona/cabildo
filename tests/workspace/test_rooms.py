@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cabildo import store
+from cabildo import names, store
 from cabildo.workspace import rooms
 from cabildo.workspace.rooms import NO_ROOMS, Rooms
 
@@ -26,6 +26,7 @@ def test_load_returns_project_and_sorted_topics_of_a_registered_session() -> Non
         project="cabildo",
         topics=("design", "general", "proj:cabildo"),
         scopes=(("proj:cabildo", "project"),),
+        agent=names.robot_name("s1"),
     )
 
 
@@ -65,7 +66,7 @@ def test_the_panel_row_shows_the_rooms_on_its_third_line(transcript) -> None:
     text = SwitcherApp._session_text(joined, 100)
     first, _where, third = text.plain.split("\n")
     assert "Fix the login bug" in first
-    assert third == "#general #proj:cabildo"
+    assert third == f"@{names.robot_name('s1')} #general #proj:cabildo"
 
 
 def test_the_panel_row_without_a_bus_entry_has_no_rooms_text(transcript) -> None:
@@ -127,7 +128,6 @@ def test_label_leaves_out_the_project_scope_of_a_proj_topic() -> None:
 def test_session_row_shows_the_agent_name_before_the_rooms(transcript) -> None:
     from lines import user
 
-    from cabildo import names
     from cabildo.workspace import sessions
     from cabildo.workspace.app import SwitcherApp
 
