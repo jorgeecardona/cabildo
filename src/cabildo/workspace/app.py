@@ -750,7 +750,9 @@ class SwitcherApp(App[None]):
 
     @staticmethod
     def _session_text(r: Row, width: int, selected: bool = False) -> Text:
-        """Title (+ tags), then where it works (cwd · branch), then its rooms if any, dimmed."""
+        """Title (+ tags), then where it works (cwd · branch), then its agent name and rooms
+        if it is on the bus, dimmed.
+        """
         # Tags are chips (reverse-video cyan) so they do not read as part of the title.
         text = Text("✓ " if selected else "", style="bold green")
         text.append((f"[{r.meta.group}] " if r.meta.group else "") + r.display_title)
@@ -769,7 +771,8 @@ class SwitcherApp(App[None]):
         where = (short_path(r.cwd, room_left) if room_left >= 2 else "") + tail
         where = where if room_left >= 2 else where.lstrip(" ·")
         text.append("\n" + where, style="dim")
-        room_text = rooms.label(r.rooms)
+        agent = f"@{r.rooms.agent}" if r.rooms.agent else ""
+        room_text = " ".join(part for part in (agent, rooms.label(r.rooms)) if part)
         if room_text:
             if len(room_text) > width:
                 room_text = room_text[: max(width - 1, 0)] + "…"

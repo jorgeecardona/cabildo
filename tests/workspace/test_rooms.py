@@ -122,3 +122,17 @@ def test_label_shows_the_scope_of_a_topic_that_leaves_the_machine() -> None:
 def test_label_leaves_out_the_project_scope_of_a_proj_topic() -> None:
     r = Rooms("cabildo", ("general", "proj:cabildo"), (("proj:cabildo", "project"),))
     assert rooms.label(r) == "#general #proj:cabildo"
+
+
+def test_session_row_shows_the_agent_name_before_the_rooms(transcript) -> None:
+    from lines import user
+
+    from cabildo import names
+    from cabildo.workspace import sessions
+    from cabildo.workspace.app import SwitcherApp
+
+    register("s1", "cabildo", "general")
+    transcript("s1", user("Fix the login bug", branch="main"))
+    [row] = sessions.attach_rooms(sessions.build_rows(None))
+    last = SwitcherApp._session_text(row, 80).plain.split("\n")[-1]
+    assert last.startswith(f"@{names.robot_name('s1')} #")

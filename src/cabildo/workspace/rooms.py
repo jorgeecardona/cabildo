@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from cabildo import store
+from cabildo import names, store
 
 
 @dataclass(frozen=True)
@@ -18,6 +18,7 @@ class Rooms:
     # (topic, scope) for the topics whose posts go to paired machines; a topic not
     # listed is local (docs/channels.md)
     scopes: tuple[tuple[str, str], ...] = ()
+    agent: str = ""  # the session's robot name on the bus
 
 
 NO_ROOMS = Rooms(project=None, topics=())
@@ -82,7 +83,7 @@ def _load_chunk(conn: sqlite3.Connection, ids: list[str]) -> dict[str, Rooms]:
     for sid in projects:
         mine = tuple(sorted(topics.get(sid, [])))
         away = tuple((t, scopes[t]) for t in mine if scopes.get(t, "local") != "local")
-        out[sid] = Rooms(projects[sid], mine, away)
+        out[sid] = Rooms(projects[sid], mine, away, names.robot_name(sid))
     return out
 
 
