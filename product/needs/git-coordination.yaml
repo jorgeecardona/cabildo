@@ -8,7 +8,7 @@ needs:
       the operator can rely on cabildo denying it, even for a lone agent, so no agent overwrites another
       agent's committed work.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-17
         locator: "docs/issues/17-10-2026-simplify-git-coordination-force-push-deny-recipe-worktree-per-agent.md (phase 0); measured: no guard branch matched a force push"
     proofs:
@@ -19,7 +19,7 @@ needs:
       When an agent's push is rejected because another push got there first, the agent can read the recovery
       (fetch, rebase, push again) at that moment, so it does not try reset --hard or a force push.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-17
         locator: "docs/issues/17-10-2026-simplify-git-coordination-force-push-deny-recipe-worktree-per-agent.md (phase 1); measured: 32 of 1,435 push intents ever queued behind another"
     proofs:
@@ -32,9 +32,14 @@ needs:
       denied, with the agent told to use its own worktree, so one agent's uncommitted work is not lost to
       another.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-17
         locator: "docs/issues/17-10-2026-simplify-git-coordination-force-push-deny-recipe-worktree-per-agent.md (phase 2)"
+      - kind: secondary
+        who: 'GitLab issue #29'
+        date: '2026-10-18'
+        locator: https://gitlab.com/cardona-oss/cabildo/-/work_items/29
+        observed_at: '2026-11-07'
     proofs:
       - "test:tests/test_guard.py::test_shared_dangerous_git_denied_when_a_peer_shares_the_checkout"
       - "test:tests/test_guard.py::test_mutating_git_allowed_in_your_own_worktree"
@@ -44,7 +49,7 @@ needs:
       When an agent runs git stash, it can do so, because a stash can be recovered; the destructive guard
       keeps only the commands that cannot be undone (reset --hard, clean -f, checkout ., whole-tree restore).
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-17
         locator: "docs/issues/17-10-2026-simplify-git-coordination-force-push-deny-recipe-worktree-per-agent.md (phase 4, not done)"
 
@@ -53,9 +58,14 @@ needs:
       When two projects each queue a push, the operator can see both run at the same time, while two pushes
       of one project never do, so one project's slow gate does not hold up another project.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-26
         locator: "docs/issues/26-10-2026-daemon-runs-intents-of-all-projects-one-at-a-time-so-one.md; measured: store.take_next_intent took the oldest pending intent across all projects"
+      - kind: secondary
+        who: 'GitLab issue #38'
+        date: '2026-10-24'
+        locator: https://gitlab.com/cardona-oss/cabildo/-/work_items/38
+        observed_at: '2026-11-07'
     proofs:
       - "test:tests/test_intent_lanes.py::test_pushes_to_different_projects_run_at_the_same_time"
       - "test:tests/test_intent_lanes.py::test_second_push_to_a_project_waits_for_the_first"
@@ -65,6 +75,11 @@ needs:
       When a developer runs the test suite in a real checkout, they can check that its git status, commit
       graph and worktree list are the same afterwards, and that no test pushed to the real origin.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-19
         locator: "docs/issues/19-10-2026-test-suite-pollutes-the-real-repo-and-has-pushed-to-origin-main.md; measured: scratch commits authored t <t@t> reached origin/main"
+      - kind: secondary
+        who: 'GitLab issue #40'
+        date: '2026-10-25'
+        locator: https://gitlab.com/cardona-oss/cabildo/-/work_items/40
+        observed_at: '2026-11-07'

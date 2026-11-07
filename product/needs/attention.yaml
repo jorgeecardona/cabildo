@@ -7,7 +7,7 @@ needs:
       When the operator has set a stop time, every active session tells them as the time comes close and
       after it passes, once per step, and never outside that window, so they can keep the line they set.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-04
         locator: "docs/issues/04-10-2026-fleet-aware-attention-engine-schedule-driven-wind-down-bedtime-signal-and-a.md; measured: 8 agents active at once on 2026-10-04"
       - kind: secondary
@@ -22,7 +22,7 @@ needs:
       When the operator declares a stop or a block once, they can rely on it applying to every project on the
       machine, so one command is enough for all their sessions.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-04
         locator: "docs/issues/04-10-2026-fleet-aware-attention-engine-schedule-driven-wind-down-bedtime-signal-and-a.md (propagation)"
     proofs:
@@ -34,7 +34,7 @@ needs:
       When the operator leaves for the night, they can rely on no notice while nothing needs them, and
       exactly one notice when a session first needs them, naming the session and why.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-04
         locator: "docs/issues/04-10-2026-fleet-aware-attention-engine-schedule-driven-wind-down-bedtime-signal-and-a.md (bedtime signal)"
 
@@ -43,16 +43,26 @@ needs:
       When a session winds down, the operator can read one line of what it did and its open yes/no
       decisions, so they review 8 sessions by reading 8 lines.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-04
         locator: "docs/issues/04-10-2026-fleet-aware-attention-engine-schedule-driven-wind-down-bedtime-signal-and-a.md (compressed output)"
+      - kind: secondary
+        who: 'GitLab issue #34'
+        date: '2026-10-20'
+        locator: https://gitlab.com/cardona-oss/cabildo/-/work_items/34
+        observed_at: '2026-11-07'
+      - kind: secondary
+        who: 'GitLab issue #31'
+        date: '2026-10-19'
+        locator: https://gitlab.com/cardona-oss/cabildo/-/work_items/31
+        observed_at: '2026-11-07'
 
   - id: ATTN-5
     text: >
       When the operator wants the day at a glance, they can see per-session activity, what needs them, and a
       day timeline with the stop line, in a normal window.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-04
         locator: "docs/issues/04-10-2026-fleet-aware-attention-engine-schedule-driven-wind-down-bedtime-signal-and-a.md (viewer)"
       - kind: assumption
@@ -64,7 +74,7 @@ needs:
       When the operator has signed up in advance for a hard stop at a time, they can cross that time only
       with more than one click, and without that sign-up cabildo never blocks them.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-04
         locator: "docs/issues/04-10-2026-fleet-aware-attention-engine-schedule-driven-wind-down-bedtime-signal-and-a.md (commitment mode)"
       - kind: secondary

@@ -28,4 +28,4 @@ decisions:
     A panel write is a store.py call, never raw SQL, so the same validation applies as
     to the MCP tool.
   decided_at: '2026-10-29'
-  revised_at: '2026-10-31'
+  # revised 2026-10-31 (decisions have no revised_at field)

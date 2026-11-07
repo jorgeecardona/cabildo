@@ -12,7 +12,7 @@ needs:
         who: Jorge Cardona
         date: 2026-10-31
         quote: "some sessions should just deal let say with product work, or design or backend and so on, roles and maybe some roles can have several sessions"
-      - kind: internal
+      - kind: assumption
         date: 2026-10-31
         locator: "src/cabildo/mcp_server.py set_role; [roles] in .cabildo/config.toml"
     proofs:

@@ -1,0 +1,45 @@
+who: operator
+
+needs:
+
+  - id: DAEMON-2
+    text: >
+      When sessions are idle, the operator can rely on the cabildo-push poll using under 5% of one core
+      per session.
+    sources:
+      - {kind: secondary, date: 2026-10-24, locator: "https://gitlab.com/cardona-oss/cabildo/-/work_items/37"}
+
+  - id: GIT-5
+    text: >
+      When one session queues many pushes to origin in a short window, the operator can rely on the
+      daemon refusing pushes past a limit.
+    sources:
+      - {kind: secondary, date: 2026-10-25, locator: "https://gitlab.com/cardona-oss/cabildo/-/work_items/39"}
+
+  - id: GIT-6
+    text: >
+      When a change lands with the default config, the operator can rely on the tests having run before
+      the push.
+    sources:
+      - {kind: secondary, date: 2026-10-19, locator: "https://gitlab.com/cardona-oss/cabildo/-/work_items/32"}
+
+  - id: LAND-1
+    text: >
+      When a land fails, the agent can read the failing task and its error in the DM, not only moon's
+      upgrade banner.
+    sources:
+      - {kind: secondary, date: 2026-09-29, locator: "https://gitlab.com/cardona-oss/cabildo/-/work_items/22"}
+
+  - id: LAND-2
+    text: >
+      When a land touches one package, the operator can see the gate run only the affected projects and
+      the push finish without an SSH timeout.
+    sources:
+      - {kind: secondary, date: 2026-09-20, locator: "https://gitlab.com/cardona-oss/cabildo/-/work_items/17"}
+      - {kind: secondary, date: 2026-09-20, locator: "https://gitlab.com/cardona-oss/cabildo/-/work_items/16"}
+
+  - id: LAND-3
+    text: >
+      When a land succeeds, the operator can rely on its lane worktree being removed.
+    sources:
+      - {kind: secondary, date: 2026-10-03, locator: "https://gitlab.com/cardona-oss/cabildo/-/work_items/24"}

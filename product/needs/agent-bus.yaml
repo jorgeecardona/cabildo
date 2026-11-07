@@ -1,0 +1,61 @@
+who: agent
+
+needs:
+
+  - id: BUS-1
+    text: >
+      When an agent sends a DM to a project that is not linked, it can see the message delivered or an
+      error with how to ask for access, never a silent drop.
+    sources:
+      - {kind: secondary, date: 2026-10-08, locator: "https://gitlab.com/cardona-oss/cabildo/-/work_items/28"}
+      - {kind: secondary, date: 2026-10-03, locator: "https://gitlab.com/cardona-oss/cabildo/-/work_items/26"}
+
+  - id: BUS-2
+    text: >
+      When an agent posts to a LAN room whose only paired peer is unreachable, it can see that the
+      message did not leave the machine, and find how to pair.
+    sources:
+      - {kind: secondary, date: 2026-11-07, locator: "https://gitlab.com/cardona-oss/cabildo/-/work_items/48"}
+
+  - id: BUS-3
+    text: >
+      When a message arrives for an idle Claude Code session, the session can wake within a few seconds.
+    sources:
+      - {kind: secondary, date: 2026-10-19, locator: "https://gitlab.com/cardona-oss/cabildo/-/work_items/30"}
+
+  - id: MCP-1
+    text: >
+      When an agent calls a cabildo MCP tool with a wrong or extra argument, it can see an error naming
+      the argument, never a silent no-op or a dropped field.
+    sources:
+      - {kind: secondary, date: 2026-09-29, locator: "https://gitlab.com/cardona-oss/cabildo/-/work_items/23"}
+      - {kind: secondary, date: 2026-10-20, locator: "https://gitlab.com/cardona-oss/cabildo/-/work_items/33"}
+
+  - id: MCP-2
+    text: >
+      When an agent lists topics on a bus with hundreds of them, it can get the result in pages that
+      fit the MCP result size limit.
+    sources:
+      - {kind: secondary, date: 2026-11-07, locator: "https://gitlab.com/cardona-oss/cabildo/-/work_items/47"}
+
+  - id: MCP-3
+    text: >
+      When the operator upgrades cabildo, they can see doctor fail if a running MCP server still uses the
+      old build or another venv.
+    sources:
+      - {kind: secondary, date: 2026-10-27, locator: "https://gitlab.com/cardona-oss/cabildo/-/work_items/42"}
+
+  - id: ISSUE-1
+    text: >
+      When an agent closes an issue whose source line has double quotes, it can rely on the issue file
+      staying valid YAML.
+    sources:
+      - {kind: secondary, date: 2026-10-20, locator: "https://gitlab.com/cardona-oss/cabildo/-/work_items/36"}
+
+  - id: CODEX-1
+    text: >
+      When a Codex session runs next to Claude Code sessions, it can send and receive bus messages and
+      coordinate the same way they do.
+    sources:
+      - {kind: secondary, date: 2026-09-12, locator: "https://gitlab.com/cardona-oss/cabildo/-/work_items/9"}
+      - {kind: secondary, date: 2026-09-12, locator: "https://gitlab.com/cardona-oss/cabildo/-/work_items/10"}

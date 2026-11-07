@@ -12,7 +12,7 @@ needs:
         who: Jorge Cardona
         date: 2026-10-29
         quote: "so the cabildo browser tool is fully incorporated into cabildo please"
-      - kind: internal
+      - kind: assumption
         date: 2026-08-29
         locator: "docs/issues/29-08-2026-cabildo-browser-subcommand.md"
     proofs:
@@ -27,7 +27,7 @@ needs:
       and whether the saved login (storage state) is empty or stale. It reads /proc and never
       uses `pkill -f`, because that pattern kills the shell that runs it.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-08-29
         locator: "docs/issues/29-08-2026-cabildo-browser-subcommand.md (22 servers, 2.2 GB measured)"
     proofs:
@@ -41,7 +41,7 @@ needs:
       whose Claude session is gone, or all of them with a flag, and read how much memory was
       freed. It never stops the process that runs it.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-08-29
         locator: "docs/issues/29-08-2026-cabildo-browser-subcommand.md"
     proofs:
@@ -60,9 +60,24 @@ needs:
         who: Jorge Cardona
         date: 2026-10-29
         quote: "aah, there is a python based playwright no? [...] can we add it to cabildo please"
-      - kind: internal
+      - kind: assumption
         date: 2026-08-29
         locator: "~/.claude/bin/cabildo-browser-login (the script this replaces)"
+      - kind: secondary
+        who: 'GitLab issue #49'
+        date: '2026-11-07'
+        locator: https://gitlab.com/cardona-oss/cabildo/-/work_items/49
+        observed_at: '2026-11-07'
+      - kind: secondary
+        who: 'GitLab issue #25'
+        date: '2026-10-03'
+        locator: https://gitlab.com/cardona-oss/cabildo/-/work_items/25
+        observed_at: '2026-11-07'
+      - kind: secondary
+        who: 'GitLab issue #21'
+        date: '2026-09-27'
+        locator: https://gitlab.com/cardona-oss/cabildo/-/work_items/21
+        observed_at: '2026-11-07'
     proofs:
       - "test:tests/test_browser_login.py::test_write_state_is_mode_600_and_counts"
       - "test:tests/test_browser_login.py::test_collect_returns_the_last_state_read_before_the_browser_closed"
@@ -75,7 +90,7 @@ needs:
       `--user-data-dir`, or carries `--headless`. The browser always runs with a visible
       window.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-24
         locator: "docs/issues/29-08-2026-cabildo-browser-subcommand.md (headed rule)"
     proofs:
@@ -94,9 +109,9 @@ needs:
       - kind: assumption
         who: claude
         date: 2026-10-29
-        note: >
-          Read from "fully incorporated". Not confirmed by Jorge. The Playwright MCP server
-          exists only for Node today, so this means writing a new MCP server.
+        # note (no source field for reasoning yet, prodc#117): Read from "fully incorporated".
+        # Not confirmed by Jorge. The Playwright MCP server exists only for Node today, so this
+        # means writing a new MCP server.
     proofs:
       - "test:tests/test_browser_server.py::test_the_server_offers_the_browser_tools_and_nothing_headless"
       - "test:tests/test_browser_server.py::test_click_by_ref_uses_the_aria_ref_locator"

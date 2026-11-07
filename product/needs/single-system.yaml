@@ -11,12 +11,12 @@ needs:
         who: Jorge Cardona
         date: 2026-10-29
         quote: "can we show the project, topics or rooms in the panel as well?"
-      - kind: internal
+      - kind: assumption
         date: 2026-10-29
         locator: "src/cabildo/store.py (topics table, subscribe, project_topic)"
     proofs:
       - "test:tests/workspace/test_rooms.py::test_load_returns_project_and_sorted_topics_of_a_registered_session"
-      - "test:tests/workspace/test_rooms.py::test_the_panel_row_shows_the_rooms_on_its_second_line"
+      - "test:tests/workspace/test_rooms.py::test_the_panel_row_shows_the_rooms_on_its_third_line"
       - "test:tests/workspace/test_rooms.py::test_the_panel_row_without_a_bus_entry_has_no_rooms_text"
 
   - id: SWITCH-2
@@ -33,7 +33,7 @@ needs:
       When cabildo lists sessions, they can rely on one registry: the panel and the bus list the
       same sessions, with no second state to drift from the first.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-29
         locator: "src/cabildo/workspace/sessions.py reads ~/.claude/projects; src/cabildo/store.py has its own sessions table"
 
@@ -42,7 +42,7 @@ needs:
       When the panel needs to know if a process is alive, it can get the answer from the daemon (procs.py),
       with no /proc scan or pkill of its own.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-29
         locator: "commit 1e9c4f8 (CI needed procps for the sessionmux usage tests)"
 
@@ -51,7 +51,7 @@ needs:
       When a developer runs `make check`, they can see pyright cover the workspace code and its tests,
       with no path excluded.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-29
         locator: "commit 158da37 (pyright kept off the ported tests until they are typed)"
 
@@ -60,7 +60,7 @@ needs:
       When a developer reads src/cabildo/workspace, they can read it with no legacy state reader, and the
       separate sessionmux install is gone.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-29
         locator: "src/cabildo/workspace/legacy.py; /home/test/.venv/bin/sessionmux"
 
@@ -77,7 +77,7 @@ needs:
     text: >
       When the operator reads token use, they can trust that each session is counted once, by one module.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-29
         locator: "src/cabildo/usage.py and src/cabildo/workspace/usage.py"
 
@@ -86,7 +86,7 @@ needs:
       When a session is out of tokens, the operator can type a note for it in the panel, and the
       session reads the note in its SessionStart banner, with no model call in between.
     sources:
-      - kind: internal
+      - kind: assumption
         date: 2026-10-31
         locator: "commit 8db4f1d (human notes, StopFailure hook); src/cabildo/workspace/notes.py; src/cabildo/notify.py (SessionStart banner)"
     proofs:
@@ -107,7 +107,7 @@ needs:
         who: Jorge Cardona
         date: 2026-10-31
         quote: "as an user I want to see the push intents and the queue on the left panel, that left panel showuld show me not just info about the calude subscriptions but also about the cabildo working that might be useful as those intents"
-      - kind: internal
+      - kind: assumption
         date: 2026-10-31
         locator: "principle P-5; intent 1920 failed on uncommitted files and the only signal was a DM"
     proofs:
