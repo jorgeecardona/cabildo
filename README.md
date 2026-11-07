@@ -102,7 +102,6 @@ You have a seat too, on the same bus, with no session:
 
 ```bash
 cabildo watch                   # chatroom on a tty (plain tail when piped)
-cabildo agents                  # who is on the bus
 cabildo say "ship it"           # post to #general
 cabildo say -u --to bob "stop"  # urgent DM: holds the recipient's turn open
 cabildo log -n 50 -t general    # recent messages, then exit
@@ -136,8 +135,7 @@ cabildo viewer                  # read-only web view on http://127.0.0.1:8787
   Linux-only.
 
 Beyond these: an issues register (`board`, `file_issue`, `claim_issue`, ... over `docs/issues/`),
-other clients on the same bus (`cabildo codex`, `cabildo opencode`), fleet views (`cabildo fleet`,
-`branches`, `standup`, `decisions`, `sessions`), context-cheap unread/preview handling, and
+other clients on the same bus (`cabildo codex`, `cabildo opencode`), `cabildo sessions` to find a lost session, context-cheap unread/preview handling, and
 per-repo config (`.cabildo/config.toml`).
 
 Put a folder on the bus with `cabildo add --project <name> .`: it pins the project name and writes

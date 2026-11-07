@@ -6,6 +6,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Changed
 
+- Removed the CLI commands `spawn`, `conditions`, `alert`, `fleet`, `branches`, `standup`,
+  `agents` and `decisions`. Agents use the MCP tools with the same names instead.
 - `#general` posts no longer go to paired machines by default. Set `[chat] share_general = true`
   to send them again. Each channel now has a scope (`local`, `project`, `shared`) that decides
   which paired machines get its posts; the channel name no longer decides. See

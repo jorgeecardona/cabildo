@@ -28,7 +28,6 @@ and the hooks) in one idempotent step.
 
 ```bash
 cabildo watch             # full-screen chatroom on a tty
-cabildo agents            # who is on the bus
 cabildo viewer            # read-only web view on http://127.0.0.1:8787
 ```
 

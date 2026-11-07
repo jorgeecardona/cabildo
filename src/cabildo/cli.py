@@ -633,118 +633,10 @@ def cmd_plugin(args) -> int:
     return 0
 
 
-def cmd_agents(args) -> int:
-    conn = store.connect()
-    rows = store.active_sessions(conn)
-    now = time.time()
-    print(
-        f"{C.DIM}active = seen in the last {store.ACTIVE_WINDOW // 60}min. "
-        f"This tracks last PROMPT, not liveness: an agent working a long "
-        f"autonomous task, or idling with its window open, is missing from "
-        f"this list.{C.OFF}\n"
-    )
-    if not rows:
-        print("nobody on the bus")
-        return 0
-    for r in rows:
-        name = store.display_name(r)
-        ago = int(now - r["last_seen_at"])
-        col = _sender_color(name)
-        state = store.presence_state(r, now)
-        scol = {"working": C.GREEN, "idle": C.YELLOW}.get(state, C.DIM)
-        model = f" {C.DIM}{r['model']}{C.OFF}" if r["model"] else ""
-        print(
-            f"  {scol}●{C.OFF} {col}{C.BOLD}{name:<12}{C.OFF} {(r['project_name'] or '-'):<16} "
-            f"{scol}{state:<8}{C.OFF}{model} {C.DIM}{r['cwd'] or ''} · last prompt {ago}s ago{C.OFF}"
-        )
-    claims = store.list_claims(conn)
-    if claims:
-        print(f"\n{C.BOLD}held scopes{C.OFF}")
-        for c in claims:
-            print(f"  {c['resource']:<28} {c['holder']:<12} {C.DIM}{c['note'] or ''}{C.OFF}")
-    return 0
-
-
 _LEVEL_COLOR = {"critical": C.RED, "warn": C.YELLOW, "info": C.CYAN}
 # Robot codenames run long (quantum-cortana-ba22c); one column width for all of
 # them beats every row wrapping differently.
 _W = 22
-
-
-def cmd_conditions(args) -> int:
-    """What the fleet is currently being told about this machine."""
-    conn = store.connect()
-    rows = store.active_conditions(conn, include_cleared=args.all)
-    if not rows:
-        print(f"{C.DIM}nothing raised on {store.hostname()}{C.OFF}")
-        return 0
-    now = time.time()
-    for c in rows:
-        col = _LEVEL_COLOR.get(c["level"], "")
-        state = "cleared" if c["state"] == "cleared" else c["level"]
-        print(f"{col}{C.BOLD}{c['key']:<10}{C.OFF} {col}{state:<9}{C.OFF} {c['headline']}")
-        for p in c["data"].get("procs") or []:
-            print(
-                f"    {C.DIM}pid {p['pid']:<8} {p['what']} "
-                f"({p['rss_mb']}M, {p['age']}, from {p['who']}){C.OFF}"
-            )
-        for sid, mine in sorted(
-            (c["data"].get("by_session") or {}).items(), key=lambda kv: -kv[1]["rss_mb"]
-        )[:6]:
-            who = store.display_name(store.get_session(conn, sid), sid)
-            print(
-                f"    {C.DIM}{who:<14} {mine['rss_mb'] / 1024:.1f}G in "
-                f"{mine['count']} proc(s){C.OFF}"
-            )
-        seen = conn.execute(
-            "SELECT COUNT(*) n FROM condition_deliveries WHERE host=? AND key=? AND episode>=?",
-            (c["host"], c["key"], c["episode"]),
-        ).fetchone()["n"]
-        print(
-            f"    {C.DIM}episode {c['episode']} · raised {_ago(now - c['raised_at'])} ago "
-            f"· told to {seen} session(s) · by {c['source'] or '?'}{C.OFF}"
-        )
-        if c["advice"]:
-            print(f"    {C.DIM}→ {c['advice']}{C.OFF}")
-    return 0
-
-
-def cmd_alert(args) -> int:
-    """Nudge every session on this machine by hand.
-
-    The daemon raises what it can measure; this is for what only you know —
-    "CI is down, nobody push", "I'm about to reboot". Same delivery as a
-    measured condition: once per session, at their next tool call, retractable.
-    """
-    conn = store.connect()
-    if args.clear:
-        ok = store.clear_condition(
-            conn,
-            key=args.clear,
-            source=f"@{HUMAN_HANDLE}",
-            headline=f"{args.clear}: stood down by @{HUMAN_HANDLE}",
-        )
-        print(f"cleared {args.clear}" if ok else f"{args.clear} was not raised")
-        return 0 if ok else 1
-    body = " ".join(args.text).strip()
-    if not body:
-        print("nothing to say", file=sys.stderr)
-        return 1
-    res = store.raise_condition(
-        conn,
-        key=args.key,
-        level=args.level,
-        headline=body,
-        advice=args.advice,
-        source=f"@{HUMAN_HANDLE}",
-        ttl_seconds=args.ttl * 3600.0,
-    )
-    print(
-        f"raised {C.BOLD}{args.key}{C.OFF} [{args.level}] for {args.ttl:g}h "
-        f"(episode {res['episode']}) — every session here hears it at its next tool call"
-    )
-    print(f"{C.DIM}stand it down with: cabildo alert --clear {args.key}{C.OFF}")
-    return 0
 
 
 def _parse_stop_time(s: str) -> float | None:
@@ -1021,52 +913,6 @@ def cmd_sessions(args) -> int:
     return 0
 
 
-def cmd_spawn(args) -> int:
-    """Queue a spawn intent as @jorge. The daemon executes it — this makes the
-    cabildo the entrypoint: you never run `claude -p` by hand for fleet
-    work, so every agent is born inside the caps, the budget, and the ledger.
-    """
-    from . import actions
-
-    if args.role not in actions.ROLES:
-        print(f"unknown role {args.role!r}; allowed: {sorted(actions.ROLES)}", file=sys.stderr)
-        return 1
-    repo = os.path.abspath(args.repo)
-    if not os.path.isdir(repo):
-        print(f"not a directory: {repo}", file=sys.stderr)
-        return 1
-    conn = store.connect()
-    ensure_human(conn)
-    params = {
-        "role": args.role,
-        "task": args.task,
-        "repo": repo,
-        "target": args.target,
-        "_from_session": HUMAN_SESSION,
-        "_from_handle": HUMAN_HANDLE,
-        "_project": repo,
-    }
-    if args.model:
-        params["model"] = args.model
-    iid = store.request_intent(
-        conn,
-        from_session=HUMAN_SESSION,
-        from_handle=HUMAN_HANDLE,
-        project=repo,
-        action="spawn",
-        params=params,
-    )
-    print(
-        f"{C.GREEN}queued{C.OFF} intent #{iid}: spawn {args.role} "
-        f"({args.model or 'default model'}) on {repo}"
-    )
-    print(
-        f"{C.DIM}a daemon with --allow-spawn must be running to execute it; "
-        f"its result pushes here as a DM (see `watch` / `fleet`).{C.OFF}"
-    )
-    return 0
-
-
 def _fmt_tokens(chars: int) -> str:
     from .transcript import CHARS_PER_TOKEN
 
@@ -1236,36 +1082,6 @@ def cmd_browser(args) -> int:
     return 0
 
 
-def cmd_fleet(args) -> int:
-    conn = store.connect()
-    rows = store.list_spawns(conn, limit=args.n)
-    if not rows:
-        print(f"{C.DIM}no spawned agents on record{C.OFF}")
-        return 0
-    icons = {
-        "launched": ("○", C.YELLOW),  # process up, not yet on the bus
-        "registered": ("●", C.GREEN),  # alive and talking
-        "ended": ("✓", C.DIM),  # finished cleanly
-        "dead": ("✗", C.RED),  # died without ending its session
-    }
-    now = time.time()
-    for r in rows:
-        icon, col = icons.get(r["status"], ("?", C.DIM))
-        name = r["agent_display"] or r["tag"]
-        age = int(now - r["created_at"])
-        age_s = f"{age // 3600}h{(age % 3600) // 60:02d}m" if age >= 3600 else f"{age // 60}m"
-        print(
-            f"  {col}{icon}{C.OFF} {C.BOLD}{name:<16}{C.OFF} {r['role']:<4} "
-            f"depth {r['depth']}  by {r['parent_display']:<10} {age_s:>6} ago  "
-            f"{C.DIM}{r['model'] or 'default'} · {r['status']}{C.OFF}"
-        )
-        first_line = (r["task"] or "").strip().splitlines()[0]
-        print(f"      {C.DIM}{first_line[:110]}{C.OFF}")
-        if r["worktree"]:
-            print(f"      {C.DIM}{r['worktree']}{C.OFF}")
-    return 0
-
-
 def _age(secs: float) -> str:
     s = int(secs)
     if s < 3600:
@@ -1290,62 +1106,6 @@ def _agent_label(agent: dict | None) -> str:
     state = agent.get("presence") or agent.get("status") or ""
     col = C.GREEN if state in ("working", "registered") else C.DIM
     return f"{col}{agent['name']}{C.OFF} {C.DIM}({state}){C.OFF}"
-
-
-def cmd_branches(args) -> int:
-    """The zoo, read-only: every worktree and every bare branch, whose agent it
-    is, and where it stands versus the trunk. Changes nothing.
-    """
-    from . import branches as _branches
-
-    inv = _branches.inventory(cwd=args.repo, target=args.target, remote=args.remote)
-    if not inv["ok"]:
-        print(f"{C.RED}{inv['reason']}{C.OFF}", file=sys.stderr)
-        return 1
-
-    now = time.time()
-    proj = f" · project {inv['project']}" if inv["project"] else ""
-    print(f"{C.BOLD}{inv['repo']}{C.OFF}{C.DIM}{proj} · vs {inv['base']}{C.OFF}")
-    if not inv["base_present"]:
-        print(
-            f"{C.YELLOW}  {inv['base']} not present locally — ahead/behind unknown (no fetch){C.OFF}"
-        )
-
-    print(f"\n{C.BOLD}worktrees{C.OFF} ({len(inv['worktrees'])})")
-    for e in inv["worktrees"]:
-        live = bool(e["agent"] and (e["agent"].get("presence") in ("working", "idle")))
-        icon = f"{C.GREEN}●{C.OFF}" if live else f"{C.DIM}○{C.OFF}"
-        name = os.path.basename(e["path"].rstrip("/")) or e["path"]
-        branch = e["branch"] or f"{C.DIM}(detached){C.OFF}"
-        dirty = (
-            "?" if e["dirty"] is None else ("clean" if e["dirty"] == 0 else f"dirty:{e['dirty']}")
-        )
-        flags = "".join(
-            f" {C.YELLOW}{f}{C.OFF}"
-            for f, on in (("locked", e["locked"]), ("prunable", e["prunable"]))
-            if on
-        )
-        lc = e["last_commit"]
-        when = f"{_age(now - lc['at'])} ago" if lc else "—"
-        subj = lc["subject"][:60] if lc else ""
-        print(
-            f"  {icon} {C.BOLD}{name[:24]:<24}{C.OFF} {branch[:28]:<28} "
-            f"{_branch_line_stats(e)}  {dirty:<8} {_agent_label(e['agent'])}{flags}"
-        )
-        print(f"      {C.DIM}{when:>8}  {subj}{C.OFF}")
-
-    if inv["branches"]:
-        print(f"\n{C.BOLD}branches without a worktree{C.OFF} ({len(inv['branches'])})")
-        for e in inv["branches"]:
-            lc = e["last_commit"]
-            when = f"{_age(now - lc['at'])} ago" if lc else "—"
-            subj = lc["subject"][:60] if lc else ""
-            print(
-                f"  {C.DIM}·{C.OFF} {e['branch'][:28]:<28} {e['head']:<10} "
-                f"{_branch_line_stats(e)}  {_agent_label(e['agent'])}"
-            )
-            print(f"      {C.DIM}{when:>8}  {subj}{C.OFF}")
-    return 0
 
 
 def cmd_wan(_args) -> int:
@@ -1751,17 +1511,6 @@ def cmd_session_ops(args) -> int:
     return 0
 
 
-def cmd_standup(args) -> int:
-    """Who touched what over a window, from cabildo's own record — messages, tasks in
-    flight, spawns, active agents, and token cost.
-    """
-    from . import standup, store
-
-    with store.connect() as conn:
-        print(standup.render(standup.collect(conn, hours=args.hours)))
-    return 0
-
-
 def cmd_minutes(args) -> int:
     """The day's conversation minutas for a project, distilled from its transcripts."""
     import datetime as _dt
@@ -1821,39 +1570,6 @@ def cmd_messages(args) -> int:
         proj = f" {C.DIM}[{r['project_name']}]{C.OFF}" if args.all else ""
         body = " ".join((r["body"] or "").split())[:200]
         print(f"{C.DIM}{when}{C.OFF} {who}{model}{proj} {body}")
-    return 0
-
-
-def cmd_decisions(args) -> int:
-    """Durable decisions for a project: what agents recorded via record_decision, the
-    coordination memory that survives context resets. Newest last so a run reads
-    top-to-bottom.
-    """
-    import datetime as _dt
-
-    from . import store
-    from .context import git_project
-
-    _root, name = git_project(os.getcwd())
-    project = None if args.all else (args.project or name)
-    with store.connect() as conn:
-        rows = store.list_decisions(
-            conn, project_name=project, kind=args.kind, query=args.grep, limit=args.limit
-        )
-    if not rows:
-        where = "" if args.all else f" for {project}"
-        print(
-            f"{C.DIM}no decisions recorded{where} — agents record them with record_decision.{C.OFF}"
-        )
-        return 0
-    for r in reversed(rows):
-        when = _dt.datetime.fromtimestamp(r["created_at"]).strftime("%m-%d %H:%M")
-        who = f" {C.DIM}{r['handle']}{C.OFF}" if r["handle"] else ""
-        proj = f" {C.DIM}[{r['project_name']}]{C.OFF}" if args.all else ""
-        refs = f" {C.DIM}({r['refs']}){C.OFF}" if r["refs"] else ""
-        print(f"{C.DIM}{when}{C.OFF} {C.BOLD}{r['kind']}{C.OFF}{who}{proj}: {r['title']}{refs}")
-        if r["body"]:
-            print(f"    {C.DIM}{' '.join(r['body'].split())[:300]}{C.OFF}")
     return 0
 
 
@@ -2543,9 +2259,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     pg.set_defaults(fn=cmd_plugin)
 
-    a = sub.add_parser("agents", help="who is on the bus")
-    a.set_defaults(fn=cmd_agents)
-
     se = sub.add_parser(
         "sessions",
         help="your Claude sessions in this project, with titles, to find & resume a lost one",
@@ -2575,42 +2288,6 @@ def main(argv: list[str] | None = None) -> int:
         if name == "trash":
             sp.add_argument("--force", action="store_true", help="skip the made-from check")
         sp.set_defaults(fn=cmd_session_ops)
-
-    sp = sub.add_parser("spawn", help="queue a headless agent in its own worktree")
-    sp.add_argument("role", help="pm | qa | ux")
-    sp.add_argument("task", help="the instruction (quote it)")
-    sp.add_argument("-r", "--repo", default=".", help="repo path (default: cwd)")
-    sp.add_argument("--target", default="main", help="branch the work pushes on")
-    sp.add_argument(
-        "-m",
-        "--model",
-        choices=["haiku", "sonnet", "opus"],
-        help="haiku/sonnet stretch the shared usage window",
-    )
-    sp.set_defaults(fn=cmd_spawn)
-
-    cd = sub.add_parser(
-        "conditions", help="machine-wide state every session here is being told about"
-    )
-    cd.add_argument("-a", "--all", action="store_true", help="include recently cleared conditions")
-    cd.set_defaults(fn=cmd_conditions)
-
-    al = sub.add_parser("alert", help="nudge every session on this machine (e.g. 'CI is down')")
-    al.add_argument("text", nargs="*", help="the headline (quote it)")
-    al.add_argument(
-        "-k",
-        "--key",
-        default="notice",
-        help="what this is about; re-alerting the same key updates it "
-        "instead of piling up (default: notice)",
-    )
-    al.add_argument("-l", "--level", default="warn", choices=list(store.CONDITION_LEVELS))
-    al.add_argument("--advice", help="what agents should actually do about it")
-    al.add_argument(
-        "--ttl", type=float, default=2.0, help="hours before it fades on its own (default: 2)"
-    )
-    al.add_argument("--clear", metavar="KEY", help="stand a condition down")
-    al.set_defaults(fn=cmd_alert)
 
     st = sub.add_parser(
         "stop", help="set the fleet's wind-down line (e.g. 'stop 23:00'); bare to show it"
@@ -2663,19 +2340,6 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run", action="store_true", help="list what would stop, stop nothing"
     )
     bw.set_defaults(fn=cmd_browser)
-
-    fl = sub.add_parser("fleet", help="spawn ledger: who begat whom, and their fate")
-    fl.add_argument("-n", type=int, default=20)
-    fl.set_defaults(fn=cmd_fleet)
-
-    br = sub.add_parser(
-        "branches",
-        help="the zoo: worktrees + bare branches, whose agent, and vs the trunk (read-only)",
-    )
-    br.add_argument("--repo", default=None, help="repo to inventory (default: cwd)")
-    br.add_argument("--target", default="main", help="trunk branch to compare against")
-    br.add_argument("--remote", default="origin", help="remote holding the trunk")
-    br.set_defaults(fn=cmd_branches)
 
     co = sub.add_parser(
         "cost", help="what running cabildo costs: injected context, hook latency, tool traffic"
@@ -2794,12 +2458,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     oc.set_defaults(fn=cmd_opencode)
 
-    su = sub.add_parser(
-        "standup", help="who touched what over a window: messages, tasks, spawns, cost"
-    )
-    su.add_argument("--hours", type=float, default=24.0, help="lookback window (default: 24)")
-    su.set_defaults(fn=cmd_standup)
-
     mn = sub.add_parser(
         "minutes", help="the day's conversation minutas for a project (from transcripts)"
     )
@@ -2821,18 +2479,6 @@ def main(argv: list[str] | None = None) -> int:
     mg.add_argument("--since", type=float, default=0.0, help="only the last N hours")
     mg.add_argument("--limit", type=int, default=50, help="max rows (default 50)")
     mg.set_defaults(fn=cmd_messages)
-
-    ft = sub.add_parser(
-        "decisions", help="durable decisions for a project (recorded via record_decision)"
-    )
-    ft.add_argument("-p", "--project", help="project name (default: this repo)")
-    ft.add_argument("--all", action="store_true", help="all projects, not just this repo")
-    ft.add_argument(
-        "--kind", choices=["decision", "fact", "constraint", "warning"], help="only this kind"
-    )
-    ft.add_argument("--grep", help="substring to match in title/body/refs/tags")
-    ft.add_argument("--limit", type=int, default=20, help="max rows (default 20)")
-    ft.set_defaults(fn=cmd_decisions)
 
     nt = sub.add_parser(
         "notes", help="session loose ends (issue #34), added by agents via note_add"
