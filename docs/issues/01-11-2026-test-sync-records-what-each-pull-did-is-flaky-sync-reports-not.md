@@ -1,8 +1,8 @@
 ---
 title: "test_sync_records_what_each_pull_did is flaky: sync reports "not paired" right after join"
-status: open
+status: in-progress
 area: tests
-owner: null
+owner: brass-vision-4216c
 filed: 2026-11-01
 scope: S
 verify: test

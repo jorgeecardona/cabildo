@@ -475,3 +475,24 @@ def test_doctor_warns_when_general_goes_to_paired_machines(monkeypatch):
     c = doctor.check_share_general(2)
     assert c.status == doctor.WARN
     assert "2 paired machine(s)" in c.detail
+
+
+def test_answer_pair_saves_the_peer_before_it_says_ok(home, monkeypatch):
+    # B syncs as soon as it reads the final "ok"; A must already know B by then.
+    me = pair.load_identity()
+    assert me is not None
+    pairing = pair.Pairing()
+    w = pairing.open()
+    nonce_b = "b" * 32
+    proof = {"tag": pair.tag(w.pin, "b", me.fingerprint, me.fingerprint, w.nonce, nonce_b)}
+    monkeypatch.setattr(pair, "recv_line", lambda _s: proof)
+    saved_when_ok: list[bool] = []
+
+    def send_line(_s, msg):
+        if "tag" in msg:
+            saved_when_ok.append("node-b" in pair.load_peers())
+
+    monkeypatch.setattr(pair, "send_line", send_line)
+    req = {"node": "node-b", "port": 1, "cert": me.cert_pem, "nonce": nonce_b}
+    assert pair.answer_pair(me, pairing, None, req, "127.0.0.1") is not None  # type: ignore[arg-type]
+    assert saved_when_ok == [True]

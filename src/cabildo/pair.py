@@ -350,8 +350,9 @@ def answer_pair(
         cert_pem=cert_b,
         paired_at=time.time(),
     )
-    send_line(sock, {"ok": True, "tag": tag(w.pin, "a", me.fingerprint, fp_b, w.nonce, nonce_b)})
+    # Save before the final "ok": B syncs as soon as it reads it, and A must know B by then.
     save_peer(peer)
+    send_line(sock, {"ok": True, "tag": tag(w.pin, "a", me.fingerprint, fp_b, w.nonce, nonce_b)})
     pairing.close(w)
     return peer
 
