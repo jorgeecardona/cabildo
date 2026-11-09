@@ -17,11 +17,15 @@ model = "claude-opus-5-5[1m]"
 permission-mode = "plan"
 
 [keys]
-modifier = "ctrl"  # ctrl+s and ctrl+z; or set each action:
+leader = ["ctrl+]"]         # the default; then one key, e.g. s for the list
+modifier = "ctrl"           # direct chords ctrl+s and ctrl+z; or set each action:
 show-list = ["alt+s", "ß"]
+
+[keys.after-leader]
+new = "c"
 ```
 
-``[keys]`` sets the global keys (see ``keys.py``); an action left out keeps its platform
+``[keys]`` sets the global keys (see ``keys.py``); a value left out keeps its platform
 default.
 
 The values apply when Claude starts (new, resume, restart), never to ``claude attach``: an
@@ -98,7 +102,7 @@ class Config:
 
     launch: Launch = PLAIN
     groups: dict[str, Launch] = field(default_factory=dict)
-    keys: keys.GlobalKeys = field(default_factory=keys.default)
+    keys: keys.Keymap = field(default_factory=keys.default)
 
     def launch_for(self, group: str) -> Launch:
         """The default, with the group's own values over it."""
@@ -179,28 +183,41 @@ def _launch(raw: object, where: str) -> Launch:
     return Launch(**values, env=tuple(env.items()))  # type: ignore[arg-type]
 
 
-def _keys(raw: object) -> keys.GlobalKeys:
-    """``[keys]``: each action set replaces that action's platform default."""
+def _keys(raw: object) -> keys.Keymap:
+    """``[keys]``: each value set replaces that part of the platform default."""
     table = _table(raw, "keys")
-    _known(table, {"modifier", "show-list", "toggle-list"}, "keys.")
+    _known(table, {"leader", "modifier", "after-leader", *keys.DIRECT}, "keys.")
     base = keys.default()
+    direct = dict(base.direct)
     if "modifier" in table:
         mod = table["modifier"]
         if not (isinstance(mod, str) and mod in keys.MODIFIERS):
             raise ConfigError(f"keys.modifier is not one of {', '.join(keys.MODIFIERS)}")
-        base = keys.with_modifier(mod)
-    values: dict[str, tuple[str, ...]] = {}
-    for name in ("show-list", "toggle-list"):
-        if name not in table:
-            continue
-        items = table[name]
-        if not (isinstance(items, list) and items and all(isinstance(i, str) for i in items)):
-            raise ConfigError(f"keys.{name} is not a non-empty list of strings")
-        bad = [i for i in items if not keys.valid(i)]
-        if bad:
-            raise ConfigError(f"keys.{name}: {bad[0]!r} is not a key name")
-        values[name.replace("-", "_")] = tuple(items)
-    return replace(base, **values)
+        direct = keys.with_modifier(mod)
+    for name in keys.DIRECT:
+        if name in table:
+            direct[name] = _key_list(table[name], f"keys.{name}")
+    leader = _key_list(table["leader"], "keys.leader") if "leader" in table else base.leader
+    after = dict(base.after_leader)
+    own = _table(table.get("after-leader", {}), "keys.after-leader")
+    _known(own, set(keys.BY_ID), "keys.after-leader.")
+    for name, key in own.items():
+        if not (isinstance(key, str) and keys.valid(key)):
+            raise ConfigError(f"keys.after-leader.{name}: {key!r} is not a key name")
+        after[name] = keys.normalize(key)
+    taken = [k for k in after.values() if list(after.values()).count(k) > 1]
+    if taken:
+        raise ConfigError(f"keys.after-leader: {taken[0]!r} is set for two actions")
+    return keys.Keymap(leader=leader, after_leader=after, direct=direct)
+
+
+def _key_list(items: object, where: str) -> tuple[str, ...]:
+    if not (isinstance(items, list) and items and all(isinstance(i, str) for i in items)):
+        raise ConfigError(f"{where} is not a non-empty list of strings")
+    bad = [i for i in items if not keys.valid(i)]
+    if bad:
+        raise ConfigError(f"{where}: {bad[0]!r} is not a key name")
+    return tuple(keys.normalize(i) for i in items)
 
 
 def _table(raw: object, where: str) -> dict[str, object]:

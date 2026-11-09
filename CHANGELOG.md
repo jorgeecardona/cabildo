@@ -15,6 +15,12 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
+- Workspace: a leader key, `C-]`, works anywhere, also inside Claude, on Linux and macOS with
+  no terminal setting. After it: `s` list, `z` hide/show list, `n` new, `r` restart, `p`
+  commands, `?` all keys, `q` quit. A bar at the bottom shows these letters. `C-]` twice sends
+  `C-]` to Claude. Set your own in `[keys]` (`leader`) and `[keys.after-leader]`. `Alt-s` and
+  `Alt-z` still work.
+- Workspace: a command palette (leader, then `p`) for reload, top, scope, filter and keys.
 - WAN peers now run inside the daemon, from `[project.<name>.remote]` in the machine-wide config.
   The new MCP tool `peers` lists LAN and WAN peers with their last pull. `cabildo wan` only prints
   that list: its `--loop`, `--peer`, `--bind` and `--token` flags are gone, and so is `[remote]` in
