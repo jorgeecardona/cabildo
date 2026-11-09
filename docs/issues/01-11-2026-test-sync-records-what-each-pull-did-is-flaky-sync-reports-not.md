@@ -1,9 +1,10 @@
 ---
 title: "test_sync_records_what_each_pull_did is flaky: sync reports "not paired" right after join"
-status: in-progress
+status: done
 area: tests
 owner: brass-vision-4216c
 filed: 2026-11-01
+fixed_in: 62d122f (tests/test_pair.py::test_answer_pair_saves_the_peer_before_it_says_ok)
 scope: S
 verify: test
 ---
