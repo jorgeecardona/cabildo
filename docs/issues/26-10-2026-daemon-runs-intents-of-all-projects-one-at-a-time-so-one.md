@@ -1,9 +1,10 @@
 ---
 title: Daemon runs intents of all projects one at a time, so one project's push waits on another's
-status: open
+status: done
 area: daemon
 owner: null
 filed: 2026-10-26
+fixed_in: f5a4d5d
 priority: high
 scope: S
 verify: test
