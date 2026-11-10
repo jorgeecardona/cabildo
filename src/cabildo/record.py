@@ -74,3 +74,59 @@ def ingest(conn, *, window: float = INGEST_WINDOW, log=lambda _m: None) -> int:
         except Exception as e:  # one broken transcript must not poison the pass
             log(f"  (ingest skipped {sess['session_id'][:8]}: {type(e).__name__}: {e})")
     return total
+
+
+def _transcript_cwd(path) -> str | None:
+    """The ``cwd`` the transcript recorded, from its first lines that carry one."""
+    import json
+
+    with path.open(encoding="utf-8", errors="replace") as handle:
+        for _, line in zip(range(50), handle, strict=False):
+            try:
+                cwd = json.loads(line).get("cwd")
+            except (ValueError, AttributeError):
+                continue
+            if isinstance(cwd, str) and cwd:
+                return cwd
+    return None
+
+
+def import_file(conn, path) -> int:
+    """Record every turn of one transcript file. Returns how many were new.
+
+    Reads the whole file, ``max_turns`` at a time. The session id is the file name. Safe
+    to repeat: ``uuid`` dedup skips turns already recorded. Ignores ``[record]``: the
+    person running the import has asked for it.
+    """
+    from .context import git_project
+
+    cwd = _transcript_cwd(path)
+    project, project_name = git_project(cwd) if cwd else (None, None)
+    total, offset = 0, 0
+    while True:
+        rows, new_offset = transcript.session_messages(path, offset)
+        if rows:
+            total += store.record_transcript_messages(
+                conn, path.stem, rows, project=project, project_name=project_name
+            )
+        if new_offset == offset:
+            return total
+        offset = new_offset
+
+
+def import_all(conn, roots, *, log=lambda _m: None) -> int:
+    """Record every ``*.jsonl`` transcript under ``roots``. Never raises for one bad file."""
+    total = 0
+    for root in roots:
+        for path in sorted(root.rglob("*.jsonl")) if root.is_dir() else ():
+            if "subagents" in path.parts:
+                continue  # a subagent's transcript, not a conversation
+            try:
+                n = import_file(conn, path)
+            except Exception as e:
+                log(f"  skipped {path}: {type(e).__name__}: {e}")
+                continue
+            total += n
+            if n:
+                log(f"  {n:6d}  {path}")
+    return total

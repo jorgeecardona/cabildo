@@ -22,6 +22,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
+- `cabildo messages --import` records every Claude transcript on disk and in the workspace
+  trash into the DB, once. Safe to run again. Recording stays off by default.
 - Workspace: a leader key, `C-]`, works anywhere, also inside Claude, on Linux and macOS with
   no terminal setting. After it: `s` list, `z` hide/show list, `n` new, `r` restart, `p`
   commands, `?` all keys, `q` quit. A bar at the bottom shows these letters. `C-]` twice sends

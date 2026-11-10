@@ -1543,6 +1543,14 @@ def cmd_messages(args) -> int:
     from . import store
     from .context import git_project
 
+    if args.import_all:
+        from . import record, transcript
+        from .workspace.sessions import trash_dir
+
+        with store.connect() as conn:
+            n = record.import_all(conn, (transcript.transcript_root(), trash_dir()), log=print)
+        print(f"imported {n} new turn(s)")
+        return 0
     _root, name = git_project(os.getcwd())
     project = None if args.all else (args.project or name)
     since = _dt.datetime.now().timestamp() - args.since * 3600.0 if args.since else None
@@ -2478,6 +2486,12 @@ def main(argv: list[str] | None = None) -> int:
     mg.add_argument("--grep", help="substring to match in the message body")
     mg.add_argument("--since", type=float, default=0.0, help="only the last N hours")
     mg.add_argument("--limit", type=int, default=50, help="max rows (default 50)")
+    mg.add_argument(
+        "--import",
+        dest="import_all",
+        action="store_true",
+        help="record every transcript on disk and in the workspace trash, then exit",
+    )
     mg.set_defaults(fn=cmd_messages)
 
     nt = sub.add_parser(
