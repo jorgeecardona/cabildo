@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import stat
 from pathlib import Path
-from typing import Any
 
 from cabildo import procs
 from cabildo.browser import fleet, login
@@ -23,16 +22,29 @@ def proc(pid: int, ppid: int, cmdline: str, rss_kb: int = 1024) -> procs.Proc:
     )
 
 
-def test_collect_returns_the_last_state_read_before_the_browser_closed() -> None:
-    reads: list[dict[str, Any] | None] = [{"cookies": [1]}, {"cookies": [1, 2]}, None]
-    slept: list[float] = []
-    got = login.collect(lambda: reads.pop(0), sleep=slept.append, poll=0.5)
-    assert got == {"cookies": [1, 2]}
-    assert slept == [0.5, 0.5]
+def test_plain_command_has_no_automation_flag(tmp_path: Path) -> None:
+    cmd = login.plain_command("/usr/bin/google-chrome", tmp_path)
+    assert cmd[0] == "/usr/bin/google-chrome"
+    assert f"--user-data-dir={tmp_path}" in cmd
+    assert not any("automation" in a or "remote-debugging" in a for a in cmd)
 
 
-def test_collect_returns_none_when_the_browser_was_never_readable() -> None:
-    assert login.collect(lambda: None, sleep=lambda _s: None) is None
+def test_browser_binary_maps_the_channel_to_the_first_installed_executable() -> None:
+    found = {"google-chrome-stable": "/usr/bin/google-chrome-stable"}
+    assert login.browser_binary("chrome", which=found.get) == "/usr/bin/google-chrome-stable"
+    assert login.browser_binary("msedge", which=found.get) is None
+    assert login.browser_binary("/opt/x/chrome", which=lambda n: n) == "/opt/x/chrome"
+
+
+def test_run_stops_when_the_channel_has_no_executable(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(procs, "processes", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        login, "free_profile", lambda *_a, **_k: fleet.Stopped(targets=(), gone=(), left=())
+    )
+    monkeypatch.setattr(login, "browser_binary", lambda _c: None)
+    said: list[str] = []
+    assert login.run(tmp_path / "p", tmp_path / "s.json", channel="nope", say=said.append) is None
+    assert "no executable" in said[-1]
 
 
 def test_write_state_is_mode_600_and_counts(tmp_path: Path) -> None:

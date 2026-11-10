@@ -4,6 +4,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+### Fixed
+
+- `cabildo browser login` opens plain Chrome, so Google sign-in no longer fails with "This
+  browser or app may not be secure".
+
 ### Changed
 
 - Removed the CLI commands `spawn`, `conditions`, `alert`, `fleet`, `branches`, `standup`,

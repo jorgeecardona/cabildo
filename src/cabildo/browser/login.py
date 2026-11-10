@@ -6,13 +6,19 @@ It opens the persistent profile in a visible Chrome, waits until the window is c
 the cookies to the storage-state file that every isolated browser starts from.
 
 The user runs this command, so the cookie export happens under the user's own hand.
+
+The window the user logs in with is plain Chrome, started as a normal process: no Playwright, no
+``--enable-automation``, no DevTools pipe. Google refuses sign-in in a browser it sees as
+automated ("This browser or app may not be secure"). Playwright opens the profile only after that
+window is closed, to read the cookies out.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import time
+import shutil
+import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,7 +29,6 @@ from cabildo.browser import fleet
 
 _LEGACY_PROFILE_NAME = "mcp-chrome-for-testing-3b855a0"
 _LOCK_FILES = ("SingletonLock", "SingletonCookie", "SingletonSocket")
-_POLL_SECONDS = 1.0
 _PRIVATE_MODE = 0o600
 
 
@@ -65,22 +70,28 @@ def free_profile(
     return done
 
 
-def collect(
-    read: Callable[[], dict[str, Any] | None],
-    *,
-    sleep: Callable[[float], None] = time.sleep,
-    poll: float = _POLL_SECONDS,
-) -> dict[str, Any] | None:
-    """Read the browser state until the browser is gone, and return the last good state.
+# the executables a Playwright channel name runs, first found wins
+_CHANNEL_BINARIES = {
+    "chrome": ("google-chrome", "google-chrome-stable"),
+    "chrome-beta": ("google-chrome-beta",),
+    "msedge": ("microsoft-edge", "microsoft-edge-stable"),
+    "chromium": ("chromium", "chromium-browser"),
+}
 
-    ``read`` returns the state, or None once the browser is closed. Reading while it is open means
-    a crash or a killed window still leaves the latest login.
-    """
-    last: dict[str, Any] | None = None
-    while (state := read()) is not None:
-        last = state
-        sleep(poll)
-    return last
+
+def browser_binary(
+    channel: str, *, which: Callable[[str], str | None] = shutil.which
+) -> str | None:
+    """The executable for ``channel``, or None when none is installed."""
+    for name in _CHANNEL_BINARIES.get(channel, (channel,)):
+        if found := which(name):
+            return found
+    return None
+
+
+def plain_command(binary: str, profile: Path) -> list[str]:
+    """The command that opens ``profile`` in plain Chrome: no automation flag, no DevTools."""
+    return [binary, f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check"]
 
 
 def write_state(path: Path, state: dict[str, Any]) -> Saved:
@@ -123,7 +134,13 @@ def run(
         return None
     if freed.targets:
         say(f"freed the profile: stopped {len(freed.gone)} process(es)")
-    say("Opening the profile. Log into what you need, then CLOSE THE WINDOW.")
+    binary = browser_binary(channel)
+    if binary is None:
+        say(f"no executable found for channel {channel!r}: not opening the profile")
+        return None
+    say("Opening the profile in plain Chrome. Log into what you need, then CLOSE THE WINDOW.")
+    subprocess.run(plain_command(binary, profile), check=False)
+    say("Reading the logins from the profile (a window opens and closes).")
     with sync_playwright() as pw:
         context = pw.chromium.launch_persistent_context(
             str(profile), channel=channel, headless=False, no_viewport=True
@@ -135,7 +152,8 @@ def run(
             except Error:
                 return None
 
-        state = collect(read)
+        state = read()
+        context.close()
     if state is None:
         say("the browser closed before any login was read: the saved file is unchanged")
         return None
