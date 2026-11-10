@@ -63,6 +63,7 @@ class Session:
     _pw: Playwright | None = None
     _browser: Browser | None = None
     _context: BrowserContext | None = None
+    _state_mtime: float = 0.0  # mtime of the storage-state file the context last loaded
 
     async def context(self) -> BrowserContext:
         """The browser context, started on first use. Parallel first calls start one browser."""
@@ -76,7 +77,34 @@ class Session:
                     storage_state=str(state) if state and state.is_file() else None,
                 )
                 self._context.on("page", self._watch)
+                self._state_mtime = self._mtime()
+            else:
+                await self._reload_logins(self._context)
             return self._context
+
+    def _mtime(self) -> float:
+        state = self.storage_state
+        try:
+            return state.stat().st_mtime if state else 0.0
+        except OSError:
+            return 0.0
+
+    async def _reload_logins(self, context: BrowserContext) -> None:
+        """Add the cookies of a newer storage-state file to the running browser.
+
+        ``cabildo browser login`` rewrites the file; without this, a browser started before
+        the login stays logged out until its MCP server restarts.
+        """
+        mtime = self._mtime()
+        if not self.storage_state or mtime <= self._state_mtime:
+            return
+        self._state_mtime = mtime
+        try:
+            cookies = json.loads(self.storage_state.read_text()).get("cookies", [])
+        except (OSError, ValueError):
+            return
+        if cookies:
+            await context.add_cookies(cookies)
 
     async def pages(self) -> list[Page]:
         """The open tabs. Opens one when there is none."""

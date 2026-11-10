@@ -28,7 +28,7 @@ cabildo browser login
 Opens the profile that holds your logins in plain Chrome, with no automation flag, so Google
 sign-in works. Log into your sites, then close the window. A second window then opens and closes
 by itself: it reads the cookies. They go to the storage-state file with mode 600, and new agent
-browsers start from it. Running sessions need their MCP server restarted to pick it up.
+browsers start from it. Running agent browsers add the new cookies on their next tool call.
 
 ```bash
 cabildo browser doctor

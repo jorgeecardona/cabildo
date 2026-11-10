@@ -374,3 +374,31 @@ def test_state_reports_an_open_dialog_instead_of_asking_the_blocked_page(tmp_pat
     text = call(mcp, "browser_click", {"target": "e2"})
     assert "a alert dialog is open: 'Sure?'" in text
     assert ("aria_snapshot", "ai") not in session.fake.log
+
+
+class CookieContext:
+    def __init__(self) -> None:
+        self.added: list[list[dict[str, object]]] = []
+
+    async def add_cookies(self, cookies: list[dict[str, object]]) -> None:
+        self.added.append(cookies)
+
+
+def test_a_newer_login_file_reaches_a_running_browser_once(tmp_path: Path) -> None:
+    import asyncio
+    import json
+    import os
+
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"cookies": [{"name": "SID", "value": "1"}]}))
+    session = Session(storage_state=state, output_dir=tmp_path / "out")
+    session._state_mtime = state.stat().st_mtime  # the browser started from this file
+    context = CookieContext()
+
+    asyncio.run(session._reload_logins(context))  # type: ignore[arg-type]
+    assert context.added == []  # same file: nothing to add
+    later = state.stat().st_mtime + 10
+    os.utime(state, (later, later))  # cabildo browser login rewrote it
+    asyncio.run(session._reload_logins(context))  # type: ignore[arg-type]
+    asyncio.run(session._reload_logins(context))  # type: ignore[arg-type]
+    assert context.added == [[{"name": "SID", "value": "1"}]]

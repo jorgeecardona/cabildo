@@ -1057,7 +1057,7 @@ def cmd_browser(args) -> int:
         if saved is None:
             return 1
         print(f"saved {saved.cookies} cookies, {saved.origins} origins to {saved.path} (mode 600)")
-        print("New sessions pick it up; running ones need their MCP server restarted.")
+        print("Agent browsers pick it up on their next tool call.")
         return 0
 
     if args.browser_cmd == "doctor":

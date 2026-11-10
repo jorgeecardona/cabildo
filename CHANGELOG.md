@@ -6,6 +6,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Fixed
 
+- A running agent browser picks up a new `cabildo browser login` on its next tool call. No MCP
+  restart is needed.
 - `cabildo browser login` opens plain Chrome, so Google sign-in no longer fails with "This
   browser or app may not be secure".
 
