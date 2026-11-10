@@ -27,6 +27,7 @@ def test_plain_command_has_no_automation_flag(tmp_path: Path) -> None:
     assert cmd[0] == "/usr/bin/google-chrome"
     assert f"--user-data-dir={tmp_path}" in cmd
     assert not any("automation" in a or "remote-debugging" in a for a in cmd)
+    assert "--password-store=basic" in cmd  # the store Playwright reads cookies with
 
 
 def test_browser_binary_maps_the_channel_to_the_first_installed_executable() -> None:

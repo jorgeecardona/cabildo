@@ -91,7 +91,15 @@ def browser_binary(
 
 def plain_command(binary: str, profile: Path) -> list[str]:
     """The command that opens ``profile`` in plain Chrome: no automation flag, no DevTools."""
-    return [binary, f"--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check"]
+    return [
+        binary,
+        f"--user-data-dir={profile}",
+        # Playwright opens Chrome with the basic store; cookies saved under the desktop keyring
+        # would be unreadable to it, and storage_state drops them (Google ones included)
+        "--password-store=basic",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
 
 
 def write_state(path: Path, state: dict[str, Any]) -> Saved:
