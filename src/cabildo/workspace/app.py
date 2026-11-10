@@ -20,6 +20,7 @@ from typing import Literal
 
 from rich.cells import cell_len
 from rich.text import Text
+from textual import events
 from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
 from textual.command import CommandPalette
@@ -29,6 +30,7 @@ from textual.css.query import NoMatches
 from textual.geometry import Offset
 from textual.screen import ModalScreen, Screen
 from textual.suggester import SuggestFromList
+from textual.timer import Timer
 from textual.widgets import ContentSwitcher, DataTable, Input, Label, Static
 from textual.worker import get_current_worker
 
@@ -56,7 +58,7 @@ from cabildo.workspace.usage import Use, fmt_count, fmt_cpu, fmt_mb
 from cabildo.workspace.xdgdirs import APP, make_dirs, state_home
 
 CLAUDE = "claude"  # the CLI the panes run; tests point this at a fake
-LEADER_AGAIN = "\x00leader"  # what LeaderScreen returns when the leader is pressed twice
+LEADER_TIMEOUT = 1.0  # seconds the hint bar waits for the key after the leader
 
 # The list is as wide as its content, between MIN_WIDTH and half the window.
 MIN_WIDTH = 36  # the text column keeps 14 cells at the minimum
@@ -452,34 +454,6 @@ class TopScreen(ModalScreen[None]):
         self.dismiss(None)
 
 
-class LeaderScreen(ModalScreen[str | None]):
-    """After the leader: a hint bar; the next key picks the action. 1 s, then nothing."""
-
-    TIMEOUT = 1.0
-    DEFAULT_CSS = """
-    LeaderScreen { align: left bottom; background: transparent; }
-    #leader-hint { dock: bottom; height: 1; width: 1fr; background: $panel; color: $accent; }
-    """
-
-    def __init__(self, hint: str) -> None:
-        super().__init__()
-        self.hint = hint
-
-    def compose(self) -> ComposeResult:
-        yield Static(self.hint, id="leader-hint")
-
-    def on_mount(self) -> None:
-        self.set_timer(self.TIMEOUT, self._expire)
-
-    def _expire(self) -> None:
-        self.dismiss(None)  # not returned: a timer awaits what its callback returns
-
-    def on_key(self, event) -> None:
-        event.stop()
-        event.prevent_default()
-        self.dismiss(event.key)
-
-
 class SwitcherApp(App[None]):
     """The list on the right, the hosted Claude sessions on the left."""
 
@@ -514,6 +488,8 @@ class SwitcherApp(App[None]):
         color: $background;
         text-style: bold;
     }
+    Screen { layers: base hint; }
+    #leader-hint { layer: hint; dock: bottom; height: 1; width: 1fr; background: $panel; color: $accent; }
     #modeline {
         dock: bottom;
         height: auto;  /* groups of lines, a rule between each */
@@ -625,6 +601,7 @@ class SwitcherApp(App[None]):
         self._saved: OpenState | None = None  # what the state file holds now
         self._save_failed = False
         self._quitting = False
+        self._leader_timer: Timer | None = None  # set while the leader waits for its key
         self.reload_asked = False  # quit, then main() starts the app again (R)
         # CPU / memory per process tree (usage.py), keyed by the tree's root pid
         self._round = usage.EMPTY
@@ -641,6 +618,9 @@ class SwitcherApp(App[None]):
             with Vertical(id="side"):
                 yield DataTable(cursor_type="row", zebra_stripes=False)
                 yield Static("", id="modeline")
+        hint = Static("", id="leader-hint")
+        hint.display = False
+        yield hint
 
     def on_mount(self) -> None:
         for note in self._notes:
@@ -1465,16 +1445,38 @@ class SwitcherApp(App[None]):
         self.push_screen(EditScreen("Filter:", self.filter.text(), choices, words=True), done)
 
     def action_leader(self) -> None:
-        """The leader: show the hint bar; the next key starts an action. Twice: C-] to Claude."""
-        if isinstance(self.screen, LeaderScreen):
-            self.screen.dismiss(LEADER_AGAIN)
-            return
-        self.push_screen(LeaderScreen(self.config.keys.hint()), self._after_leader)
+        """The leader: a hint bar over the bottom line; the next key starts an action.
 
-    async def _after_leader(self, key: str | None) -> None:
-        if key is None or key == "escape":
+        No screen is pushed: a modal screen hides the Claude pane behind it.
+        """
+        hint = self.query_one("#leader-hint", Static)
+        hint.update(self.config.keys.hint())
+        hint.display = True
+        self._leader_timer = self.set_timer(LEADER_TIMEOUT, self._leader_done)
+
+    @property
+    def leader_pending(self) -> bool:
+        """The leader was pressed and the next key is not in yet."""
+        return self._leader_timer is not None
+
+    def _leader_done(self) -> None:
+        if self._leader_timer is not None:
+            self._leader_timer.stop()
+            self._leader_timer = None
+        self.query_one("#leader-hint", Static).display = False
+
+    async def on_event(self, event: events.Event) -> None:
+        # the key after the leader goes to the leader, before bindings and the focused pane
+        if isinstance(event, events.Key) and not event.is_forwarded and self.leader_pending:
+            self._leader_done()
+            await self._after_leader(event.key)
             return
-        if key == LEADER_AGAIN:
+        await super().on_event(event)
+
+    async def _after_leader(self, key: str) -> None:
+        if key == "escape":
+            return
+        if key in self.config.keys.leader:
             pane = self._shown_pane()
             if pane:
                 # the raw byte: bittty turns ctrl + a letter into a control code, not ctrl + ]

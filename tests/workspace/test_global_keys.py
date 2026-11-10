@@ -11,8 +11,9 @@ from pilot import drive, settle
 from textual.keys import Keys, _character_to_key
 from textual.widgets import Static
 
+from cabildo.workspace import app as app_module
 from cabildo.workspace import keys, launch
-from cabildo.workspace.app import LeaderScreen, SwitcherApp, keys_help
+from cabildo.workspace.app import SwitcherApp, keys_help
 
 
 def test_linux_default_is_leader_and_alt() -> None:
@@ -133,13 +134,20 @@ def test_leader_then_z_hides_the_list_and_shows_the_hint(transcript, monkeypatch
 
     async def scenario(app, pilot) -> None:
         side = app.query_one("#side")
+        body = app.query_one("#body").size
+        screen = app.screen
         await pilot.press(keys.LEADER)
         await pilot.pause()
-        assert isinstance(app.screen, LeaderScreen)
-        assert "hide/show list" in str(app.screen.query_one("#leader-hint", Static).render())
+        hint = app.query_one("#leader-hint", Static)
+        assert app.leader_pending
+        assert hint.display
+        assert "hide/show list" in str(hint.render())
+        assert app.screen is screen  # no screen over Claude
+        assert app.query_one("#body").size == body  # the bar covers a line, nothing moves
         await pilot.press("z")
         await settle(app, pilot)
-        assert not isinstance(app.screen, LeaderScreen)
+        assert not app.leader_pending
+        assert not hint.display
         assert not side.display
 
     drive(monkeypatch, scenario)
@@ -147,12 +155,12 @@ def test_leader_then_z_hides_the_list_and_shows_the_hint(transcript, monkeypatch
 
 def test_leader_times_out_and_swallows_nothing_after(transcript, monkeypatch) -> None:
     transcript("aaaa1111", user("one"), ai_title("One"))
-    monkeypatch.setattr(LeaderScreen, "TIMEOUT", 0.05)
+    monkeypatch.setattr(app_module, "LEADER_TIMEOUT", 0.05)
 
     async def scenario(app, pilot) -> None:
         await pilot.press(keys.LEADER)
         await pilot.pause(0.3)
-        assert not isinstance(app.screen, LeaderScreen)
+        assert not app.leader_pending
         await pilot.press("z")  # a plain z in the list: not toggle
         await settle(app, pilot)
         assert app.query_one("#side").display
@@ -166,7 +174,7 @@ def test_unbound_key_after_leader_does_nothing(transcript, monkeypatch) -> None:
     async def scenario(app, pilot) -> None:
         await pilot.press(keys.LEADER, "y")
         await settle(app, pilot)
-        assert not isinstance(app.screen, LeaderScreen)
+        assert not app.leader_pending
         assert app.query_one("#side").display
 
     drive(monkeypatch, scenario)
@@ -182,7 +190,7 @@ def test_leader_twice_sends_the_raw_byte_to_claude(transcript, monkeypatch) -> N
         monkeypatch.setattr(app, "_shown_pane", lambda: pane)
         await pilot.press(keys.LEADER, keys.LEADER)
         await settle(app, pilot)
-        assert not isinstance(app.screen, LeaderScreen)
+        assert not app.leader_pending
 
     drive(monkeypatch, scenario)
     assert sent == ["\x1d"]
