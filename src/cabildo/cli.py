@@ -1551,7 +1551,9 @@ def cmd_improve(args) -> int:
     from . import improve
 
     with store.connect() as conn:
-        if args.what == "propose":
+        if args.what == "daily":
+            improve.daily(conn, days=min(args.days, 7.0), top=min(args.top, 3))
+        elif args.what == "propose":
             ids = improve.propose(conn, since=time.time() - args.days * 86400, top=args.top)
             for pid in ids:
                 print(f"#{pid}: {improve.review(conn, pid)}")
@@ -2531,7 +2533,11 @@ def main(argv: list[str] | None = None) -> int:
     fr.set_defaults(fn=cmd_friction)
 
     im = sub.add_parser("improve", help="proposals to change the setup, written from friction")
-    im.add_argument("what", choices=["propose", "list"], help="write and review proposals, or list")
+    im.add_argument(
+        "what",
+        choices=["propose", "daily", "list"],
+        help="propose: write and review; daily: scan friction, then propose; list",
+    )
     im.add_argument("--days", type=float, default=30.0, help="friction from the last N days")
     im.add_argument("--top", type=int, default=5, help="propose: at most N proposals")
     im.set_defaults(fn=cmd_improve)

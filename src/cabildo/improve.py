@@ -96,7 +96,9 @@ class Row:
     quote: str
 
 
-def ask(prompt: str, model: str, schema: dict, *, run=subprocess.run) -> dict:
+def ask(
+    prompt: str, model: str, schema: dict, *, run=subprocess.run, tools: str = READ_TOOLS
+) -> dict:
     """One ``claude -p`` call that may read files and must answer in ``schema``."""
     p = run(
         [
@@ -110,9 +112,9 @@ def ask(prompt: str, model: str, schema: dict, *, run=subprocess.run) -> dict:
             json.dumps(schema),
             "--no-session-persistence",
             "--allowedTools",
-            READ_TOOLS,
+            tools,
             "--tools",
-            READ_TOOLS,
+            tools,
             *(a for d in SETUP for a in ("--add-dir", str(d))),
         ],
         input=prompt,
@@ -203,3 +205,130 @@ def review(conn, pid: int, *, run=subprocess.run) -> str:
     )
     conn.commit()
     return status
+
+
+APPLY_TOOLS = "Read,Grep,Glob,Edit"
+APPLY_DIRS = (HOME / ".claude", HOME / "stuff/projects")
+
+APPLY_PROMPT = """The developer approved this change to their AI setup. Apply it now.
+
+Edit only instruction files: ~/.claude/CLAUDE.md, ~/.claude/skills/, ~/.claude/agents/,
+~/.claude/output-styles/, and AGENTS.md or CLAUDE.md files under ~/stuff/projects. Keep each
+edit small and in the file's own style. If the change needs source code, a hook script, or
+settings.json, do not edit it: answer applied=false and say what a person must do.
+Then answer with what you changed, one line per file.
+
+Reviewer notes to follow while applying:
+{review}
+
+Proposal:
+title: {title}
+target: {target}
+change: {change}"""
+
+APPLY_SCHEMA = {
+    "type": "object",
+    "properties": {"applied": {"type": "boolean"}, "summary": {"type": "string"}},
+    "required": ["applied", "summary"],
+}
+
+APPROVE, REJECT = "Approve", "Reject"
+
+
+def daily(conn, *, days: float = 7.0, top: int = 3, log=print, run=subprocess.run) -> list[int]:
+    """The daily pass: scan new friction, propose from the last ``days``, review each.
+
+    Returns the ids the reviewer approved; the daemon pops those to the human.
+    """
+    from . import friction
+
+    friction.scan(conn, since=time.time() - days * 86400, log=log, run=run)
+    approved = []
+    for pid in propose(conn, since=time.time() - days * 86400, top=top, run=run):
+        status = review(conn, pid, run=run)
+        log(f"  #{pid}: {status}")
+        if status == "proposed":
+            approved.append(pid)
+    return approved
+
+
+def waiting(conn) -> list[dict]:
+    """Proposals the reviewer approved that wait for the human."""
+    rows = conn.execute(
+        "SELECT * FROM proposals WHERE status = 'proposed' AND review IS NOT NULL ORDER BY id"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def decide(conn, pid: int, choice: str | None, *, run=subprocess.run) -> str | None:
+    """Apply a popup choice. Approve runs the apply agent. Returns the new status, or None.
+
+    Does nothing when the popup was dismissed or the proposal was already decided.
+    """
+    row = conn.execute("SELECT * FROM proposals WHERE id = ?", (pid,)).fetchone()
+    if row is None or row["status"] != "proposed" or choice not in (APPROVE, REJECT):
+        return None
+    if choice == REJECT:
+        status, note = "rejected", "rejected by you"
+    else:
+        conn.execute("UPDATE proposals SET status = 'approved' WHERE id = ?", (pid,))
+        conn.commit()
+        prompt = APPLY_PROMPT.format(
+            review=row["review"] or "",
+            title=row["title"],
+            target=row["target"],
+            change=row["change"],
+        )
+        try:
+            out = ask(prompt, PROPOSER, APPLY_SCHEMA, run=run, tools=APPLY_TOOLS)
+            status = "applied" if out.get("applied") else "needs-you"
+            note = str(out.get("summary", ""))
+        except RuntimeError as e:
+            status, note = "apply-failed", str(e)
+    conn.execute(
+        "UPDATE proposals SET status = ?, review = coalesce(review, '') || ? WHERE id = ?",
+        (status, f"\n\n[{status}] {note}", pid),
+    )
+    from . import store
+
+    store.post_message(
+        conn,
+        from_session=store.HUMAN_SESSION,
+        from_handle="improve",
+        body=f"proposal #{pid} ({row['title']}) → {status}: {note[:400]}",
+        to_session=store.HUMAN_SESSION,
+        urgent=False,
+    )
+    conn.commit()
+    return status
+
+
+def popup(p: dict) -> tuple[str, str]:
+    """The popup title and body for one proposal."""
+    return f"Improve: {p['title']}", f"{p['pattern']}\n\nChange: {p['change'][:400]}\n\n#{p['id']}"
+
+
+def prompt_waiting(conn, shown: set[int]) -> int:
+    """Pop Approve / Reject for each waiting proposal not in ``shown``, on threads.
+
+    ``shown`` lives in the daemon, so a restart shows the waiting ones again. Returns how many
+    popups it started.
+    """
+    import threading
+
+    from . import desktop, store
+
+    new = [p for p in waiting(conn) if p["id"] not in shown]
+    for p in new:
+        shown.add(p["id"])
+
+        def run(p: dict = p) -> None:
+            choice = desktop.ask(*popup(p), [APPROVE, REJECT])
+            own = store.connect()
+            try:
+                decide(own, p["id"], choice)
+            finally:
+                own.close()
+
+        threading.Thread(target=run, daemon=True).start()
+    return len(new)

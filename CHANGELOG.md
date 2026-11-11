@@ -4,6 +4,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- `cabildo improve daily` scans friction and writes proposals; Fable argues against each. The
+  ones it approves pop up with Approve and Reject, and Approve has an agent apply the change.
 - `cabildo friction scan` finds the turns where you corrected or complained about the tools.
   `cabildo friction report` groups them by area. Personal content is never stored.
 - Access requests sent to you now pop with Grant and Deny buttons. A click decides the request.

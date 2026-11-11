@@ -34,6 +34,7 @@ from . import (
     desktop,
     gitlab,
     grant_prompt,
+    improve,
     lan,
     monitor,
     names,
@@ -44,6 +45,8 @@ from . import (
 
 # A 'running' intent older than this means the daemon died holding it.
 STALE_AFTER = actions.GATE_TIMEOUT + 300
+# How often the daemon looks for reviewed proposals to show (improve.py).
+IMPROVE_POPUP_EVERY = 60.0
 # How long exit waits for running actions before failing them.
 WORKER_JOIN_TIMEOUT = 30.0
 # How often the poll loop sweeps for sessions whose owning claude died without
@@ -517,6 +520,8 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
     last_monitor = 0.0
     last_record = 0.0
     last_ci = 0.0
+    last_improve = 0.0
+    shown_proposals: set[int] = set()
     ci_every = 0.0 if args.once else config.ci_poll()
     ci_thread: threading.Thread | None = None
     try:
@@ -557,6 +562,14 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
                         _log(line)
                 except Exception as e:  # a bad /proc read must not kill the daemon
                     _log(f"monitor: {type(e).__name__}: {e}")
+            if notifying and now - last_improve >= IMPROVE_POPUP_EVERY:
+                last_improve = now
+                try:
+                    n = improve.prompt_waiting(conn, shown_proposals)
+                    if n:
+                        _log(f"🧭 {n} proposal(s) shown with Approve / Reject")
+                except Exception as e:  # a bad proposals row must not kill the daemon
+                    _log(f"improve: {type(e).__name__}: {e}")
             if ctx.save_messages and now - last_record >= RECORD_MESSAGES_EVERY:
                 last_record = now
                 record.ingest(conn, log=_log)
