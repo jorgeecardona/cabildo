@@ -102,7 +102,6 @@ def ask(prompt: str, model: str, schema: dict, *, run=subprocess.run) -> dict:
         [
             "claude",
             "-p",
-            prompt,
             "--model",
             model,
             "--output-format",
@@ -116,6 +115,7 @@ def ask(prompt: str, model: str, schema: dict, *, run=subprocess.run) -> dict:
             READ_TOOLS,
             *(a for d in SETUP for a in ("--add-dir", str(d))),
         ],
+        input=prompt,
         capture_output=True,
         text=True,
         timeout=1800,

@@ -25,7 +25,7 @@ def test_scan_saves_friction_and_moves_the_cursor(home) -> None:
     prompts: list[str] = []
 
     def run(args, **_k):
-        prompts.append(args[2])
+        prompts.append(_k["input"])
         out = {"items": [{"i": 0, "kind": "missing", "area": "Grants", "summary": "no button"}]}
         return SimpleNamespace(
             stdout=json.dumps({"structured_output": out}), stderr="", returncode=0

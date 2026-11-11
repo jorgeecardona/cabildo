@@ -112,7 +112,6 @@ def classify(turns: list[Turn], *, run=subprocess.run) -> list[Friction]:
         [
             "claude",
             "-p",
-            prompt_for(turns),
             "--model",
             MODEL,
             "--output-format",
@@ -123,6 +122,7 @@ def classify(turns: list[Turn], *, run=subprocess.run) -> list[Friction]:
             "--tools",
             "",
         ],
+        input=prompt_for(turns),
         capture_output=True,
         text=True,
         timeout=600,
