@@ -68,8 +68,9 @@ cabildo issues show <slug>
 |---|---|---|---|---|---|
 | [Browser lifecycle is managed by a loose script and hand-edited JSON, not by cabildo](29-08-2026-cabildo-browser-subcommand.md) | cli | M | probe | open | — |
 | [Simplify git coordination — guard the irrecoverable (force-push), coach the recoverable (push recipe), isolate by worktree](17-10-2026-simplify-git-coordination-force-push-deny-recipe-worktree-per-agent.md) | guard | L | test | open | — |
+| [The editable cabildo install in ~/.venv keeps being replaced by a PyPI wheel](11-11-2026-the-editable-cabildo-install-in-venv-keeps-being-replaced-by-a-pypi.md) | install | S | test | open | — |
 | [Fleet-aware attention engine: schedule-driven wind-down, bedtime signal, and a day-timeline viewer](04-10-2026-fleet-aware-attention-engine-schedule-driven-wind-down-bedtime-signal-and-a.md) | scheduling | L | probe | open | — |
 | [Test suite pollutes the real repo — scratch commits, leftover worktrees, and a push to origin/main](19-10-2026-test-suite-pollutes-the-real-repo-and-has-pushed-to-origin-main.md) | tests | M | test | open | — |
 
-_4 open — 4 open; 2 done. Generated; edit the files, then `cabildo issues reindex`._
+_5 open — 5 open; 2 done. Generated; edit the files, then `cabildo issues reindex`._
 <!-- END GENERATED INDEX -->
