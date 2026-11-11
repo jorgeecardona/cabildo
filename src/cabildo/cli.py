@@ -1532,6 +1532,20 @@ def cmd_minutes(args) -> int:
     return 0
 
 
+def cmd_friction(args) -> int:
+    """``cabildo friction scan|report``: classify new user turns, or group the friction."""
+    from . import friction
+
+    since = time.time() - args.days * 86400
+    with store.connect() as conn:
+        if args.what == "scan":
+            n = friction.scan(conn, since=since, limit=args.limit)
+            print(f"{n} friction turn(s) saved")
+        else:
+            print(friction.report(conn, since=since))
+    return 0
+
+
 def cmd_messages(args) -> int:
     """Recorded conversation turns from the bus DB. Needs recording on for the
     project ([record] messages) and a daemon started with --save-messages.
@@ -2493,6 +2507,12 @@ def main(argv: list[str] | None = None) -> int:
         help="record every transcript on disk and in the workspace trash, then exit",
     )
     mg.set_defaults(fn=cmd_messages)
+
+    fr = sub.add_parser("friction", help="turns where you corrected or complained about the tools")
+    fr.add_argument("what", choices=["scan", "report"], help="scan new turns, or show the report")
+    fr.add_argument("--days", type=float, default=30.0, help="only the last N days (default 30)")
+    fr.add_argument("--limit", type=int, default=2000, help="scan: max turns to classify")
+    fr.set_defaults(fn=cmd_friction)
 
     nt = sub.add_parser(
         "notes", help="session loose ends (issue #34), added by agents via note_add"

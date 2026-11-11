@@ -356,6 +356,23 @@ CREATE TABLE IF NOT EXISTS transcript_messages (
 CREATE INDEX IF NOT EXISTS idx_tmsg_project ON transcript_messages(project_name, ts);
 CREATE INDEX IF NOT EXISTS idx_tmsg_session ON transcript_messages(session_id, ts);
 
+-- Friction: a user turn where the human corrected, repeated, or complained about the tools.
+-- Written by ``cabildo friction scan`` (friction.py); personal content is never stored.
+CREATE TABLE IF NOT EXISTS friction (
+    session_id    TEXT NOT NULL,
+    uuid          TEXT NOT NULL,
+    ts            REAL,
+    project_name  TEXT,
+    kind          TEXT NOT NULL,   -- correction | repeat | broken | missing | slow | other
+    area          TEXT NOT NULL,   -- the tool or file it is about, e.g. "cabildo daemon"
+    summary       TEXT NOT NULL,   -- one line: what went wrong, in tool terms
+    quote         TEXT NOT NULL,   -- the human's words, clipped
+    PRIMARY KEY (session_id, uuid)
+);
+CREATE INDEX IF NOT EXISTS idx_friction_area ON friction(area, ts);
+-- The ts of the newest user turn the friction scan has classified.
+CREATE TABLE IF NOT EXISTS friction_cursor (id INTEGER PRIMARY KEY CHECK (id = 1), ts REAL NOT NULL);
+
 -- Per-session byte offset into the transcript file, so each ingest pass reads
 -- only the new tail. Restart-safe: transcripts are append-only, so the offset is
 -- a stable cursor (transcript.session_messages handles truncation/rotation).
