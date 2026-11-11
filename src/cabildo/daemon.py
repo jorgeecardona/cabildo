@@ -506,6 +506,10 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
     if not args.once:
         _write_info()
     lan_service = None if args.once else lan.start_service(_log)
+    if notifying and not args.once:
+        n = grant_prompt.reprompt_pending(conn)
+        if n:
+            _log(f"🔐 {n} pending access request(s) shown again with Grant / Deny")
     wan_service = None if args.once else wan.start_service(_log)
 
     workers: list[threading.Thread] = []

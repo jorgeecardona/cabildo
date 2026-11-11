@@ -573,3 +573,16 @@ class _Inline:
 
     def start(self) -> None:
         self.target()
+
+
+def test_pending_request_pops_again_after_a_restart(two_projects, monkeypatch):
+    from cabildo import desktop, grant_prompt
+
+    two_projects(111)
+    req = srv.request_access("paas", capability="send", kind="project")
+    monkeypatch.setattr(desktop, "ask", lambda *_a, **_k: "Deny")
+    monkeypatch.setattr(grant_prompt.threading, "Thread", _Inline)
+    with store.connect() as conn:
+        assert grant_prompt.reprompt_pending(conn) == 1
+        assert store.get_grant(conn, req["grant_id"])["status"] == "denied"
+        assert grant_prompt.reprompt_pending(conn) == 0

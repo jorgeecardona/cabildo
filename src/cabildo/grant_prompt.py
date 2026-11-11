@@ -62,3 +62,21 @@ def prompt(m: dict) -> bool:
 
     threading.Thread(target=run, daemon=True).start()
     return True
+
+
+def reprompt_pending(conn) -> int:
+    """Pop Grant / Deny again for every request still pending. Returns how many.
+
+    The daemon calls this at start: a popup lives in the daemon, so a restart or a dismissed
+    popup must not leave a request that only the CLI can answer.
+    """
+    rows = conn.execute("SELECT * FROM grants WHERE status='requested' ORDER BY id").fetchall()
+    for g in rows:
+        target = "your project" if g["resource_kind"] == "project" else f"#{g['resource']}"
+        note = f" — {g['note']}" if g["note"] else ""
+        body = (
+            f"🔔 access request #{g['id']}: project '{g['grantee']}' asks to "
+            f"{g['capability']} {target}{note}."
+        )
+        prompt({"body": body})
+    return len(rows)

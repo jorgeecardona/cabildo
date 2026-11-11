@@ -5,6 +5,7 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 ## [Unreleased]
 
 - Access requests sent to you now pop with Grant and Deny buttons. A click decides the request.
+  Requests still pending pop again when the daemon starts.
 
 ### Fixed
 
