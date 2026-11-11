@@ -373,6 +373,20 @@ CREATE INDEX IF NOT EXISTS idx_friction_area ON friction(area, ts);
 -- The ts of the newest user turn the friction scan has classified.
 CREATE TABLE IF NOT EXISTS friction_cursor (id INTEGER PRIMARY KEY CHECK (id = 1), ts REAL NOT NULL);
 
+-- A change to the setup, proposed from friction (improve.py). One row per proposal.
+CREATE TABLE IF NOT EXISTS proposals (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at  REAL NOT NULL,
+    title       TEXT NOT NULL,   -- one line, shown in the popup title
+    pattern     TEXT NOT NULL,   -- the recurring friction, in tool terms
+    target      TEXT NOT NULL,   -- the file or component to change
+    change      TEXT NOT NULL,   -- what to change, concrete enough to apply
+    evidence    TEXT NOT NULL,   -- JSON list of [session_id, uuid] friction keys
+    review      TEXT,            -- the reviewer's verdict and reasons
+    status      TEXT NOT NULL DEFAULT 'proposed'
+                -- proposed | rejected-by-review | approved | rejected | applied
+);
+
 -- Per-session byte offset into the transcript file, so each ingest pass reads
 -- only the new tail. Restart-safe: transcripts are append-only, so the offset is
 -- a stable cursor (transcript.session_messages handles truncation/rotation).

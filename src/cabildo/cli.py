@@ -1546,6 +1546,22 @@ def cmd_friction(args) -> int:
     return 0
 
 
+def cmd_improve(args) -> int:
+    """``cabildo improve propose|list``: proposals from friction, each argued by a reviewer."""
+    from . import improve
+
+    with store.connect() as conn:
+        if args.what == "propose":
+            ids = improve.propose(conn, since=time.time() - args.days * 86400, top=args.top)
+            for pid in ids:
+                print(f"#{pid}: {improve.review(conn, pid)}")
+        for r in conn.execute("SELECT * FROM proposals ORDER BY id DESC LIMIT 20"):
+            print(f"#{r['id']} [{r['status']}] {r['title']}\n    {r['target']}: {r['change']}")
+            if r["review"]:
+                print(f"    review: {r['review']}")
+    return 0
+
+
 def cmd_messages(args) -> int:
     """Recorded conversation turns from the bus DB. Needs recording on for the
     project ([record] messages) and a daemon started with --save-messages.
@@ -2513,6 +2529,12 @@ def main(argv: list[str] | None = None) -> int:
     fr.add_argument("--days", type=float, default=30.0, help="only the last N days (default 30)")
     fr.add_argument("--limit", type=int, default=2000, help="scan: max turns to classify")
     fr.set_defaults(fn=cmd_friction)
+
+    im = sub.add_parser("improve", help="proposals to change the setup, written from friction")
+    im.add_argument("what", choices=["propose", "list"], help="write and review proposals, or list")
+    im.add_argument("--days", type=float, default=30.0, help="friction from the last N days")
+    im.add_argument("--top", type=int, default=5, help="propose: at most N proposals")
+    im.set_defaults(fn=cmd_improve)
 
     nt = sub.add_parser(
         "notes", help="session loose ends (issue #34), added by agents via note_add"
