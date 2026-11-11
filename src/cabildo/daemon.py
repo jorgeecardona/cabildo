@@ -33,6 +33,7 @@ from . import (
     config,
     desktop,
     gitlab,
+    grant_prompt,
     lan,
     monitor,
     names,
@@ -531,7 +532,7 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
             if notifying:
                 for m in _pending_for_human(conn, last_msg, everything=args.notify_all):
                     last_msg = m["id"]
-                    if desktop.notify_message(m):
+                    if grant_prompt.prompt(m) or desktop.notify_message(m):
                         _log(f"🔔 {m['from_display']}: {str(m['body'])[:60]!r}")
             now = time.monotonic()
             if now - last_reap >= REAP_SESSIONS_EVERY:

@@ -539,3 +539,37 @@ def test_answer_cannot_be_redirected_away_from_the_asker(two_agents):
     two_agents(222)
     assert srv.send("answer", to="bob", reply_to=guid2)["ok"] is False
     assert srv.send("answer", topic="general", reply_to=guid2)["ok"] is False
+
+
+def test_human_knock_pops_grant_deny_and_the_click_grants(two_projects, monkeypatch):
+    from cabildo import desktop, grant_prompt
+
+    two_projects(111)  # crm asks paas
+    req = srv.request_access("paas", capability="send", kind="project")
+    with store.connect() as conn:
+        knock = conn.execute(
+            "SELECT * FROM messages WHERE to_session=? ORDER BY id DESC", (store.HUMAN_SESSION,)
+        ).fetchone()
+    assert grant_prompt.grant_id(knock["body"]) == req["grant_id"]
+    asked: list[list[str]] = []
+    monkeypatch.setattr(desktop, "ask", lambda _s, _b, opts, **_k: asked.append(opts) or "Grant")
+    monkeypatch.setattr(grant_prompt.threading, "Thread", _Inline)
+    assert grant_prompt.prompt(dict(knock)) is True
+    assert asked == [["Grant", "Deny"]]
+    assert srv.send("hi paas", to="ben")["ok"] is True
+    with store.connect() as conn:  # a second click on a decided grant changes nothing
+        assert grant_prompt.decide(conn, req["grant_id"], "Deny") is None
+
+
+def test_plain_message_is_not_a_knock() -> None:
+    from cabildo import grant_prompt
+
+    assert grant_prompt.prompt({"body": "hello"}) is False
+
+
+class _Inline:
+    def __init__(self, target, **_k) -> None:
+        self.target = target
+
+    def start(self) -> None:
+        self.target()

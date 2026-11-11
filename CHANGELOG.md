@@ -4,6 +4,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- Access requests sent to you now pop with Grant and Deny buttons. A click decides the request.
+
 ### Fixed
 
 - A running agent browser picks up a new `cabildo browser login` on its next tool call. No MCP
