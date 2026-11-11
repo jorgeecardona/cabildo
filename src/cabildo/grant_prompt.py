@@ -46,6 +46,18 @@ def decide(conn, gid: int, choice: str | None) -> str | None:
     return status
 
 
+def text(g: dict) -> tuple[str, str]:
+    """The popup title and body for one grant: who asks, for what, and why."""
+    target = (
+        f"your project ({g['resource']})"
+        if g["resource_kind"] == "project"
+        else f"#{g['resource']}"
+    )
+    summary = f"{g['grantee']} wants to {g['capability']} to {target}"
+    body = g.get("note") or "(no reason given)"
+    return summary, f"{body}\n\nrequest #{g['id']}"
+
+
 def prompt(m: dict) -> bool:
     """Pop Grant / Deny for a knock message, on a thread. False when ``m`` is not a knock."""
     gid = grant_id(str(m.get("body") or ""))
@@ -53,10 +65,13 @@ def prompt(m: dict) -> bool:
         return False
 
     def run() -> None:
-        choice = desktop.ask(f"🔐 access request #{gid}", str(m["body"]), [GRANT, DENY])
         conn = store.connect()
         try:
-            decide(conn, gid, choice)
+            g = store.get_grant(conn, gid)
+            if g is None or g["status"] != "requested":
+                return
+            summary, body = text(g)
+            decide(conn, gid, desktop.ask(summary, body, [GRANT, DENY]))
         finally:
             conn.close()
 

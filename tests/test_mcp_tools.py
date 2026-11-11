@@ -552,10 +552,18 @@ def test_human_knock_pops_grant_deny_and_the_click_grants(two_projects, monkeypa
         ).fetchone()
     assert grant_prompt.grant_id(knock["body"]) == req["grant_id"]
     asked: list[list[str]] = []
-    monkeypatch.setattr(desktop, "ask", lambda _s, _b, opts, **_k: asked.append(opts) or "Grant")
+    shown: list[str] = []
+
+    def ask(summary: str, _body: str, opts: list[str], **_k: object) -> str:
+        shown.append(summary)
+        asked.append(opts)
+        return "Grant"
+
+    monkeypatch.setattr(desktop, "ask", ask)
     monkeypatch.setattr(grant_prompt.threading, "Thread", _Inline)
     assert grant_prompt.prompt(dict(knock)) is True
     assert asked == [["Grant", "Deny"]]
+    assert shown == ["crm wants to send to your project (paas)"]
     assert srv.send("hi paas", to="ben")["ok"] is True
     with store.connect() as conn:  # a second click on a decided grant changes nothing
         assert grant_prompt.decide(conn, req["grant_id"], "Deny") is None
@@ -584,5 +592,7 @@ def test_pending_request_pops_again_after_a_restart(two_projects, monkeypatch):
     monkeypatch.setattr(grant_prompt.threading, "Thread", _Inline)
     with store.connect() as conn:
         assert grant_prompt.reprompt_pending(conn) == 1
-        assert store.get_grant(conn, req["grant_id"])["status"] == "denied"
+        g = store.get_grant(conn, req["grant_id"])
+        assert g is not None
+        assert g["status"] == "denied"
         assert grant_prompt.reprompt_pending(conn) == 0

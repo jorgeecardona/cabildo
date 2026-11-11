@@ -75,7 +75,7 @@ def notify(summary: str, body: str, *, urgent: bool = False, timeout_ms: int = 1
         summary,
         # notify-send renders a small HTML subset, so a body containing < or &
         # would silently vanish or mangle the rest of the message.
-        _clip(html.escape(body)),
+        _clip(html.escape(body, quote=False)),
     ]
     try:
         return subprocess.run(args, capture_output=True, timeout=10).returncode == 0
@@ -126,7 +126,7 @@ def ask(summary: str, body: str, options: list[str], *, timeout_ms: int = 0) -> 
         args += ["--expire-time", str(timeout_ms)]
     for o in options:
         args += ["--action", f"{o}={o}"]
-    args += [summary, _clip(html.escape(body), 700)]
+    args += [summary, _clip(html.escape(body, quote=False), 700)]
     try:
         p = subprocess.run(
             args,
