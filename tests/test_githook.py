@@ -166,9 +166,7 @@ def test_guard_install_from_subdirectory_resolves_hooks_dir(tmp_path, monkeypatc
     # instead of the repo root, so the resolved path was wrong.
     repo = _repo(tmp_path / "repo")
     # Set a relative hooksPath, as `make install-hooks` does.
-    subprocess.run(
-        ["git", "-C", str(repo), "config", "core.hooksPath", ".githooks"], check=True
-    )
+    subprocess.run(["git", "-C", str(repo), "config", "core.hooksPath", ".githooks"], check=True)
     subdir = repo / "apps" / "backend"
     subdir.mkdir(parents=True)
     monkeypatch.chdir(subdir)
@@ -183,7 +181,9 @@ def test_guard_uninstall_removes_only_our_block(tmp_path, monkeypatch):
     monkeypatch.chdir(repo)
     hook = repo / ".git" / "hooks" / "pre-commit"
     # Write a hook that already has the cabildo block (as old installs did).
-    block = "# >>> cabildo guard >>>\ncabildo githook pre-commit || exit $?\n# <<< cabildo guard <<<\n"
+    block = (
+        "# >>> cabildo guard >>>\ncabildo githook pre-commit || exit $?\n# <<< cabildo guard <<<\n"
+    )
     hook.parent.mkdir(parents=True, exist_ok=True)
     hook.write_text("#!/usr/bin/env bash\n" + block + "echo existing\n")
     hook.chmod(hook.stat().st_mode | 0o111)
