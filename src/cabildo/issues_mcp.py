@@ -30,6 +30,9 @@ import pathlib
 
 from mcp.server.fastmcp import FastMCP
 from prodc import issue_store as issues
+from prodc.config import Config, ConfigError
+from prodc.issues import Next, SkipReason, next_issues
+from prodc.loader import LoaderError, load
 from prodc.model import Issue
 
 from . import agenda
@@ -154,6 +157,55 @@ def claim_issue(name: str, release: bool = False, force: bool = False) -> str:
         )
     updated = issues.claim(folder, name, owner=handle, force=force)
     return f"claimed {updated.path.name} as @{handle}" + _lease(updated.slug, take=True)
+
+
+def _prodc_config(start: pathlib.Path) -> Config | None:
+    """Return the ``prodc.toml`` at or above ``start``, stopping at the repo root."""
+    here = start.resolve()
+    for base in (here, *here.parents):
+        if (base / "prodc.toml").is_file():
+            return Config.load(base / "prodc.toml")
+        if (base / ".git").exists():
+            return None
+    return None
+
+
+def next_text(nxt: Next) -> str:
+    """Render a prodc ``Next`` as the lines ``next_issue`` returns."""
+    lines: list[str] = []
+    if nxt.release is not None:
+        lines.append(f"release {nxt.release.id}: {nxt.open_needs} open need(s)")
+    if nxt.skip is not None or not nxt.candidates:
+        reason = nxt.skip.value if nxt.skip else SkipReason.NO_LINKED_ISSUE.value
+        lines.append(f"skip: {reason} (nothing in the current release to work on)")
+    for i, c in enumerate(nxt.candidates):
+        lines.append(f"{'pick' if i == 0 else 'also'}  {c.issue.slug}: {c.issue.title}")
+        lines.append(f"      {c.why}")
+    if nxt.needs_without_issue:
+        lines.append(
+            "needs with no ready issue: " + ", ".join(n.id for n in nxt.needs_without_issue)
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool(structured_output=False)
+def next_issue(limit: int = 5) -> str:
+    """Ready issues ranked by the prodc need they serve in the current release, or a skip reason.
+
+    Only issues linked to a need in prodc's current release (or a BROKEN need) are listed. A
+    ``skip:`` line means there is no work that serves a goal now: stop instead of picking an issue
+    from ``board``. Does not claim: call ``claim_issue`` on the one you take.
+    """
+    start = pathlib.Path(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
+    handle, _ = _identity()
+    try:
+        cfg = _prodc_config(start)
+        if cfg is None:
+            return next_text(Next(None, skip=SkipReason.NO_BOARD))
+        nxt = next_issues(cfg, load(cfg), issues.find_folder(cfg.root), owner=handle, limit=limit)
+    except (ConfigError, LoaderError, issues.IssueFormatError, OSError) as exc:
+        return f"prodc could not load the board: {exc}"
+    return next_text(nxt)
 
 
 # --------------------------------------------------------------------------- #
