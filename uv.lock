@@ -107,7 +107,7 @@ requires-dist = [
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5" },
     { name = "playwright", specifier = ">=1.50,<2" },
-    { name = "prodc", specifier = ">=0.9.0,<0.10" },
+    { name = "prodc", specifier = ">=0.10.0,<0.11" },
     { name = "textual", specifier = "==8.2.8" },
     { name = "textual-tty", specifier = "==0.4.0" },
     { name = "zeroconf", specifier = ">=0.130,<1" },
@@ -929,14 +929,14 @@ wheels = [
 
 [[package]]
 name = "prodc"
-version = "0.9.0"
+version = "0.10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/28/13/41886648c8a4e25a369e8afba0fbb75ca30f8938e01bacaffb963dc8dd19/prodc-0.9.0.tar.gz", hash = "sha256:666dedf692c701b527e896efc396b915fc141ad3c0640e0cd9795ce0d920c467", size = 310464, upload-time = "2026-11-11T23:02:48.703Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0d/df/c58e4659a2fb35547e52486a4690b8ce68bd3c5d700dec2bc0ec56430414/prodc-0.10.0.tar.gz", hash = "sha256:219009b7310613315979ea9c3cdf453bb9d946c4bfe275c0958427536a1abf2b", size = 315243, upload-time = "2026-11-12T09:25:27.781Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3f/3f/36e1ff5e4f41d1f0087422921dd4d223f2f5cea502598764b10d7ce19db9/prodc-0.9.0-py3-none-any.whl", hash = "sha256:c1fb09bf7606608b7dc7ea1f8f17695430419ebf19edc1b1a736b33d7f9abce7", size = 216193, upload-time = "2026-11-11T23:02:47.186Z" },
+    { url = "https://files.pythonhosted.org/packages/61/89/81efde831feb5566a4f33c8f763ff4fb355adeb7d89e404efe48da0a123e/prodc-0.10.0-py3-none-any.whl", hash = "sha256:a16fb201e375c4b6abd14667ddd4f156cdba0190f17f8873e8d88f35cbd16481", size = 218385, upload-time = "2026-11-12T09:25:29.104Z" },
 ]
 
 [[package]]
