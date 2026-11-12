@@ -136,52 +136,57 @@ def _install_args(dry=False):
     return types.SimpleNamespace(print=dry)
 
 
-def test_guard_install_creates_executable_hooks(tmp_path, monkeypatch):
+def test_guard_install_never_writes_files(tmp_path, monkeypatch):
+    # guard install is now read-only: hook files belong to `make install-hooks`.
     repo = _repo(tmp_path / "repo")
     monkeypatch.chdir(repo)
     assert cli.cmd_guard_install(_install_args()) == 0
     for event in ("pre-commit", "pre-push"):
-        hook = repo / ".git" / "hooks" / event
-        assert hook.exists()
-        assert f"cabildo githook {event}" in hook.read_text()
-        assert hook.stat().st_mode & 0o111  # executable
+        assert not (repo / ".git" / "hooks" / event).exists()
 
 
-def test_guard_install_is_idempotent(tmp_path, monkeypatch):
-    repo = _repo(tmp_path / "repo")
-    monkeypatch.chdir(repo)
-    cli.cmd_guard_install(_install_args())
-    before = (repo / ".git" / "hooks" / "pre-push").read_text()
-    cli.cmd_guard_install(_install_args())
-    after = (repo / ".git" / "hooks" / "pre-push").read_text()
-    assert before == after
-    assert after.count("cabildo githook pre-push") == 1
-
-
-def test_guard_install_composes_with_an_existing_hook(tmp_path, monkeypatch):
-    repo = _repo(tmp_path / "repo")
-    monkeypatch.chdir(repo)
-    hook = repo / ".git" / "hooks" / "pre-commit"
-    hook.write_text("#!/usr/bin/env bash\necho existing\n")
-    cli.cmd_guard_install(_install_args())
-    text = hook.read_text()
-    assert "echo existing" in text  # preserved
-    assert text.index("cabildo githook") < text.index("echo existing")  # chained first
-
-
-def test_guard_install_print_writes_nothing(tmp_path, monkeypatch):
+def test_guard_install_print_flag_still_writes_nothing(tmp_path, monkeypatch):
+    # --print was the old "dry run"; now every call is dry.
     repo = _repo(tmp_path / "repo")
     monkeypatch.chdir(repo)
     assert cli.cmd_guard_install(_install_args(dry=True)) == 0
     assert not (repo / ".git" / "hooks" / "pre-commit").exists()
 
 
+def test_guard_install_prints_make_install_hooks_guidance(tmp_path, monkeypatch, capsys):
+    repo = _repo(tmp_path / "repo")
+    monkeypatch.chdir(repo)
+    cli.cmd_guard_install(_install_args())
+    out = capsys.readouterr().out
+    assert "make install-hooks" in out
+
+
+def test_guard_install_from_subdirectory_resolves_hooks_dir(tmp_path, monkeypatch):
+    # Regression: relative core.hooksPath was resolved against cwd (a subdirectory)
+    # instead of the repo root, so the resolved path was wrong.
+    repo = _repo(tmp_path / "repo")
+    # Set a relative hooksPath, as `make install-hooks` does.
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "core.hooksPath", ".githooks"], check=True
+    )
+    subdir = repo / "apps" / "backend"
+    subdir.mkdir(parents=True)
+    monkeypatch.chdir(subdir)
+    # Should resolve to <repo>/.githooks, not <subdir>/.githooks.
+    hooks_dir = cli._git_hooks_dir(str(subdir))
+    assert hooks_dir is not None
+    assert hooks_dir == repo / ".githooks"
+
+
 def test_guard_uninstall_removes_only_our_block(tmp_path, monkeypatch):
     repo = _repo(tmp_path / "repo")
     monkeypatch.chdir(repo)
     hook = repo / ".git" / "hooks" / "pre-commit"
-    hook.write_text("#!/usr/bin/env bash\necho existing\n")
-    cli.cmd_guard_install(_install_args())
+    # Write a hook that already has the cabildo block (as old installs did).
+    block = "# >>> cabildo guard >>>\ncabildo githook pre-commit || exit $?\n# <<< cabildo guard <<<\n"
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text("#!/usr/bin/env bash\n" + block + "echo existing\n")
+    hook.chmod(hook.stat().st_mode | 0o111)
     cli.cmd_guard_uninstall(types.SimpleNamespace())
     text = hook.read_text()
     assert "cabildo githook" not in text

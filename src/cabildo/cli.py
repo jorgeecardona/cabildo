@@ -2050,6 +2050,12 @@ def _git_hooks_dir(repo: str) -> Path | None:
     """The directory git runs hooks from for ``repo`` — honouring an explicit
     ``core.hooksPath`` (husky/lefthook), else ``<git-dir>/hooks`` (worktree-aware
     via ``--absolute-git-dir``). None if ``repo`` is not a git work tree.
+
+    A relative ``core.hooksPath`` is resolved against the repo's top-level
+    directory, not against the current working directory.  This matters when
+    ``_git_hooks_dir`` is called from a subdirectory: ``git config --get
+    core.hooksPath`` returns ``.githooks`` regardless of cwd, but the caller's
+    cwd is NOT the right base — the repo root is.
     """
 
     def _git(*args: str) -> str | None:
@@ -2063,7 +2069,11 @@ def _git_hooks_dir(repo: str) -> Path | None:
 
     hp = _git("config", "--get", "core.hooksPath")
     if hp:
-        return Path(hp) if os.path.isabs(hp) else Path(repo) / hp
+        if os.path.isabs(hp):
+            return Path(hp)
+        # Relative hooksPath must be resolved from the repo root, not from cwd.
+        toplevel = _git("rev-parse", "--show-toplevel")
+        return Path(toplevel) / hp if toplevel else None
     git_dir = _git("rev-parse", "--absolute-git-dir")
     return Path(git_dir) / "hooks" if git_dir else None
 
@@ -2094,20 +2104,29 @@ def _install_one_hook(hooks_dir: Path, event: str, *, dry_run: bool) -> str:
 
 
 def cmd_guard_install(args) -> int:
-    """Wire the git-hook guard into this repo's pre-commit and pre-push, so plain
-    `git` here is coordinated like an agent's tool-call git — without needing the
-    MCP server or the daemon. Idempotent, and it chains ahead of any hook you
-    already have rather than clobbering it. `--print` shows what it would do.
+    """Print what the cabildo guard block WOULD add, without writing any file.
+
+    Hook files are managed by ``make install-hooks`` (tracked ``.githooks/``),
+    not by cabildo.  This command is intentionally read-only: it shows the
+    block that ``guard uninstall`` knows how to remove, so you can audit or
+    reference it, but it never touches the filesystem.
+
+    ``guard uninstall`` still works: it removes old cabildo blocks from hooks
+    that were written by earlier versions of this command.
     """
     repo = os.getcwd()
     hooks_dir = _git_hooks_dir(repo)
     if hooks_dir is None:
-        print(f"cabildo: {repo} is not a git work tree — nothing to install", file=sys.stderr)
+        print(f"cabildo: {repo} is not a git work tree — nothing to show", file=sys.stderr)
         return 1
+    print(
+        "Hook files are managed by `make install-hooks` (tracked .githooks/).\n"
+        "cabildo guard install no longer writes files.\n"
+        "Run `make install-hooks` to wire .githooks/pre-commit + .githooks/pre-push.\n"
+        "Run `cabildo guard uninstall` to remove old cabildo blocks from existing hooks.\n"
+    )
     for event in ("pre-commit", "pre-push"):
-        print(_install_one_hook(hooks_dir, event, dry_run=args.print))
-    if not args.print:
-        print("Bypass any one run with `git commit`/`git push --no-verify`.")
+        print(_install_one_hook(hooks_dir, event, dry_run=True))
     return 0
 
 

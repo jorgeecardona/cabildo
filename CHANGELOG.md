@@ -16,6 +16,12 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Fixed
 
+- `guard install` is now read-only: it prints what it would do and directs you to
+  `make install-hooks`, but never writes hook files. Hook files belong to the
+  tracked `.githooks/` directory, managed by `make install-hooks`.
+- `_git_hooks_dir` now resolves a relative `core.hooksPath` against the repo
+  top-level directory rather than the current working directory, so running
+  `cabildo guard` from a subdirectory finds the correct hooks directory.
 - A running agent browser picks up a new `cabildo browser login` on its next tool call. No MCP
   restart is needed.
 - `cabildo browser login` opens plain Chrome, so Google sign-in no longer fails with "This
