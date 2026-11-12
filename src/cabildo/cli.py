@@ -1685,7 +1685,7 @@ def cmd_issues(args) -> int:
     """The human's seat at a project's `docs/issues/` — same module the `issues`
     MCP server calls, so what you see here is what an agent sees.
     """
-    from . import issues as reg
+    from prodc import issue_store as reg
 
     start = Path(os.path.expanduser(args.folder)).resolve()
     folder = reg.find_folder(start)

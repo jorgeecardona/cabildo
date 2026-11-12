@@ -3,7 +3,7 @@ name = "cabildo"
 dynamic = ["version"]  # the single source of truth is __version__ in src/cabildo/__init__.py (see [tool.hatch.version])
 description = "IPC bus + chat room for coordinating parallel Claude Code agents: messaging, presence, and advisory locks with hook-level enforcement"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
@@ -17,7 +17,6 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
@@ -31,6 +30,8 @@ dependencies = [
     # session whose MCP tools silently never appear. Relax this in the same commit that migrates
     # the imports, not before.
     "mcp>=1.2,<2",
+    # the issue store (docs/issues): moved to prodc in 0.9.0
+    "prodc>=0.9.0",
     "zeroconf>=0.130,<1",
     # the session switcher (cabildo.workspace) uses private APIs of both: pinned
     "textual==8.2.8",
@@ -61,7 +62,7 @@ cabildo-codex-hook = "cabildo.codex_hooks:main"
 [dependency-groups]
 # musil is a dev-only model checker (dependency-free); the runtime stays stdlib-only.
 # It needs Python >=3.12, so it is conditional; the model tests importorskip it,
-# keeping cabildo's own 3.11 support intact.
+# (cabildo itself needs 3.12+ since 0.1.176).
 dev = [
     "ruff>=0.6",
     # [nodejs]: Node from a PyPI wheel. Without it pyright downloads Node from nodejs.org
@@ -107,7 +108,7 @@ exclude = ["docs/issues"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
@@ -196,7 +197,7 @@ include = ["src", "tests"]
 # ported sessionmux tests: 29 Optional-access errors; drop this while integrating them
 ignore = ["tests/workspace"]
 extraPaths = ["src"]
-pythonVersion = "3.11"
+pythonVersion = "3.12"
 # `standard` is the strictest mode cabildo is clean under: it leans on sqlite3.Row dynamic
 # access and untyped argparse Namespaces throughout, which `strict` would flag by the
 # hundred without catching real bugs. Tighten toward strict as modules gain annotations.

@@ -24,7 +24,7 @@ cabildo is an IPC bus and chat room for coordinating parallel Claude Code agents
 
 - Format and autofix: `make format` (ruff, line length 100).
 - Lint: `make lint` (ruff, `select = ["ALL"]` with per-file ignores). Types: `make typecheck` (pyright, standard; `reportPrivateUsage = false`).
-- Python 3.11+ only.
+- Python 3.12+ only.
 - Prefer explicit types and small, well-typed functions; keep the public API typed.
 
 ## Gotchas

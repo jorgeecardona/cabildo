@@ -28,7 +28,9 @@ import os
 import pathlib
 import re
 
-from . import issues, store, usage
+from prodc import issue_store as issues
+
+from . import store, usage
 
 #: The generic agenda config written into a fresh agenda folder. Minimal on purpose;
 #: a user adds their own fields (a tracker key, a due date, tags) in place.

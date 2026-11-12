@@ -19,7 +19,9 @@ import dataclasses
 import datetime as _dt
 import pathlib
 
-from . import agenda, issues, store
+from prodc import issue_store as issues
+
+from . import agenda, store
 
 
 def _block(text: str, who: str, when: float) -> str:

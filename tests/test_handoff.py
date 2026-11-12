@@ -4,7 +4,9 @@ session leaves on any task it still held when it ended.
 
 from __future__ import annotations
 
-from cabildo import agenda, handoff, issues, store
+from prodc import issue_store as issues
+
+from cabildo import agenda, handoff, store
 from tests.conftest import make_session
 
 

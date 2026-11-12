@@ -413,7 +413,7 @@ def note_done(id: int) -> dict[str, Any]:
 def note_park(id: int, ref: str | None = None) -> dict[str, Any]:
     """Park a session note (state -> parked): it leaves the session to live on as
     a project issue or agenda item so a later session picks it up without
-    copy-paste. File that issue first (`file_issue` / `agenda_add`) and pass its
+    copy-paste. File that issue first (`issue_file` / `agenda_add`) and pass its
     name as `ref` so the note records where it went. See `notes` for the ids.
     """
     with store.connect() as conn:

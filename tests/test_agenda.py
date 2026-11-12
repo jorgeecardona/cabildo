@@ -5,8 +5,9 @@ every test works on a real folder and none of them touch the bus DB.
 from __future__ import annotations
 
 import pytest
+from prodc import issue_store as issues
 
-from cabildo import agenda, issues
+from cabildo import agenda
 
 
 @pytest.fixture

@@ -4,6 +4,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- The issue store moved to prodc 0.9.0. cabildo depends on `prodc>=0.9.0`; the `board`,
+  `show_issue`, `file_issue`, `update_issue`, `close_issue` and `check_issues` tools are gone.
+  Use prodc's `issue_*` tools. `claim_issue` and the agenda tools stay.
 - `cabildo improve daily` scans friction and writes proposals; Fable argues against each. The
   ones it approves pop up with Approve and Reject, and Approve has an agent apply the change.
 - `cabildo friction scan` finds the turns where you corrected or complained about the tools.

@@ -88,7 +88,7 @@ def make(tmp_path: Path) -> tuple[FakeSession, FastMCP]:
     return session, server.build(session)
 
 
-def run(coro: Awaitable[T]) -> T:
+def run[T](coro: Awaitable[T]) -> T:
     return asyncio.run(coro)  # type: ignore[arg-type]
 
 

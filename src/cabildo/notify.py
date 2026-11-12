@@ -321,7 +321,7 @@ def register_line(cwd: str | None, handle: str | None = None) -> str | None:
     if not cwd:
         return None
     try:
-        from . import issues
+        from prodc import issue_store as issues
 
         folder = issues.find_folder(pathlib.Path(cwd))
         if folder is None:
@@ -338,7 +338,7 @@ def register_line(cwd: str | None, handle: str | None = None) -> str | None:
         bits.append(f"{len(board.waiting)} waiting")
     if board.mine:
         bits.append(f"{len(board.mine)} yours")
-    line = f"📋 register: {', '.join(bits)} — `board` to plan, `file_issue` for what you "
+    line = f"📋 register: {', '.join(bits)} — `issue_board` to plan, `issue_file` for what you "
     line += "find and won't fix now."
     if board.ready:
         top = board.ready[0]
@@ -349,7 +349,7 @@ def register_line(cwd: str | None, handle: str | None = None) -> str | None:
             if isinstance(value, str):
                 mark = f"[{value}] "
         # The top item by name, because a count is an invitation and a title is a fact. The slug is
-        # what `show_issue`/`claim_issue` take, so this line can be acted on without a lookup.
+        # what `issue_show`/`claim_issue` take, so this line can be acted on without a lookup.
         line += f"\n   next: {mark}{top.title[:64]} — {top.slug}"
     return line
 

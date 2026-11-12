@@ -15,7 +15,8 @@ def _names() -> set[str]:
 def test_one_server_carries_bus_issues_and_agenda_tools():
     names = _names()
     assert {"whoami", "send", "inbox"} <= names  # bus
-    assert {"board", "file_issue", "check_issues"} <= names  # issues
+    assert "claim_issue" in names  # issues: board/file/check moved to prodc (0.9.0)
+    assert not {"board", "file_issue", "check_issues"} & names
     assert {"agenda_board", "agenda_add", "agenda_done"} <= names  # agenda
 
 
