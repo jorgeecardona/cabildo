@@ -1,6 +1,6 @@
 ---
 title: Test suite pollutes the real repo — scratch commits, leftover worktrees, and a push to origin/main
-status: open
+status: done
 scope: M
 owner: null
 filed: 2026-10-19
