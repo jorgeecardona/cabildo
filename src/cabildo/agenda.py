@@ -29,6 +29,7 @@ import pathlib
 import re
 
 from prodc import issue_store as issues
+from prodc.model import Issue
 
 from . import store, usage
 
@@ -166,7 +167,7 @@ def add(
     )
 
 
-def _set_field(issue: issues.Issue, field: str, on: bool, cfg: issues.Config) -> issues.Issue:
+def _set_field(issue: Issue, field: str, on: bool, cfg: issues.Config) -> Issue:
     """Rewrite one issue with `field` set or removed. Removing keeps the file clean;
     `issues.update` merges and so cannot drop a key.
     """
@@ -180,20 +181,20 @@ def _set_field(issue: issues.Issue, field: str, on: bool, cfg: issues.Config) ->
     return updated
 
 
-def set_flag(folder: pathlib.Path, name: str, field: str, on: bool) -> issues.Issue:
+def set_flag(folder: pathlib.Path, name: str, field: str, on: bool) -> Issue:
     """Set or clear a boolean-ish field (``today``)."""
     cfg = config(folder)
     issue = issues.load(issues.resolve(folder, name), cfg)
     return _set_field(issue, field, on, cfg)
 
 
-def set_highlight(folder: pathlib.Path, name: str) -> issues.Issue:
+def set_highlight(folder: pathlib.Path, name: str) -> Issue:
     """Make one task the single highlight, clearing any other. Exclusivity is the
     point: `check` rejects two, so this enforces it at write time.
     """
     cfg = config(folder)
     target = issues.resolve(folder, name).resolve()
-    picked: issues.Issue | None = None
+    picked: Issue | None = None
     for path in sorted(folder.glob("*.md")):
         if path.name == issues.README_NAME:
             continue
@@ -209,7 +210,7 @@ def set_highlight(folder: pathlib.Path, name: str) -> issues.Issue:
     return picked
 
 
-def mark_done(folder: pathlib.Path, name: str) -> issues.Issue:
+def mark_done(folder: pathlib.Path, name: str) -> Issue:
     """Close a task. No sha: the preset sets ``closed_needs_fixed_in = false``."""
     return issues.update(folder, name, status=issues.Status.DONE, config=config(folder))
 
@@ -304,7 +305,7 @@ def _task_claims(conn) -> dict[str, list[str]]:
 _AGENDA_FIELDS = ("tier", "today", "highlight")
 
 
-def _item(issue: issues.Issue, sessions: list[dict]) -> dict:
+def _item(issue: Issue, sessions: list[dict]) -> dict:
     # Everything the folder declared beyond the agenda's own fields is carried through
     # verbatim under `extra`, so a tracker key, a due date, tags — whatever a user
     # configured — is available without cabildo naming or presuming any of it.
@@ -507,7 +508,7 @@ def import_tasks(
             extra["highlight"] = FLAG
         slug = _unique_slug(folder, issues.slugify(task.title), taken)
         taken.add(slug)
-        issue = issues.Issue(
+        issue = Issue(
             path=folder / cfg.filename(filed, slug),
             title=task.title,
             status=task.status,

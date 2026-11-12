@@ -20,6 +20,7 @@ import datetime as _dt
 import pathlib
 
 from prodc import issue_store as issues
+from prodc.model import Issue
 
 from . import agenda, store
 
@@ -36,7 +37,7 @@ def append(
     *,
     who: str,
     config: issues.Config | None = None,
-) -> issues.Issue:
+) -> Issue:
     """Append a handoff block to a task's body, preserving everything already there."""
     cfg = config or issues.load_config(folder)
     issue = issues.load(issues.resolve(folder, slug), cfg)

@@ -30,6 +30,7 @@ import pathlib
 
 from mcp.server.fastmcp import FastMCP
 from prodc import issue_store as issues
+from prodc.model import Issue
 
 from . import agenda
 
@@ -166,7 +167,7 @@ def _agenda_folder(scope: str) -> pathlib.Path:
     return agenda.resolve_dir(scope, create=True)
 
 
-def _agenda_line(issue: issues.Issue) -> str:
+def _agenda_line(issue: Issue) -> str:
     bits: list[str] = []
     if issue.extra.get("tier"):
         bits.append(str(issue.extra["tier"]))
