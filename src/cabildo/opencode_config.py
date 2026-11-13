@@ -17,9 +17,7 @@ Two things, both consequences of client-independent identity (see `mcp_server._m
   * `CABILDO_SESSION_ID` is not written: opencode's static `env` is identical for
     every session, so it identifies via the client-scoped owner-pid path instead.
 
-We also drop cabildo's generic `/agenda` and `/sanity` commands into opencode's
-command directory, so the read works out of the box. `CABILDO_HOME` is pinned so all
-clients provably share one bus DB.
+`CABILDO_HOME` is pinned so all clients provably share one bus DB.
 
 Hooks (the claim guard) are not wired here: opencode has no cabildo hook adapter yet,
 so an opencode session gets messaging, presence, and advisory claims, but not
@@ -36,7 +34,6 @@ from pathlib import Path
 from .mcp_config import mcp_command
 
 SERVER_NAME = "cabildo"
-COMMANDS = ("agenda.md", "sanity.md")
 
 
 def server_env(project: str | None = None, home: str | None = None) -> dict[str, str]:
@@ -72,14 +69,6 @@ def config_path() -> Path:
     return _config_root() / "opencode.json"
 
 
-def command_dir() -> Path:
-    return _config_root() / "command"
-
-
-def _commands_source() -> Path:
-    return Path(__file__).parent / "commands"
-
-
 def load(path: Path) -> dict:
     """Opencode's config, or {}. A malformed file raises rather than being silently
     overwritten.
@@ -102,34 +91,9 @@ def _servers(data: dict) -> dict:
     return servers
 
 
-def install_commands() -> list[Path]:
-    """Copy cabildo's generic /agenda and /sanity into opencode's command dir. Only
-    our own files are written; anything else there is left alone.
-    """
-    dest = command_dir()
-    dest.mkdir(parents=True, exist_ok=True)
-    written = []
-    for name in COMMANDS:
-        target = dest / name
-        target.write_text((_commands_source() / name).read_text())
-        written.append(target)
-    return written
-
-
-def remove_commands() -> list[Path]:
-    dest = command_dir()
-    removed = []
-    for name in COMMANDS:
-        target = dest / name
-        if target.exists():
-            target.unlink()
-            removed.append(target)
-    return removed
-
-
 def apply(project: str | None = None, home: str | None = None) -> tuple[Path, str]:
-    """Ensure opencode's config registers the cabildo MCP server (tagged opencode) and
-    that its commands are installed. Returns (config_path, what).
+    """Ensure opencode's config registers the cabildo MCP server, tagged opencode.
+    Returns (config_path, what).
     """
     p = config_path()
     data = load(p)
@@ -141,15 +105,11 @@ def apply(project: str | None = None, home: str | None = None) -> tuple[Path, st
         servers[SERVER_NAME] = want
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(data, indent=2) + "\n")
-    install_commands()  # always refresh the bundled commands
     return p, ("unchanged" if unchanged else ("updated" if had else "added"))
 
 
 def remove() -> tuple[Path, str]:
-    """Take cabildo back out of opencode: drop our MCP entry and our commands, leaving
-    everything else.
-    """
-    remove_commands()
+    """Take cabildo back out of opencode: drop our MCP entry, leaving everything else."""
     p = config_path()
     if not p.exists():
         return p, "absent"

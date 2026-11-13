@@ -13,12 +13,9 @@
 Typing posts as @jorge. `@name hello` DMs an agent; `/u ...` sends urgent
 (agents with the Stop hook cannot idle past it); `/p <project>` jumps to that
 project's channel (`/p` alone lists them), and `/t topic` retargets to any
-channel. `/agenda` toggles the main pane between the chat and the agenda board
-(tasks NOW-first, with @today `•` and highlight `★` markers) while the live
-agents stay in the sidebar — tasks and sessions in one view. ↑/↓ recall lines
-you've already sent (readline-style), distinct from PgUp/PgDn which scroll the
-pane. The view always shows every channel and DM on the bus — this is the
-operator's console, not a subscriber's.
+channel. ↑/↓ recall lines you've already sent (readline-style), distinct from
+PgUp/PgDn which scroll the pane. The view always shows every channel and DM on
+the bus — this is the operator's console, not a subscriber's.
 
 Stdlib only (curses), like the rest of the package.
 """
@@ -31,16 +28,14 @@ import re
 import textwrap
 import time
 
-from . import agenda, store
+from . import store
 from .store import HUMAN_HANDLE, HUMAN_SESSION
 
 SIDEBAR_W = 30  # hidden when the terminal is too narrow to afford it
 MIN_COLS_FOR_SIDEBAR = 72
 POLL_MS = 200  # input timeout doubles as the DB poll interval
 ROSTER_EVERY = 2.0  # seconds between roster/claims refreshes
-HINT = (
-    "@name=DM · /u=urgent · /p <project>=go · /t topic · /agenda · ↑↓ history · PgUp/PgDn · /q=quit"
-)
+HINT = "@name=DM · /u=urgent · /p <project>=go · /t topic · ↑↓ history · PgUp/PgDn · /q=quit"
 
 
 def resolve_topic(name: str, existing: set[str]) -> str:
@@ -75,8 +70,6 @@ def parse(line: str) -> tuple[str, dict]:
         parts = line.split(None, 1)
         topic = parts[1].strip().lstrip("#") if len(parts) > 1 else ""
         return ("switch", {"topic": topic}) if topic else ("noop", {})
-    if line in ("/agenda", "/a"):
-        return "agenda", {}
     # `/p` = jump to a project channel by bare name; `/p` alone lists them.
     if line == "/p" or line == "/proj":
         return "projects", {}
@@ -233,35 +226,6 @@ class InputHistory:
         return self.items[self.idx]
 
 
-def agenda_rows(board) -> list[list[tuple[str, int]]]:
-    """The agenda board as terminal rows (each a list of (text, attr) segments):
-    READY tasks NOW-first, then YOURS, then a done/waiting tally. Pure — no curses
-    screen, only the attribute constants — so it is unit-tested without a terminal.
-    """
-
-    def task(issue) -> list[tuple[str, int]]:
-        tier = str(issue.extra.get("tier") or "-")
-        mark = ("★" if issue.extra.get("highlight") else "") + (
-            "•" if issue.extra.get("today") else ""
-        )
-        seg = [(f"{tier:<10} ", curses.A_DIM), (issue.title, curses.A_NORMAL)]
-        if mark:
-            seg.append((" " + mark, curses.A_BOLD))
-        return seg
-
-    rows: list[list[tuple[str, int]]] = [
-        [(f"READY ({len(board.ready)}) — NOW first", curses.A_BOLD)]
-    ]
-    rows += [task(i) for i in board.ready]
-    if board.mine:
-        rows.append([("", 0)])
-        rows.append([(f"YOURS ({len(board.mine)})", curses.A_BOLD)])
-        rows += [task(i) for i in board.mine]
-    rows.append([("", 0)])
-    rows.append([(f"{board.done} done · {len(board.waiting)} waiting", curses.A_DIM)])
-    return rows
-
-
 # --------------------------------------------------------------------------- #
 # The app
 # --------------------------------------------------------------------------- #
@@ -278,8 +242,6 @@ class Chat:
         self.lines: list[list] = []  # wrapped [(text, attr), ...] segments per row
         self.buf = ""  # input buffer
         self.hist = InputHistory()  # ↑/↓ recall of lines you've sent
-        self.view = "chat"  # "chat" (messages) or "agenda" (the board), toggled by /agenda
-        self.agenda_lines: list[list] = []  # rendered agenda rows, refreshed while viewing it
         self.topics: list[str] = []  # channel names, for # completion; refreshed with the roster
         self.tab: dict | None = None  # active Tab-completion cycle, or None
         self.offset = 0  # scrollback: rows up from the bottom (0 = following live)
@@ -391,30 +353,12 @@ class Chat:
         self.claims = store.list_claims(self.conn)
         self.topics = [t["name"] for t in store.list_topics(self.conn)]
         self.roster_at = time.time()
-        # Always refresh: the agenda now also feeds the sidebar panel, not just the
-        # full-screen /agenda view.
-        self._refresh_agenda()
 
     def _presence_attr(self, presence: str) -> int:
         return {
             "working": _color_pair(2) | curses.A_BOLD,  # green
             "idle": _color_pair(5),  # yellow
         }.get(presence, curses.A_DIM)
-
-    def _refresh_agenda(self) -> None:
-        """Rebuild the agenda rows from the global agenda, best-effort — a missing
-        or unreadable agenda shows a hint, never a traceback.
-        """
-        try:
-            folder = agenda.global_dir()
-            if not folder.is_dir():
-                self.agenda_lines = [
-                    [("no global agenda yet — agenda_add (scope global)", curses.A_DIM)]
-                ]
-                return
-            self.agenda_lines = agenda_rows(agenda.board(folder))
-        except Exception:
-            self.agenda_lines = [[("agenda unavailable", curses.A_DIM)]]
 
     # ---- completion ------------------------------------------------------- #
     def _trailing(self) -> str:
@@ -460,10 +404,7 @@ class Chat:
         pane_h = h - 3  # header + hint + input
 
         # header
-        if self.view == "agenda":
-            title = " cabildo · agenda (NOW-first) · /agenda back to chat "
-        else:
-            title = f" cabildo · viewing all · you talk to #{self.dest} "
+        title = f" cabildo · viewing all · you talk to #{self.dest} "
         self._put(0, 0, title[: w - 1], curses.A_REVERSE)
         self._put(
             0,
@@ -472,38 +413,30 @@ class Chat:
             curses.A_REVERSE | curses.A_DIM,
         )
 
-        # main pane: the message scroll (bottom-anchored), or the agenda board
-        # (top-anchored, so NOW is at the top). `offset` is rows-up-from-bottom for
-        # chat and rows-down-from-top for the agenda.
-        content = self.agenda_lines if self.view == "agenda" else self.lines
-        total = len(content)
-        max_off = max(0, total - pane_h)
-        self.offset = max(0, min(self.offset, max_off))
-        start = self.offset if self.view == "agenda" else max(0, total - pane_h - self.offset)
-        for row, segs in enumerate(content[start : start + pane_h], start=1):
+        # main pane: the message scroll, bottom-anchored, so `offset` counts rows
+        # up from the bottom.
+        total = len(self.lines)
+        self.offset = max(0, min(self.offset, max(0, total - pane_h)))
+        start = max(0, total - pane_h - self.offset)
+        for row, segs in enumerate(self.lines[start : start + pane_h], start=1):
             x = 0
             for text, attr in segs:
                 if x >= pane_w:
                     break
                 self._put(row, x, text[: pane_w - x], attr)
                 x += len(text)
-        if self.offset and self.view != "agenda":
+        if self.offset:
             tag = f" ↑ {self.offset} rows up — End to follow "
             self._put(1, max(0, pane_w - len(tag)), tag, curses.A_REVERSE)
-        elif self.view == "agenda" and max_off:
-            tag = f" {self.offset}/{max_off} down — PgUp/PgDn, End=top "
-            self._put(1, max(0, pane_w - len(tag)), tag, curses.A_REVERSE)
 
-        # sidebar: a live roster with presence + sub-agent cues on top, and an
-        # agenda panel pinned to the bottom third so it is always in view.
+        # sidebar: a live roster with presence + sub-agent cues.
         if sidebar:
             x0 = w - SIDEBAR_W
             inner = SIDEBAR_W - 1
             for row in range(1, h - 2):
                 self._put(row, x0 - 1, "│", curses.A_DIM)
 
-            agenda_h = max(4, (h - 3) // 3)  # bottom region reserved for the agenda
-            top_limit = h - 3 - agenda_h - 1  # last row the roster may use
+            top_limit = h - 3  # last row the roster may use
 
             self._put(1, x0, "agents", curses.A_BOLD | curses.A_UNDERLINE)
             row = 2
@@ -530,18 +463,6 @@ class Chat:
                         break
                     self._put(row, x0, c["resource"][:inner], curses.A_DIM)
                     row += 1
-
-            # agenda panel, pinned to the bottom of the sidebar
-            ay = h - 3 - agenda_h
-            self._put(ay, x0 - 1, "├", curses.A_DIM)
-            self._put(ay, x0, "agenda", curses.A_BOLD | curses.A_UNDERLINE)
-            for i, segs in enumerate(self.agenda_lines[: agenda_h - 1], start=ay + 1):
-                x = x0
-                for text, attr in segs:
-                    if x >= w:
-                        break
-                    self._put(i, x, text[: w - x], attr)
-                    x += len(text)
 
         # a completion strip (typing @agent / #channel) takes the hint row; else hint/notice
         comp = self.tab["cands"] if self.tab else self._completions()
@@ -581,13 +502,6 @@ class Chat:
         if kind == "quit":
             return False
         if kind == "noop":
-            return True
-        if kind == "agenda":
-            self.view = "chat" if self.view == "agenda" else "agenda"
-            self.offset = 0  # the two panes have different lengths
-            self.pin = False
-            if self.view == "agenda":
-                self._refresh_agenda()
             return True
         if kind == "projects":
             projs = sorted(
@@ -655,12 +569,7 @@ class Chat:
         elif ch in (curses.KEY_PPAGE, curses.KEY_NPAGE):
             step = max(1, (self.scr.getmaxyx()[0] - 3) // 2)
             up = ch == curses.KEY_PPAGE
-            # chat is bottom-anchored (up = more offset); the agenda is top-anchored
-            # (up = less offset). End goes to the live/top edge either way.
-            if self.view == "agenda":
-                self.offset = max(0, self.offset + (-step if up else step))
-            else:
-                self.offset, self.pin = chat_scroll(self.offset, self.pin, 1 if up else -1, step)
+            self.offset, self.pin = chat_scroll(self.offset, self.pin, 1 if up else -1, step)
         elif ch == curses.KEY_END:
             self.offset = 0
             self.pin = False
@@ -668,8 +577,6 @@ class Chat:
             self._wheel_scroll()
         elif ch == curses.KEY_RESIZE:
             self._rewrap()
-            if self.view == "agenda":
-                self._refresh_agenda()
         return True
 
     def _wheel_scroll(self) -> None:
@@ -681,12 +588,7 @@ class Chat:
         if not d:
             return
         step = 3
-        # chat is bottom-anchored (wheel up = more offset = older messages); the
-        # agenda is top-anchored, so invert, matching the PgUp/PgDn logic above.
-        if self.view == "agenda":
-            self.offset = max(0, self.offset - d * step)
-        else:
-            self.offset, self.pin = chat_scroll(self.offset, self.pin, d, step)
+        self.offset, self.pin = chat_scroll(self.offset, self.pin, d, step)
 
     def run(self) -> int:
         self._enter_curses()

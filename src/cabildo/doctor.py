@@ -189,29 +189,6 @@ def check_mcp_bus(cwd: str | os.PathLike) -> Check:
     )
 
 
-def check_mcp_issues(cwd: str | os.PathLike) -> Check:
-    """The repo's issue register. Its tools are served by the one `cabildo` server
-    now, not a separate entry, so this only reports whether a register exists here
-    — a tool that answers "no register here" in every session is one the model
-    learns to ignore, so absence elsewhere is expected, not a fault.
-    """
-    if not mcp_config.has_issues(cwd):
-        return Check(
-            "mcp.issues", NA, "no docs/issues/ here (expected; the agenda tools still work)"
-        )
-    registered = mcp_config.SERVER_KEY in _servers(mcp_config.config_path(cwd)) or (
-        mcp_config.SERVER_KEY in _servers(user_mcp_path())
-    )
-    if registered:
-        return Check("mcp.issues", OK, "docs/issues/ present — served by the cabildo server")
-    return Check(
-        "mcp.issues",
-        FAIL,
-        "docs/issues/ exists but the cabildo server is not registered here",
-        "run: `cabildo add .` to wire it",
-    )
-
-
 # --------------------------------------------------------------------------- #
 # The bus database
 # --------------------------------------------------------------------------- #
@@ -511,7 +488,7 @@ def run(cwd: str | os.PathLike | None = None) -> list[Check]:
     do any of it at all (platform).
     """
     cwd = cwd if cwd is not None else os.getcwd()
-    checks = [check_hooks(), check_mcp_bus(cwd), check_mcp_issues(cwd), check_db()]
+    checks = [check_hooks(), check_mcp_bus(cwd), check_db()]
     checks.append(check_daemon())
     checks.append(check_daemon_push())
     checks.append(check_daemon_build())

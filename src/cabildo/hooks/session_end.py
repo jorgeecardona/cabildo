@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-"""SessionEnd hook: leave a handoff note on any task this session still held, then
-mark it ended and drop its advisory locks so a finished agent never blocks the
-others. The handoff runs BEFORE the locks are dropped, since it reads them. Injects
-nothing.
+"""SessionEnd hook: mark the session ended and drop its advisory locks so a
+finished agent never blocks the others. Injects nothing.
 """
 
 from __future__ import annotations
@@ -20,12 +18,6 @@ def main() -> None:
 
     conn = store.connect()
     try:
-        try:
-            from cabildo import handoff
-
-            handoff.on_session_end(conn, session_id)  # note tasks left mid-flight
-        except Exception:
-            pass  # a handoff must never keep a session from ending cleanly
         try:
             from cabildo import minutes
 

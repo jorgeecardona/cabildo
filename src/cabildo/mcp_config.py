@@ -5,12 +5,10 @@ dropping cabildo in there means every session opened in that folder — yours,
 a teammate's, a spawned agent's — joins the bus without anyone remembering to
 register anything. That is the whole point: the folder carries its own wiring.
 
-One `cabildo` server is written. It carries both the bus tools (other agents:
-who is here, messaging, leases) and this repo's issues/agenda tools, merged into
-one server inside the package — so a session sees a single `mcp__cabildo__*`
-surface. Earlier versions wrote a second `issues` entry; `apply` removes that
-stale entry when it finds it, so re-running `cabildo add` migrates an old
-`.mcp.json` in place.
+One `cabildo` server is written, carrying the bus tools: who is here, messaging,
+leases. Earlier versions wrote a second `issues` entry for a register that now
+lives outside cabildo; `apply` removes that stale entry when it finds it, so
+re-running `cabildo add` migrates an old `.mcp.json` in place.
 
 It is not a daemon. Claude Code spawns it as a stdio subprocess, one per session,
 so wiring costs a couple of lines of JSON and no running process.
@@ -95,17 +93,12 @@ def mcp_command() -> list[str]:
 
 
 def server_entry(project: str | None = None) -> dict:
-    """The `.mcp.json` value for the cabildo server — bus + issues/agenda in one."""
+    """The `.mcp.json` value for the cabildo server."""
     cmd = mcp_command()
     entry: dict = {"command": cmd[0], "args": cmd[1:]}
     if project:
         entry["env"] = {"CABILDO_PROJECT": project}
     return entry
-
-
-def has_issues(root: str | os.PathLike) -> bool:
-    """Whether this folder keeps a `docs/issues/` register worth wiring a server for."""
-    return Path(root).joinpath("docs", "issues").is_dir()
 
 
 def config_path(root: str | os.PathLike) -> Path:
@@ -134,9 +127,7 @@ def _dump(p: Path, data: dict) -> Path:
 
 
 def _wanted(project: str | None) -> dict:
-    """The entry we want in this folder: one `cabildo` server carrying bus and
-    issues/agenda tools together.
-    """
+    """The entry we want in this folder: one `cabildo` server."""
     return {SERVER_KEY: server_entry(project)}
 
 
@@ -146,10 +137,9 @@ def apply(
     """Ensure this folder's .mcp.json registers the cabildo server. Returns (path,
     what), where `what` is "added", "updated", or "unchanged".
 
-    `issues` is accepted for backward compatibility and ignored: the one server now
-    carries the register's tools, so there is nothing separate to wire. A stale
-    `issues` entry from an earlier version is removed here, so re-running migrates
-    an old file in place.
+    `issues` is accepted for backward compatibility and ignored: cabildo no longer
+    serves a register. A stale `issues` entry from an earlier version is removed
+    here, so re-running migrates an old file in place.
     """
     p = config_path(root)
     data = load(root)

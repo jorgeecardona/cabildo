@@ -133,26 +133,6 @@ def test_mcp_bus_unregistered_is_a_failure(env):
     assert c.fix
 
 
-def test_mcp_issues_na_without_docs_issues(env):
-    _, cwd = env
-    assert doctor.check_mcp_issues(cwd).status == doctor.NA
-
-
-def test_mcp_issues_ok_when_wired(env):
-    _, cwd = env
-    (cwd / "docs" / "issues").mkdir(parents=True)
-    # The register's tools ride the one cabildo server now — that entry is what counts.
-    (cwd / ".mcp.json").write_text(json.dumps({"mcpServers": {"cabildo": {"command": "x"}}}))
-    assert doctor.check_mcp_issues(cwd).status == doctor.OK
-
-
-def test_mcp_issues_fail_when_register_exists_but_unwired(env):
-    _, cwd = env
-    (cwd / "docs" / "issues").mkdir(parents=True)
-    c = doctor.check_mcp_issues(cwd)
-    assert c.status == doctor.FAIL and c.fix
-
-
 # --------------------------------------------------------------------------- #
 # The bus DB
 # --------------------------------------------------------------------------- #
@@ -241,7 +221,7 @@ def test_run_is_clean_on_a_fully_wired_install(env):
     checks = doctor.run(cwd)
     # No genuine failures: hooks + MCP + DB all good; daemon NA; platform host-dependent.
     assert not doctor.failed(checks)
-    assert {c.name for c in checks} >= {"hooks", "mcp.bus", "mcp.issues", "db", "daemon"}
+    assert {c.name for c in checks} >= {"hooks", "mcp.bus", "db", "daemon"}
 
 
 def test_failed_counts_only_fail_not_warn_or_na():
@@ -339,6 +319,11 @@ def _proc(cmdline, started_at):
     return Proc(pid=4242, ppid=1, comm="python", rss_kb=1, started_at=started_at, cmdline=cmdline)
 
 
+# check_mcp_fresh reads /proc to find running MCP servers, so it is NA off Linux.
+_needs_proc = pytest.mark.skipif(not os.path.isdir("/proc"), reason="check_mcp_fresh needs /proc")
+
+
+@_needs_proc
 def test_mcp_fresh_warns_for_a_server_older_than_the_package(env, monkeypatch):
     import cabildo
 
@@ -352,6 +337,7 @@ def test_mcp_fresh_warns_for_a_server_older_than_the_package(env, monkeypatch):
     assert c.status == doctor.WARN and "4242" in c.detail
 
 
+@_needs_proc
 def test_mcp_fresh_ok_for_a_newer_server_and_ignores_other_processes(env, monkeypatch):
     import cabildo
 

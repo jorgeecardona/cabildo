@@ -9,9 +9,9 @@
     MCP server with Codex (`codex mcp add`, or prints the config block if codex
     is not on PATH) and merges cabildo's hooks into ~/.codex/hooks.json.
   * for the **opencode** client: delegates to `cabildo opencode`, which registers
-    the MCP server in opencode's JSON config (tagged opencode) and installs the
-    /agenda + /sanity commands. opencode has no cabildo hook adapter yet, so it
-    gets messaging, presence and advisory claims, not hook-enforced leases.
+    the MCP server in opencode's JSON config (tagged opencode). opencode has no
+    cabildo hook adapter yet, so it gets messaging, presence and advisory claims,
+    not hook-enforced leases.
 
 Choose clients with `--client {claude,codex,opencode,both,all}` (default: claude,
 which preserves the historical behavior; `both` = claude+codex, `all` = every
@@ -113,9 +113,8 @@ def install_codex() -> None:
 
 def install_opencode() -> None:
     """Wire the opencode client by delegating to the installed `cabildo opencode`,
-    which registers the cabildo MCP server in opencode's JSON config (tagged
-    opencode) and installs the /agenda + /sanity commands. Does not touch
-    ~/.claude/settings.json.
+    which registers the cabildo MCP server in opencode's JSON config, tagged
+    opencode. Does not touch ~/.claude/settings.json.
     """
     print("• wiring opencode (via `cabildo opencode`)")
     sh([str(CABILDO_BIN), "opencode"])
@@ -166,7 +165,6 @@ def preview(clients: tuple[str, ...]) -> None:
 
         print(f"\n• opencode: register the MCP server in {oc.config_path()} (tagged opencode):")
         print(_indent(oc.preview()))
-        print(f"• opencode: install /agenda + /sanity into {oc.command_dir()}")
         print("  (no hooks: opencode gets messaging, presence and advisory claims only)")
 
 

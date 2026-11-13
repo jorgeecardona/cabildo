@@ -134,9 +134,7 @@ cabildo viewer                  # read-only web view on http://127.0.0.1:8787
 - **Platforms**: Linux and macOS, Python 3.11+. Memory-pressure stall detection (PSI) is
   Linux-only.
 
-Beyond these: `claim_issue` and the agenda over `docs/issues/` (the issue store and its `issue_*`
-tools are in [prodc](https://pypi.org/project/prodc/) since 0.9.0),
-other clients on the same bus (`cabildo codex`, `cabildo opencode`), `cabildo sessions` to find a lost session, context-cheap unread/preview handling, and
+Beyond these: other clients on the same bus (`cabildo codex`, `cabildo opencode`), `cabildo sessions` to find a lost session, context-cheap unread/preview handling, and
 per-repo config (`.cabildo/config.toml`).
 
 Put a folder on the bus with `cabildo add --project <name> .`: it pins the project name and writes

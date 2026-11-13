@@ -1,10 +1,8 @@
 """The cabildo MCP server (stdio).
 
 One instance runs per Claude Code session and is the single server a registered
-project sees: the bus tools defined here plus the issues/agenda tools from
-`cabildo.issues_mcp`, merged into one `cabildo` server by `_merge_issue_tools`.
-The modules stay separate — bus coordination here, the register there — but a
-session wires one server, and every tool shows up as `mcp__cabildo__*`.
+project sees: every tool shows up as `mcp__cabildo__*`. Issue tracking is not
+cabildo's job — a project that wants a register wires that server itself.
 
 It never receives the session_id from Claude Code, so it resolves its identity
 via the shared-PID rendezvous: find the owning `claude` process, then look up the
@@ -359,7 +357,7 @@ def note_add(text: str, type: str = "topic") -> dict[str, Any]:
     reads these back instead of re-reading the whole conversation. `type` is
     topic | need | bug | idea | unfinished. The note starts `open`; close it with
     `note_done` when you finish it here, or `note_park` when you promote it to a
-    project issue/agenda item. List them with `notes`.
+    project issue. List them with `notes`.
     """
     with store.connect() as conn:
         sid = _me(conn)
@@ -412,9 +410,9 @@ def note_done(id: int) -> dict[str, Any]:
 @mcp.tool()
 def note_park(id: int, ref: str | None = None) -> dict[str, Any]:
     """Park a session note (state -> parked): it leaves the session to live on as
-    a project issue or agenda item so a later session picks it up without
-    copy-paste. File that issue first (`issue_file` / `agenda_add`) and pass its
-    name as `ref` so the note records where it went. See `notes` for the ids.
+    a project issue so a later session picks it up without copy-paste. File that
+    issue first, in whatever tracker this project uses, and pass its name as
+    `ref` so the note records where it went. See `notes` for the ids.
     """
     with store.connect() as conn:
         _me(conn)
@@ -1595,27 +1593,6 @@ def sessions_trash(
     except sessions_ops.SessionsError as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, "trashed": len(dests), "trash": [str(d) for d in dests]}
-
-
-def _merge_issue_tools() -> None:
-    """Register the issues/agenda tools onto this one `cabildo` server.
-
-    The issues module keeps its own module-level tool definitions (so it stays a
-    separate concern and works with no bus DB); here we adopt them into the single
-    server every session sees. Idempotent — re-adopting the same tool is a no-op.
-    A name shared by two DIFFERENT tools is a real conflict and raises, so the
-    build fails rather than silently dropping one.
-    """
-    from . import issues_mcp
-
-    ours = mcp._tool_manager._tools
-    for name, tool in issues_mcp.mcp._tool_manager._tools.items():
-        if name in ours and ours[name] is not tool:
-            raise RuntimeError(f"MCP tool name collision between bus and issues: {name!r}")
-        ours[name] = tool
-
-
-_merge_issue_tools()
 
 
 def main() -> None:

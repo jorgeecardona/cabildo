@@ -1321,14 +1321,9 @@ def cmd_add(args) -> int:
         except (ValueError, OSError) as e:
             print(f"  {C.RED}could not write .mcp.json: {e}{C.OFF}", file=sys.stderr)
             return 1
-        wired = "cabildo " + C.DIM + "(bus + issues/agenda tools)" + C.OFF
+        wired = "cabildo " + C.DIM + "(the bus tools)" + C.OFF
         color = C.DIM if what == "unchanged" else C.GREEN
         print(f"  {color}{what}{C.OFF} {p} {C.DIM}—{C.OFF} {wired}")
-        if not mcp_config.has_issues(root):
-            print(
-                f"  {C.DIM}no docs/issues/ here yet; the register tools still load. "
-                f"`cabildo issues init {root}` starts one.{C.OFF}"
-            )
         print(
             f"  {C.DIM}Claude Code asks once to approve a project MCP server; "
             f".mcp.json is meant to be committed — gitignore it if this wiring "
@@ -1430,9 +1425,9 @@ def cmd_codex(args) -> int:
 
 def cmd_opencode(args) -> int:
     """Wire opencode onto the same bus as Claude Code and Codex. Edits opencode's
-    JSON config directly (only cabildo's own entry, tagged opencode) and installs the
-    /agenda + /sanity commands. No hooks yet: opencode gets messaging, presence and
-    advisory claims, but not hook-enforced file leases.
+    JSON config directly: only cabildo's own entry, tagged opencode. No hooks yet:
+    opencode gets messaging, presence and advisory claims, but not hook-enforced
+    file leases.
     """
     from . import opencode_config, store
     from .context import _git_project
@@ -1448,14 +1443,12 @@ def cmd_opencode(args) -> int:
 
     if args.remove:
         p, what = opencode_config.remove()
-        print(f"{C.YELLOW}opencode{C.OFF} {C.DIM}—{C.OFF} {p} ({what}); commands removed")
+        print(f"{C.YELLOW}opencode{C.OFF} {C.DIM}—{C.OFF} {p} ({what})")
         return 0
 
     if args.print_only:
         print(f"{C.DIM}would write {cfg}:{C.OFF}")
         print(opencode_config.preview(project, home))
-        cmds = ", ".join(opencode_config.COMMANDS)
-        print(f"{C.DIM}and install into {opencode_config.command_dir()}: {cmds}{C.OFF}")
         return 0
 
     try:
@@ -1465,10 +1458,6 @@ def cmd_opencode(args) -> int:
         return 1
     color = C.DIM if what == "unchanged" else C.GREEN
     print(f"  {color}{what}{C.OFF} {p} {C.DIM}— cabildo MCP, tagged opencode{C.OFF}")
-    print(
-        f"  {C.GREEN}installed{C.OFF} {opencode_config.command_dir()} "
-        f"{C.DIM}— /agenda, /sanity{C.OFF}"
-    )
     print(
         f"  {C.DIM}CABILDO_CLIENT=opencode tags this session on the bus; CABILDO_HOME pins "
         f"the shared DB. Restart opencode to pick it up.{C.OFF}"
@@ -1675,122 +1664,6 @@ def cmd_notes(args) -> int:
             f"{C.DIM}{when}{C.OFF} {g} {C.BOLD}#{r['id']}{C.OFF} "
             f"{C.CYAN}{r['type']}{C.OFF}{who}: {r['text']}{ref}"
         )
-    return 0
-
-
-# --------------------------------------------------------------------------- #
-# The project register
-# --------------------------------------------------------------------------- #
-def cmd_issues(args) -> int:
-    """The human's seat at a project's `docs/issues/` — same module the `issues`
-    MCP server calls, so what you see here is what an agent sees.
-    """
-    from prodc import issue_store as reg
-
-    start = Path(os.path.expanduser(args.folder)).resolve()
-    folder = reg.find_folder(start)
-
-    if args.action == "init":
-        folder = folder or start / "docs" / "issues"
-        cfg = folder / reg.CONFIG_NAME
-        if cfg.exists() and not args.force:
-            print(f"{C.YELLOW}exists{C.OFF} {cfg} {C.DIM}(--force to rewrite){C.OFF}")
-            return 1
-        found, _ = reg.load_all(folder) if folder.is_dir() else ((), ())
-        if found:
-            # Adoption: describe the folder as it stands, so `check` passes before anything is
-            # edited. Tightening afterwards is then a decision, not a migration forced by a tool.
-            folder.mkdir(parents=True, exist_ok=True)
-            cfg.write_text(reg.infer_config(folder))
-            print(f"{C.GREEN}wrote{C.OFF} {cfg}")
-            print(
-                f"  {C.DIM}inferred from {len(found)} issue(s) already here, so `check` passes "
-                f"today. Tighten it deliberately.{C.OFF}"
-            )
-            return 0
-        written = reg.scaffold(folder, areas=args.area or ())
-        for p in written:
-            print(f"{C.GREEN}wrote{C.OFF} {p}")
-        if not written:
-            print(f"{C.DIM}nothing to write — {folder} already has both{C.OFF}")
-        if not args.area:
-            print(
-                f"  {C.YELLOW}no areas declared{C.OFF} {C.DIM}— until you set `areas` in "
-                f"config.toml, any area is accepted and every typo becomes a new one. "
-                f"Re-run with --area <name> --area <name>.{C.OFF}"
-            )
-        return 0
-
-    if folder is None:
-        print(
-            f"{C.RED}no docs/issues/{C.OFF} at or above {start}\n"
-            f"  {C.DIM}`cabildo issues init -C {start}` starts one{C.OFF}",
-            file=sys.stderr,
-        )
-        return 2
-
-    if args.action == "check":
-        problems = reg.check(folder)
-        for problem in problems:
-            print(f"{C.RED}✗{C.OFF} {problem}", file=sys.stderr)
-        if problems:
-            print(f"\n{len(problems)} problem(s) in {folder}", file=sys.stderr)
-            return 1
-        found, _ = reg.load_all(folder)
-        print(f"{C.GREEN}clean{C.OFF} {folder} {C.DIM}({len(found)} follow-ups){C.OFF}")
-        return 0
-
-    if args.action == "reindex":
-        reg.reindex(folder)
-        print(f"reindexed {folder / reg.README_NAME}")
-        return 0
-
-    if args.action == "show":
-        if not args.name:
-            print("show needs a name", file=sys.stderr)
-            return 2
-        print(reg.resolve(folder, args.name).read_text())
-        return 0
-
-    if args.action == "list":
-        found, broken = reg.load_all(folder)
-        for i in found:
-            if args.status and i.status != args.status:
-                continue
-            if not args.status and not i.open:
-                continue
-            if args.area and i.area not in args.area:
-                continue
-            if args.owner and (i.owner or "none") != args.owner:
-                continue
-            owner = f" {C.CYAN}@{i.owner}{C.OFF}" if i.owner else ""
-            print(
-                f"{C.BOLD}{i.slug}{C.OFF}{owner}\n  {C.DIM}[{i.status}] {i.area}{C.OFF} — {i.title}"
-            )
-        for p in broken:
-            print(f"{C.RED}unparseable{C.OFF} {p}", file=sys.stderr)
-        return 0
-
-    # ready — the default, and the question worth asking
-    b = reg.board(folder, owner=args.owner)
-    if b.ready:
-        print(f"{C.GREEN}READY{C.OFF} {C.DIM}— nothing blocks these, nobody owns them{C.OFF}")
-        for i in b.ready:
-            print(f"  {C.BOLD}{i.slug}{C.OFF}\n    {i.title}\n    {C.DIM}{i.area}{C.OFF}")
-    else:
-        print(
-            f"{C.YELLOW}nothing ready{C.OFF} {C.DIM}— every open issue is owned or blocked{C.OFF}"
-        )
-    if b.mine:
-        print(f"\n{C.CYAN}YOURS{C.OFF}")
-        for i in b.mine:
-            print(f"  {C.BOLD}{i.slug}{C.OFF} {C.DIM}[{i.status}]{C.OFF} — {i.title}")
-    if b.waiting:
-        print(f"\n{C.DIM}WAITING ({len(b.waiting)}){C.OFF}")
-        for w in b.waiting:
-            print(f"  {C.DIM}{w.issue.slug} — {w.reason}{C.OFF}")
-    if b.done:
-        print(f"\n{C.DIM}{b.done} done.{C.OFF}")
     return 0
 
 
@@ -2500,7 +2373,7 @@ def main(argv: list[str] | None = None) -> int:
 
     oc = sub.add_parser(
         "opencode",
-        help="wire opencode onto the same bus (edits opencode.json, installs /agenda + /sanity)",
+        help="wire opencode onto the same bus (edits opencode.json)",
     )
     oc.add_argument("path", nargs="?", default=".", help="folder to derive the project name from")
     oc.add_argument(
@@ -2513,7 +2386,7 @@ def main(argv: list[str] | None = None) -> int:
         help="show what would be done, change nothing",
     )
     oc.add_argument(
-        "--remove", action="store_true", help="undo: drop cabildo from opencode's config + commands"
+        "--remove", action="store_true", help="undo: drop cabildo from opencode's config"
     )
     oc.set_defaults(fn=cmd_opencode)
 
@@ -2585,39 +2458,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     nt.add_argument("--done", type=int, metavar="ID", help="mark note ID done and exit")
     nt.add_argument("--park", type=int, metavar="ID", help="mark note ID parked and exit")
-    nt.add_argument("--ref", help="with --park: where it went (issue name / agenda item)")
+    nt.add_argument("--ref", help="with --park: where it went (issue name, MR, ticket)")
     nt.set_defaults(fn=cmd_notes)
-
-    iss = sub.add_parser(
-        "issues", help="this project's docs/issues register: what's ready, what's blocked"
-    )
-    iss.add_argument(
-        "action",
-        nargs="?",
-        default="ready",
-        choices=["ready", "list", "show", "check", "reindex", "init"],
-        help="default: ready — what is unblocked and unowned",
-    )
-    iss.add_argument("name", nargs="?", help="for `show`: a filename or slug fragment")
-    iss.add_argument(
-        "-C",
-        "--folder",
-        metavar="DIR",
-        default=".",
-        help="where to look for docs/issues (default: cwd, searching upward)",
-    )
-    iss.add_argument("--status", help="filter: open | in-progress | blocked | done")
-    iss.add_argument("--owner", help="filter: a handle, or `none` for unowned")
-    iss.add_argument(
-        "--area",
-        action="append",
-        metavar="NAME",
-        help="filter by area; on `init` for a new folder, declare one (repeatable)",
-    )
-    iss.add_argument(
-        "--force", action="store_true", help="for `init`: overwrite an existing config.toml"
-    )
-    iss.set_defaults(fn=cmd_issues)
 
     sv = sub.add_parser("service", help="run the daemon as a systemd --user service")
     sv.add_argument(

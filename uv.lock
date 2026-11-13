@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -80,7 +80,6 @@ source = { editable = "." }
 dependencies = [
     { name = "mcp" },
     { name = "playwright" },
-    { name = "prodc" },
     { name = "textual" },
     { name = "textual-tty" },
     { name = "zeroconf" },
@@ -95,6 +94,7 @@ docs = [
 [package.dev-dependencies]
 dev = [
     { name = "musil" },
+    { name = "prodc" },
     { name = "pyright", extra = ["nodejs"] },
     { name = "pytest" },
     { name = "ruff" },
@@ -107,7 +107,6 @@ requires-dist = [
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5" },
     { name = "playwright", specifier = ">=1.50,<2" },
-    { name = "prodc", specifier = ">=0.10.6,<0.11" },
     { name = "textual", specifier = "==8.2.8" },
     { name = "textual-tty", specifier = "==0.4.0" },
     { name = "zeroconf", specifier = ">=0.130,<1" },
@@ -117,6 +116,7 @@ provides-extras = ["docs"]
 [package.metadata.requires-dev]
 dev = [
     { name = "musil", marker = "python_full_version >= '3.12'", specifier = ">=0.35" },
+    { name = "prodc", specifier = ">=0.10.6,<0.11" },
     { name = "pyright", extras = ["nodejs"], specifier = ">=1.1.390" },
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.6" },

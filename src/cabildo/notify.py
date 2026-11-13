@@ -5,7 +5,6 @@ these push in the model's context every turn, so brevity matters.
 from __future__ import annotations
 
 import datetime
-import pathlib
 import sqlite3
 
 from . import store
@@ -305,55 +304,6 @@ def _join(*parts: str | None) -> str | None:
     return "\n".join(kept) if kept else None
 
 
-def register_line(cwd: str | None, handle: str | None = None) -> str | None:
-    """One line about this project's issue register, or None when it has none.
-
-    Measured, not guessed: over the first five hours across three repos, agents called `file_issue`
-    thirteen times and `board` four. They use the register to record and almost never to plan —
-    reasonably, since each arrives already told what to do. Naming the tool "start here" in its own
-    description did not change that, because a tool description is read when you are already
-    choosing a tool.
-
-    So the cue goes where an agent looks before it has chosen anything, states the count so the
-    board is a fact rather than an invitation, and names the top-ranked item so "there is ordered
-    work here" is concrete. Silent when there is no register, which is most projects.
-    """
-    if not cwd:
-        return None
-    try:
-        from prodc import issue_store as issues
-
-        folder = issues.find_folder(pathlib.Path(cwd))
-        if folder is None:
-            return None
-        config = issues.load_config(folder)
-        board = issues.board(folder, config, owner=handle)
-    except Exception:
-        return None  # a broken register must never cost anyone a session
-    if not (board.ready or board.mine or board.waiting):
-        return None
-
-    bits = [f"{len(board.ready)} ready"]
-    if board.waiting:
-        bits.append(f"{len(board.waiting)} waiting")
-    if board.mine:
-        bits.append(f"{len(board.mine)} yours")
-    line = f"📋 register: {', '.join(bits)} — `issue_board` to plan, `issue_file` for what you "
-    line += "find and won't fix now."
-    if board.ready:
-        top = board.ready[0]
-        rank = config.ranking
-        mark = ""
-        if rank is not None:
-            value = top.extra.get(rank.name)
-            if isinstance(value, str):
-                mark = f"[{value}] "
-        # The top item by name, because a count is an invitation and a title is a fact. The slug is
-        # what `issue_show`/`claim_issue` take, so this line can be acted on without a lookup.
-        line += f"\n   next: {mark}{top.title[:64]} — {top.slug}"
-    return line
-
-
 # Once this many *other* agents are live on a project, a starting session is nudged
 # to claim its task before editing, so a crowded swarm does not duplicate work.
 WIP_NUDGE_PEERS = 3
@@ -387,8 +337,8 @@ def session_banner(conn: sqlite3.Connection, session_id: str) -> str:
         if len(peers) >= WIP_NUDGE_PEERS:
             lines.append(
                 f"⚠ {len(peers) + 1} agents live here. Claim your task first "
-                "(claim / agenda_claim) before you edit — an unclaimed start is how two "
-                "agents end up doing the same work."
+                "(`claim`) before you edit — an unclaimed start is how two agents "
+                "end up doing the same work."
             )
     else:
         lines.append("No other agents currently active on this project.")
@@ -408,10 +358,6 @@ def session_banner(conn: sqlite3.Connection, session_id: str) -> str:
     if human:
         lines.append(f"📝 {len(human)} note(s) from Jorge for this session:")
         lines.extend(f"  #{n['id']} {n['text']}" for n in human[:10])
-
-    reg = register_line(me["cwd"] if me else None, me["handle"] if me else None)
-    if reg:
-        lines.append(reg)
 
     lines.append(
         "Coordinate with other agents via: send / inbox / read / list_agents / "

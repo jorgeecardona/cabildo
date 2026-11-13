@@ -38,7 +38,6 @@ COMMANDS = [
     "friction",
     "improve",
     "notes",
-    "issues",
     "service",
     "viewer",
     "doctor",

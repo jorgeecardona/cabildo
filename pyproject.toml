@@ -30,8 +30,6 @@ dependencies = [
     # session whose MCP tools silently never appear. Relax this in the same commit that migrates
     # the imports, not before.
     "mcp>=1.2,<2",
-    # the issue store (docs/issues): moved to prodc in 0.9.0
-    "prodc>=0.10.6,<0.11",  # a prodc minor can change the Issue API; check before lifting
     "zeroconf>=0.130,<1",
     # the session switcher (cabildo.workspace) uses private APIs of both: pinned
     "textual==8.2.8",
@@ -71,6 +69,10 @@ dev = [
     "pytest>=8",
     "musil>=0.35; python_version >= '3.12'",
     "vulture>=2.11",
+    # This repo keeps its own follow-ups in docs/issues/, which prodc owns (`prodc issue board`).
+    # Dev-only on purpose: the package serves no register, so prodc must never reach
+    # [project.dependencies] — `pip install cabildo` is the bus and nothing else.
+    "prodc>=0.10.6,<0.11",
 ]
 
 [tool.pytest.ini_options]

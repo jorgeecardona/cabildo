@@ -1,8 +1,8 @@
 """Standup: who touched what over a window, from cabildo's own record — messages,
 task claims (claim = flow), spawns, and token cost — instead of scraped chat.
 
-Read-only: it never changes state. Same data the viewer and the agenda draw on, so
-what the standup says an agent did is what actually crossed the bus.
+Read-only: it never changes state. Same data the viewer draws on, so what the
+standup says an agent did is what actually crossed the bus.
 """
 
 from __future__ import annotations

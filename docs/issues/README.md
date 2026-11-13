@@ -50,20 +50,20 @@ something; `blocked_by` names the *work* it waits on. Only the second can be com
 
 ## Tooling — the folder checks itself
 
-Managed by `cabildo issues`. The CLI, the `issues` MCP server, and any pre-commit gate are one
-module, so the tool an agent calls and the gate that grades it cannot disagree.
-`docs/issues/config.toml` holds this folder's specifics.
+Managed by [prodc](https://pypi.org/project/prodc/), which owns the issue store and serves the
+same folder to agents over its own MCP server, so the tool an agent calls and the gate that
+grades it cannot disagree. `docs/issues/config.toml` holds this folder's specifics.
 
 ```bash
-cabildo issues                # what's ready, what's yours, what everything else waits on
-cabildo issues check          # the invariants; non-zero on problems
-cabildo issues reindex        # regenerate the index below
-cabildo issues show <slug>
+prodc issue board             # what's ready, what's yours, what everything else waits on
+prodc issue check             # the invariants; non-zero on problems
+prodc issue reindex           # regenerate the index below
+prodc issue show <slug>
 ```
 
 ## Open now
 
-<!-- BEGIN GENERATED INDEX — `cabildo issues reindex` -->
+<!-- BEGIN GENERATED INDEX — `prodc issue reindex` -->
 | Issue | Area | Scope | Verify | Status | Waiting on |
 |---|---|---|---|---|---|
 | [Browser lifecycle is managed by a loose script and hand-edited JSON, not by cabildo](29-08-2026-cabildo-browser-subcommand.md) | cli | M | probe | open | — |
@@ -72,5 +72,5 @@ cabildo issues show <slug>
 | [Fleet-aware attention engine: schedule-driven wind-down, bedtime signal, and a day-timeline viewer](04-10-2026-fleet-aware-attention-engine-schedule-driven-wind-down-bedtime-signal-and-a.md) | scheduling | L | probe | open | — |
 | [Test suite pollutes the real repo — scratch commits, leftover worktrees, and a push to origin/main](19-10-2026-test-suite-pollutes-the-real-repo-and-has-pushed-to-origin-main.md) | tests | M | test | open | — |
 
-_5 open — 5 open; 2 done. Generated; edit the files, then `cabildo issues reindex`._
+_5 open — 5 open; 2 done. Generated; edit the files, then `prodc issue reindex`._
 <!-- END GENERATED INDEX -->

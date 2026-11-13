@@ -4,9 +4,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
-- The issue store moved to prodc 0.9.0. cabildo depends on `prodc>=0.9.0`; the `board`,
-  `show_issue`, `file_issue`, `update_issue`, `close_issue` and `check_issues` tools are gone.
-  Use prodc's `issue_*` tools. `claim_issue` and the agenda tools stay.
+- cabildo has no dependency on prodc and no issue tracking of its own. Issue tracking is not
+  cabildo's responsibility: `pip install cabildo` now pulls `mcp`, `zeroconf`, `textual`,
+  `textual-tty` and `playwright`, nothing else. What went with it: the `claim_issue`,
+  `next_issue` and `agenda_*` MCP tools, the `cabildo issues` CLI, the `/agenda` and `/sanity`
+  commands installed into opencode, the agenda pane and `/agenda` toggle in `cabildo watch`,
+  the handoff note written on SessionEnd, the `📋 register:` line in the SessionStart banner,
+  and the `mcp.issues` doctor check. A project that wants a register wires that server itself;
+  [prodc](https://pypi.org/project/prodc/) serves the same `docs/issues/` folder.
 - `cabildo improve daily` scans friction and writes proposals; Fable argues against each. The
   ones it approves pop up with Approve and Reject, and Approve has an agent apply the change.
 - `cabildo friction scan` finds the turns where you corrected or complained about the tools.

@@ -1,5 +1,5 @@
-"""Wiring opencode onto the bus: the cabildo MCP entry (tagged opencode) merged into
-opencode's JSON config, and the shipped /agenda + /sanity commands installed.
+"""Wiring opencode onto the bus: the cabildo MCP entry, tagged opencode, merged into
+opencode's JSON config.
 """
 
 from __future__ import annotations
@@ -29,13 +29,6 @@ def test_apply_writes_the_cabildo_entry_tagged_opencode(opencode_home):
     assert entry["environment"]["CABILDO_HOME"] == "/opt/cabildo-home"
 
 
-def test_apply_installs_the_commands(opencode_home):
-    oc.apply()
-    for name in oc.COMMANDS:
-        assert (oc.command_dir() / name).exists()
-    assert "agenda_view" in (oc.command_dir() / "agenda.md").read_text()
-
-
 def test_apply_is_idempotent_and_leaves_other_servers_alone(opencode_home):
     oc.config_path().parent.mkdir(parents=True)
     oc.config_path().write_text(json.dumps({"mcp": {"theirs": {"command": ["x"]}}}))
@@ -46,7 +39,7 @@ def test_apply_is_idempotent_and_leaves_other_servers_alone(opencode_home):
     assert set(data["mcp"]) == {"theirs", "cabildo"}  # unrelated server untouched
 
 
-def test_remove_takes_out_cabildo_and_its_commands(opencode_home):
+def test_remove_takes_out_cabildo_only(opencode_home):
     oc.config_path().parent.mkdir(parents=True)
     oc.config_path().write_text(json.dumps({"mcp": {"theirs": {"command": ["x"]}}}))
     oc.apply()
@@ -54,7 +47,6 @@ def test_remove_takes_out_cabildo_and_its_commands(opencode_home):
     assert what == "removed"
     data = json.loads(p.read_text())
     assert set(data["mcp"]) == {"theirs"}  # ours gone, theirs kept
-    assert not any((oc.command_dir() / n).exists() for n in oc.COMMANDS)
 
 
 def test_malformed_config_raises_rather_than_clobbering(opencode_home):
