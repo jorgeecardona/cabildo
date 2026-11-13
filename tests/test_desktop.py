@@ -24,6 +24,13 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+# Same reason, one API younger: `backend()` postdates the installed build too.
+_has_backend = pytest.mark.skipif(
+    not hasattr(desktop, "backend"),
+    reason="desktop.backend() absent from the installed build; CI verifies it",
+)
+
+
 def _run(returncode=0, stdout="", stderr=""):
     """A fake subprocess.run() that ignores its args and returns a canned result."""
 
@@ -75,6 +82,36 @@ def test_darwin_available_does_not_care_about_notify_send(darwin, monkeypatch):
     )
     monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
     assert desktop.available() is True
+
+
+# --------------------------------------------------------------------------- #
+# backend()
+# --------------------------------------------------------------------------- #
+@_has_backend
+def test_backend_names_terminal_notifier_when_installed(darwin, monkeypatch):
+    monkeypatch.setattr(desktop.shutil, "which", lambda _name: "/usr/local/bin/x")
+    assert desktop.backend() == "terminal-notifier"
+
+
+@_has_backend
+def test_backend_falls_back_to_osascript(darwin, monkeypatch):
+    monkeypatch.setattr(
+        desktop.shutil, "which", lambda name: "/usr/bin/osascript" if name == "osascript" else None
+    )
+    assert desktop.backend() == "osascript"
+
+
+@_has_backend
+def test_backend_is_notify_send_on_linux(linux, monkeypatch):
+    monkeypatch.setattr(desktop.shutil, "which", lambda _name: "/usr/bin/notify-send")
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus")
+    assert desktop.backend() == "notify-send"
+
+
+@_has_backend
+def test_backend_is_empty_when_nothing_is_available(darwin, monkeypatch):
+    monkeypatch.setattr(desktop.shutil, "which", lambda _name: None)
+    assert desktop.backend() == ""
 
 
 # --------------------------------------------------------------------------- #

@@ -49,6 +49,20 @@ def available() -> bool:
     )
 
 
+def backend() -> str:
+    """Which notifier this platform will actually use, or "" when there is none.
+
+    One of "notify-send", "terminal-notifier" or "osascript". `cabildo doctor` reports it:
+    the three differ in what `ask` looks like (banner buttons for the first two, a modal
+    dialog for osascript), which is the difference a human notices.
+    """
+    if not available():
+        return ""
+    if _DARWIN:
+        return "terminal-notifier" if shutil.which("terminal-notifier") else "osascript"
+    return "notify-send"
+
+
 def notify(summary: str, body: str, *, urgent: bool = False, timeout_ms: int = 12000) -> bool:
     """Pop a desktop notification. Returns whether it was actually sent.
 

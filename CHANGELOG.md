@@ -16,6 +16,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Fixed
 
+- `cabildo doctor` no longer claims macOS has no desktop alerts. It names the notifier
+  actually in use (`notify-send`, `terminal-notifier` or `osascript`) and, on the osascript
+  fallback, says Grant/Deny comes up as a modal dialog unless terminal-notifier is installed.
 - `guard install` is now read-only: it prints what it would do and directs you to
   `make install-hooks`, but never writes hook files. Hook files belong to the
   tracked `.githooks/` directory, managed by `make install-hooks`.

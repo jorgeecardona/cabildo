@@ -19,10 +19,12 @@ The install spans four places that fail independently and silently:
 None of those failures announce themselves near their cause: a missing hook
 looks like an agent that just never shows up. And one whole class of failure has
 no error at all — cabildo leans on Linux /proc for process identity (the PID
-rendezvous that binds an MCP subprocess to the session the hooks see) and on
-notify-send for desktop alerts. On macOS both are simply absent, so the install
-"succeeds" and then quietly does half of nothing. doctor names that here, at
-check time, instead of leaving it to be discovered.
+rendezvous that binds an MCP subprocess to the session the hooks see), which is
+simply absent on macOS, so the install "succeeds" and then quietly does half of
+nothing. Desktop alerts work on both (notify-send on Linux, osascript on macOS),
+but the macOS button round-trip is a modal dialog unless terminal-notifier is
+installed. doctor names all of that here, at check time, instead of leaving it
+to be discovered.
 
 Read-only and best-effort: every probe degrades to a reported failure rather
 than a traceback, because a health check that can crash is worse than none.
@@ -466,16 +468,24 @@ def check_platform() -> list[Check]:
             )
         )
 
-    # notify-send + a session bus: how the daemon reaches the desktop.
-    if desktop.available():
-        checks.append(Check("platform.notify", OK, "notify-send + session bus — alerts will show"))
+    # How the daemon reaches the desktop: notify-send + a session bus on Linux,
+    # osascript on macOS. Both carry alerts; only the Grant/Deny round-trip differs.
+    notifier = desktop.backend()
+    if notifier:
+        detail = {
+            "notify-send": "notify-send + session bus — alerts and Grant/Deny buttons will show",
+            "terminal-notifier": "terminal-notifier — alerts and Grant/Deny buttons will show",
+            "osascript": "osascript — alerts show; Grant/Deny is a modal dialog "
+            "(brew install terminal-notifier for banner buttons)",
+        }[notifier]
+        checks.append(Check("platform.notify", OK, detail))
     else:
         checks.append(
             Check(
                 "platform.notify",
                 WARN,
-                "notify-send unavailable — desktop alerts won't show",
-                "install libnotify (Linux); macOS has no notify-send, so the daemon stays silent",
+                "no desktop notifier — alerts won't show",
+                "install libnotify for notify-send (Linux); osascript is missing (macOS)",
             )
         )
 
