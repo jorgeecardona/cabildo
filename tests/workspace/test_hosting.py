@@ -270,6 +270,13 @@ def test_main_starts_in_the_list_directory(monkeypatch, tmp_path) -> None:
     assert seen == [str(tmp_path)]
 
 
+#: These read /proc directly, or assert on the per-process CPU/memory column, which
+#: `SwitcherApp` itself reports as "CPU and memory per session need Linux /proc". Off Linux
+#: there is nothing to read, so they are skipped rather than failing every run on a Mac.
+_needs_proc = pytest.mark.skipif(not os.path.isdir("/proc"), reason="reads /proc")
+
+
+@_needs_proc
 def test_no_claude_is_left_after_the_tests_app_closes(three, monkeypatch) -> None:
     pids: list[int] = []
 
@@ -471,6 +478,7 @@ def test_n_drops_a_new_conversation_that_ended_without_an_id(three, monkeypatch)
 # --- a: another directory's conversation ------------------------------------------------
 
 
+@_needs_proc
 def test_another_directorys_conversation_runs_in_its_directory(
     three, monkeypatch, tmp_path
 ) -> None:
@@ -796,6 +804,7 @@ async def two_samples(app, pilot) -> None:
         await pilot.pause(0.3)
 
 
+@_needs_proc
 def test_a_running_conversation_shows_its_cpu_and_memory(three, monkeypatch) -> None:
     seen: list = []
 
@@ -829,6 +838,7 @@ def test_a_running_conversation_shows_its_cpu_and_memory(three, monkeypatch) -> 
     assert len({len(x) for x in [header, this, *line]}) == 1
 
 
+@_needs_proc
 def test_t_shows_each_session_and_its_processes(three, monkeypatch) -> None:
     from cabildo.workspace.app import TopScreen
 
@@ -979,6 +989,7 @@ def test_n_under_a_one_group_filter_uses_its_launch_and_joins_it(
     assert seen == ["FAKE --model m-work", "Work", ["new-sid", "s0"]]
 
 
+@_needs_proc
 def test_a_conversation_sampled_once_shows_its_memory_and_waits_for_cpu(three, monkeypatch) -> None:
     seen: list = []
 
@@ -994,6 +1005,7 @@ def test_a_conversation_sampled_once_shows_its_memory_and_waits_for_cpu(three, m
     assert cpu == "…" and mem.endswith("M")
 
 
+@_needs_proc
 def test_all_running_shows_when_more_than_the_shown_conversation_runs(three, monkeypatch) -> None:
     seen: list = []
 

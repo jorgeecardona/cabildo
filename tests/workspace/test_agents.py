@@ -176,6 +176,7 @@ def test_wait_exit() -> None:
     assert not agents.wait_exit([os.getpid()], timeout=0.1)  # still running
 
 
+@pytest.mark.skipif(not os.path.isdir("/proc"), reason="zombie detection reads /proc/<pid>/stat")
 def test_wait_exit_counts_a_zombie_as_gone() -> None:
     p = subprocess.Popen(["true"])  # exits; nobody reaps it yet
     assert agents.wait_exit([p.pid], timeout=2)
