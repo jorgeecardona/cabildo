@@ -1,5 +1,5 @@
 site_name: cabildo
-site_description: IPC bus + chat room for coordinating parallel Claude Code agents — messaging, presence, and advisory locks with hook-level enforcement.
+site_description: "Messaging and advisory locks for Claude Code sessions working on the same repository."
 site_url: https://cardona-oss.gitlab.io/cabildo/
 repo_url: https://gitlab.com/cardona-oss/cabildo
 repo_name: cardona-oss/cabildo
@@ -45,6 +45,16 @@ markdown_extensions:
 
 plugins:
   - search
+  - llmstxt:
+      markdown_description: "Sessions send each other messages and claim locks through MCP tools, and a PreToolUse hook denies a git push while another session holds the push lock; everything stays in one local SQLite file."
+      full_output: llms-full.txt
+      sections:
+        Usage documentation:
+          - index.md
+          - channels.md
+          - roles.md
+          - browser.md
+          - design/broker-service.md
 
 nav:
   - Home: index.md
