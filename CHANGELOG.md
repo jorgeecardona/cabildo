@@ -35,6 +35,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   a command that prints it; the key is never stored by cabildo. It must be an Admin API
   key (`sk-ant-admin…`) or an `org:admin` token — the endpoint rejects the ordinary key
   Claude Code runs on, and cabildo says so rather than reporting a bare 403.
+- `R` in the workspace no longer ends the Claude sessions. The reload already re-executed
+  the same process, which keeps its process id, its open descriptors and its children; what
+  ended the sessions was the app quitting first, since unmounting a pane closes its
+  pseudo-terminal. A reload now hands each pane's pseudo-terminal across the restart and
+  attaches to it on the other side, so it no longer asks before reloading. Two things to
+  know: a pane's scrollback is lost, because it lived in the program being replaced (Claude
+  redraws its current screen), and a session whose Claude died during the restart is hung
+  up rather than left on a terminal nobody reads.
 - `A` in the workspace opens a year of token use as a calendar, one cell per day, weeks as
   columns: the shape every contribution graph uses. Shaded by tokens rather than dollars,
   since tokens do not go stale when a rate card changes and they cover models the price

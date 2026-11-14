@@ -6,6 +6,7 @@ echoes keys) in a real pseudo-terminal; the app runs headless through the pilot.
 
 from __future__ import annotations
 
+import fcntl
 import os
 
 import pytest
@@ -16,7 +17,7 @@ from textual.widgets import DataTable
 from textual_tty import Terminal
 
 import cabildo.workspace.app as app_module
-from cabildo.workspace import agents, sessions, state
+from cabildo.workspace import agents, attach, sessions, state
 from cabildo.workspace.app import SwitcherApp
 from cabildo.workspace.hosting import ClaudePane
 from cabildo.workspace.launch import Config, Launch
@@ -1060,3 +1061,107 @@ def test_an_unchanged_mode_line_is_not_repainted(three, monkeypatch) -> None:
 
     drive(monkeypatch, scenario)
     assert seen == [[]]  # (#9)
+
+
+# --- reload: the Claudes are handed over, not closed -------------------------------
+
+
+def test_reload_hands_its_claudes_over_instead_of_closing_them(three, monkeypatch) -> None:
+    """`R` re-execs this process, which keeps its children. So a reload must detach each
+    pane -- leaving the child running on a descriptor that survives exec -- rather than
+    close it, which is what used to end every session on reload.
+    """
+    seen: dict = {}
+
+    async def scenario(app, pilot) -> None:
+        pane = await open_row(app, pilot, 0)
+        pid = pane.pid
+        assert pid is not None
+        app.action_reload()
+        await settle(app, pilot)
+        seen.update(pid=pid, handoff=os.environ.get(attach.ENV, ""), asked=app.reload_asked)
+
+    drive(monkeypatch, scenario)
+    handed = attach.decode(seen["handoff"])
+    os.environ.pop(attach.ENV, None)
+    try:
+        assert seen["asked"] is True
+        assert [h.pid for h in handed] == [seen["pid"]]
+        assert alive(seen["pid"])  # not hung up: the reload kept it
+        assert not fcntl.fcntl(handed[0].fd, fcntl.F_GETFD) & fcntl.FD_CLOEXEC
+    finally:
+        for h in handed:
+            attach.discard(h.fd)
+            attach.hangup(h.pid)
+
+
+@_needs_proc
+def test_a_plain_quit_still_closes_its_claudes(three, monkeypatch) -> None:
+    """The detach is for reload alone: quitting must end the sessions as it always did,
+    and leave no descriptor written down for a next start to attach to.
+    """
+    seen: dict = {}
+
+    async def scenario(app, pilot) -> None:
+        pane = await open_row(app, pilot, 0)
+        seen["pid"] = pane.pid
+        app._quit()
+        await settle(app, pilot)
+        seen["handoff"] = os.environ.get(attach.ENV, "")
+
+    drive(monkeypatch, scenario)
+    assert seen["handoff"] == ""
+    assert agents.wait_exit([seen["pid"]], timeout=3)
+
+
+def test_a_restarted_app_attaches_to_the_claude_it_was_handed(three, monkeypatch) -> None:
+    """The other half of a reload: with a handoff in the environment, the app builds its
+    pane around the pseudo-terminal that came through exec instead of spawning a Claude.
+    The child here is a plain `cat`, which echoes, so the pane proves it is really wired
+    to the process that was already running.
+    """
+    import pty as _pty
+    import subprocess
+
+    master, slave = _pty.openpty()
+    child = subprocess.Popen(
+        ["cat"], stdin=slave, stdout=slave, stderr=slave, start_new_session=True
+    )
+    os.close(slave)
+    kept = attach.keep_across_exec(master)
+    os.close(master)
+    monkeypatch.setenv(
+        attach.ENV,
+        attach.encode(
+            [
+                attach.Handed(
+                    fd=kept,
+                    pid=child.pid,
+                    pane_id="pane-1",
+                    session_id="s0",
+                    cwd="",
+                    group="",
+                    title="alpha",
+                    rows=24,
+                    cols=80,
+                )
+            ]
+        ),
+    )
+    seen: dict = {}
+
+    async def scenario(app, pilot) -> None:
+        pane = app._shown_pane()
+        assert pane is not None
+        pane.board.host.write("echoed by the inherited child\n")
+        await wait_until(pilot, lambda: "echoed by the inherited child" in screen(pane))
+        seen.update(pid=pane.pid, text=screen(pane), spawned=child.poll())
+
+    try:
+        drive(monkeypatch, scenario)
+        assert seen["pid"] == child.pid  # the pane owns the child it was handed
+        assert "echoed by the inherited child" in seen["text"]
+        assert seen["spawned"] is None  # and never started a second one
+    finally:
+        child.kill()
+        child.wait()

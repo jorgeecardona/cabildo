@@ -38,6 +38,7 @@ from textual.worker import get_current_worker
 from cabildo import __version__, cloud, config, names, sessions_ops, store
 from cabildo.workspace import (
     agents,
+    attach,
     heatmap,
     intents,
     keys,
@@ -457,7 +458,7 @@ KEYS = """\
    j k          move (also the arrows)
    T            CPU, wakeups and memory of each session (like top)
    q  C-q       quit (asks while a Claude runs)
-   R            reload: quit and start again on the installed code
+   R            reload: start again on the installed code, keeping the sessions
    ?            these keys
 
  Inside Claude every other key is Claude's.        any key closes this
@@ -758,6 +759,9 @@ class SwitcherApp(App[None]):
         self.filter = last.filter if self._start_filter is None else self._start_filter
         self.reading = True
         self._render()  # empty table and mode-line until the scan returns
+        # Before anything else can open a pane: the Claudes a reload handed over. They
+        # are already running, so `_restore` finds a shown pane and opens nothing again.
+        self.call_later(self._remount_handed)
         self.reload()
         self.query_one(DataTable).focus()
         self.refresh_live(SHARE_SECONDS)
@@ -1526,11 +1530,36 @@ class SwitcherApp(App[None]):
         self._show(await self._mount(target))
         self.set_timer(NEW_POLL_SECONDS, self.refresh_live)
 
-    async def _mount(self, target: Target) -> ClaudePane:
+    async def _mount(self, target: Target, handed: attach.Handed | None = None) -> ClaudePane:
         self._pane_seq += 1
-        pane = ClaudePane(target, f"pane-{self._pane_seq}")
+        pane = ClaudePane(target, f"pane-{self._pane_seq}", handed)
         await self.query_one("#main", ContentSwitcher).mount(pane)
         return pane
+
+    async def _remount_handed(self) -> None:
+        """Rebuild the panes a reload handed over, before anything else opens one.
+
+        A descriptor that cannot be rebuilt is closed and its Claude hung up: an inherited
+        pseudo-terminal nobody reads leaves Claude blocked on a full buffer, which is
+        worse than the hangup a plain quit would have given it.
+        """
+        for handed in attach.take():
+            target = Target(
+                session_ids=(handed.session_id,) if handed.session_id else (),
+                session_id=handed.session_id,
+                command=(),  # nothing is spawned: this pane attaches
+                cwd=handed.cwd or None,
+                group=handed.group,
+            )
+            try:
+                pane = await self._mount(target, handed)
+            except Exception:  # one bad pane must not cost the others
+                attach.discard(handed.fd)
+                attach.hangup(handed.pid)
+                continue
+            pane.title_seen = handed.title
+            self._show(pane, focus=True)
+            pane.repaint_child()
 
     def _show(self, pane: ClaudePane, focus: bool = True) -> None:
         self.query_one("#main", ContentSwitcher).current = pane.id
@@ -1705,7 +1734,9 @@ class SwitcherApp(App[None]):
 
     def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
         yield SystemCommand(
-            "Reload", "Quit and start again on the installed code", self.action_reload
+            "Reload",
+            "Start again on the installed code, keeping the sessions",
+            self.action_reload,
         )
         yield SystemCommand("Top", "CPU, wakeups and memory of each session", self.action_top)
         yield SystemCommand("Scope", "This directory / subfolders / all", self.action_toggle_all)
@@ -1720,14 +1751,20 @@ class SwitcherApp(App[None]):
         self._ask_quit("close and quit?")
 
     def action_reload(self) -> None:
-        """`R`: quit and start again, on the code installed now. What was open is marked
-        (○) and the shown conversation starts again, as at any start.
-        """
-        self._ask_quit("close and reload?", reload=True)
+        """`R`: start again on the code installed now, keeping every Claude running.
 
-    def _ask_quit(self, question: str, reload: bool = False) -> None:
+        No question asked, because nothing is ended: the process re-execs itself, and the
+        panes hand their pseudo-terminals across (`attach.py`). What is lost is each
+        pane's scrollback, which lived in the program being replaced; Claude redraws its
+        current screen on the other side.
+        """
+        self.reload_asked = True
+        self._quit()
+
+    def _ask_quit(self, question: str) -> None:
+        """Ask before ending running Claudes. Only quitting asks: a reload ends nothing."""
+
         def go() -> None:
-            self.reload_asked = reload
             self._quit()
 
         running = [p for p in self._panes() if not p.exited]
@@ -1750,8 +1787,14 @@ class SwitcherApp(App[None]):
     def _quit(self) -> None:
         self._save_state()  # with every pane, before they close
         self._quitting = True  # their exits below must not drop them from it
-        for pane in self._panes():
-            pane.close()
+        if self.reload_asked:
+            # A reload re-execs this very process, which keeps its children and its open
+            # descriptors. So the panes are handed over rather than closed, and the
+            # Claudes never learn the program around them was replaced.
+            attach.put([h for pane in self._panes() if (h := pane.detach()) is not None])
+        else:
+            for pane in self._panes():
+                pane.close()
         self.exit()
 
     # --- close -----------------------------------------------------------
@@ -2144,6 +2187,12 @@ def main(argv: list[str] | None = None) -> int:
     if app.reload_asked:
         os.chdir(started_in)
         os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])  # new code, same pid
+    # Not reloading: any pseudo-terminal still written down was handed over by a reload
+    # that then failed to start. Close it, so its Claude is hung up rather than left
+    # blocked on a terminal nobody reads.
+    for handed in attach.take():
+        attach.discard(handed.fd)
+        attach.hangup(handed.pid)
     return 0
 
 
