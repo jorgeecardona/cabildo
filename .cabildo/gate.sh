@@ -16,6 +16,10 @@ cd "$(dirname "$0")/.."
 # package install in ~/.venv silently tests old code, which is exactly the false
 # "gate passed" this file exists to prevent. The daemon may run this from a
 # service unit with a thinner environment, hence the fallbacks.
+# The daemon rebases before it runs this, which can bump __version__; re-sync so
+# the installed metadata matches src/ (test_version compares the two).
+if command -v uv >/dev/null 2>&1; then uv sync -q --frozen; fi
+
 PY="${PYTHON:-}"
 if [[ -z "$PY" ]]; then
     if [[ -x ".venv/bin/python" ]]; then PY=".venv/bin/python"
