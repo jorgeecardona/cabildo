@@ -176,3 +176,22 @@ def test_roles_repo_overrides_global(homes):
     write_global('[roles]\nreviewer = "global text"\n')
     write_repo('[roles]\nreviewer = "repo text"\n')
     assert config.roles(repo, project_name="proj")["reviewer"] == "repo text"
+
+
+def test_spend_mode_defaults_to_auto(homes):
+    _, repo, _ = homes
+    assert config.spend_mode(repo, "proj") == "auto"
+
+
+def test_spend_mode_reads_the_workspace_table(homes):
+    _, repo, write_repo = homes
+    write_repo('[workspace]\nspend = "always"\n')
+    assert config.spend_mode(repo, "proj") == "always"
+    write_repo('[workspace]\nspend = "never"\n')
+    assert config.spend_mode(repo, "proj") == "never"
+
+
+def test_an_unknown_spend_mode_falls_back_to_auto(homes):
+    _, repo, write_repo = homes
+    write_repo('[workspace]\nspend = "sometimes"\n')
+    assert config.spend_mode(repo, "proj") == "auto"

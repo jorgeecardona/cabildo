@@ -19,6 +19,32 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 - Access requests sent to you now pop with Grant and Deny buttons. A click decides the request.
   Requests still pending pop again when the daemon starts.
 
+- On an API-key login the workspace mode line shows what has been consumed, where a
+  subscription shows its 5h/7d limits: tokens for today, the last 7 days and all time,
+  with the dollar cost beside them. The tokens come from the transcripts, the prices from
+  a table in `cabildo.prices`; a model the table does not know, or a fast-mode reply, is
+  counted in tokens and named as `unpriced` rather than guessed at. The figure covers this
+  machine only. `[workspace] spend = "always"` shows the rows on a subscription too,
+  `"never"` hides them.
+- With an Admin API key, the same rows carry a `billed` column: what the organization's
+  cost API reports it actually spent, beside the computed estimate. It does not replace
+  the estimate, because the two answer different questions — the billed figure covers the
+  whole organization and lands 4 to 24 hours late, so today's is usually a dash, while the
+  estimate is this machine's and is current. Point `[billing] key_env` at an environment
+  variable holding the key (default `ANTHROPIC_ADMIN_KEY`), or `[billing] key_command` at
+  a command that prints it; the key is never stored by cabildo. It must be an Admin API
+  key (`sk-ant-admin…`) or an `org:admin` token — the endpoint rejects the ordinary key
+  Claude Code runs on, and cabildo says so rather than reporting a bare 403.
+- `A` in the workspace opens a year of token use as a calendar, one cell per day, weeks as
+  columns: the shape every contribution graph uses. Shaded by tokens rather than dollars,
+  since tokens do not go stale when a rate card changes and they cover models the price
+  table does not know. The shades are quartiles of the days that had use, so a quiet month
+  and a busy one each show their own range instead of one flat colour.
+- The same rows carry a `session` column for the conversation in the main pane: its share
+  of today, the week and all time, beside the machine's. It counts every session id of
+  that conversation, so resuming one does not reset its cost to zero. Columns drop from
+  the right on a narrow list, the way the tokens line drops its cache figure.
+
 ### Fixed
 
 - `cabildo doctor` no longer claims macOS has no desktop alerts. It names the notifier

@@ -96,6 +96,36 @@ def _token() -> tuple[str, str] | None:
     return plan, token
 
 
+SUBSCRIPTION, API_KEY, UNKNOWN = "subscription", "api_key", "unknown"
+
+#: What Claude Code reads an API key from. It prefers a key in the environment over a
+#: subscription, so a set one decides the answer when there is no OAuth entry to read.
+API_KEY_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+
+
+def auth_kind() -> str:
+    """How the Claude sessions on this config dir pay: ``subscription``, ``api_key``, or
+    ``unknown``.
+
+    ``unknown`` is a real answer, not a failure to be smoothed over. Credentials that
+    cannot be read look exactly like credentials that are not there -- a locked Keychain,
+    a `security` call that failed -- and a caller that treated that as "API key" would
+    swap the mode line's limits for a spend figure every time the Keychain hiccuped. So
+    the API-key answer is given only on evidence: credentials that read cleanly and carry
+    no ``claudeAiOauth`` entry, or no credentials at all with a key in the environment.
+    """
+    raw = _credentials()
+    if raw is not None:
+        try:
+            creds = json.loads(raw)
+        except ValueError:
+            return UNKNOWN
+        if isinstance(creds, dict) and creds.get("claudeAiOauth"):
+            return SUBSCRIPTION
+        return API_KEY
+    return API_KEY if any(os.environ.get(name) for name in API_KEY_ENV) else UNKNOWN
+
+
 def _limit(raw: object) -> Limit | None:
     if not isinstance(raw, dict) or raw.get("utilization") is None:
         return None

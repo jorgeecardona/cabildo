@@ -566,14 +566,40 @@ CREATE TABLE IF NOT EXISTS usage_messages (
     input        INTEGER NOT NULL,
     output       INTEGER NOT NULL,
     cache_read   INTEGER NOT NULL,
-    cache_write  INTEGER NOT NULL
+    cache_write  INTEGER NOT NULL,        -- every cache write, both durations
+    -- The 1-hour share of cache_write, and whether the reply ran in fast mode. Both are
+    -- priced differently from the default, so a total that lumps them in is wrong; both
+    -- default to 0, which is what every row written before this column says anyway.
+    cache_write_1h INTEGER NOT NULL DEFAULT 0,
+    fast         INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_usage_messages_ts ON usage_messages(ts);
+CREATE INDEX IF NOT EXISTS idx_usage_messages_session ON usage_messages(session_id);
 
 -- How far each transcript file has been read into usage_messages.
 CREATE TABLE IF NOT EXISTS usage_cursors (
     path         TEXT PRIMARY KEY,
     byte_offset  INTEGER NOT NULL
+);
+
+-- One UTC day of cost as the organization's cost API reports it: the whole organization,
+-- not this machine, and only as complete as that API's data horizon. A day is `final`
+-- once the horizon has passed its end, after which it is never fetched again.
+CREATE TABLE IF NOT EXISTS billed_days (
+    day          TEXT PRIMARY KEY,          -- YYYY-MM-DD, the bucket's UTC start
+    dollars      REAL NOT NULL,
+    final        INTEGER NOT NULL,
+    fetched_at   REAL NOT NULL
+);
+
+-- When the cost API was last asked, and when it may be asked again. One row.
+CREATE TABLE IF NOT EXISTS billed_state (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+    last_ok      REAL NOT NULL DEFAULT 0,   -- a successful fetch
+    next_try     REAL NOT NULL DEFAULT 0,   -- backoff: no request before this
+    step         REAL NOT NULL DEFAULT 0,   -- the wait that produced next_try
+    refreshed_at REAL NOT NULL DEFAULT 0,   -- the API's data horizon, as of last_ok
+    error        TEXT NOT NULL DEFAULT ''   -- why the last attempt failed; '' when it did not
 );
 """
 
@@ -710,6 +736,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
     have_notes = {r["name"] for r in conn.execute("PRAGMA table_info(session_notes)")}
     if "source" not in have_notes:
         conn.execute("ALTER TABLE session_notes ADD COLUMN source TEXT NOT NULL DEFAULT 'agent'")
+
+    # The two columns a dollar figure needs that a plain token count does not. Rows written
+    # before them read as 0, which is what they were: Claude Code wrote 5-minute cache
+    # entries at standard speed, so the default is the truth for them, not a placeholder.
+    have_usage = {r["name"] for r in conn.execute("PRAGMA table_info(usage_messages)")}
+    if "cache_write_1h" not in have_usage:
+        conn.execute(
+            "ALTER TABLE usage_messages ADD COLUMN cache_write_1h INTEGER NOT NULL DEFAULT 0"
+        )
+    if "fast" not in have_usage:
+        conn.execute("ALTER TABLE usage_messages ADD COLUMN fast INTEGER NOT NULL DEFAULT 0")
 
     conn.commit()
 

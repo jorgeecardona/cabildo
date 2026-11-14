@@ -25,9 +25,12 @@ import sqlite3
 import time
 from collections import defaultdict
 from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from . import prices
 
 PROJECTS = Path(os.path.expanduser("~/.claude/projects"))
 
@@ -113,6 +116,10 @@ def _usage_row(line: bytes, path: Path) -> tuple[Any, ...] | None:
     model = msg.get("model") or "?"
     if not u or not message_id or model == "<synthetic>":
         return None
+    # `cache_creation` splits the write by duration; an older transcript has only the total,
+    # which was all 5-minute. Absent means 0, never "unknown": 0 prices the same as absent.
+    by_ttl = u.get("cache_creation")
+    long_write = by_ttl.get("ephemeral_1h_input_tokens", 0) if isinstance(by_ttl, dict) else 0
     return (
         message_id,
         ts,
@@ -124,6 +131,8 @@ def _usage_row(line: bytes, path: Path) -> tuple[Any, ...] | None:
         u.get("output_tokens", 0),
         u.get("cache_read_input_tokens", 0),
         u.get("cache_creation_input_tokens", 0),
+        long_write,
+        1 if u.get("speed") == "fast" else 0,
     )
 
 
@@ -146,11 +155,14 @@ def _ingest_file(conn: sqlite3.Connection, path: Path, offset: int) -> None:
         # streamed lines of one message can show a partial output count: keep the largest
         conn.executemany(
             "INSERT INTO usage_messages (message_id, ts, session_id, agent_id, project, model, "
-            "input, output, cache_read, cache_write) VALUES (?,?,?,?,?,?,?,?,?,?) "
+            "input, output, cache_read, cache_write, cache_write_1h, fast) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(message_id) DO UPDATE SET "
             "input = max(input, excluded.input), output = max(output, excluded.output), "
             "cache_read = max(cache_read, excluded.cache_read), "
-            "cache_write = max(cache_write, excluded.cache_write)",
+            "cache_write = max(cache_write, excluded.cache_write), "
+            "cache_write_1h = max(cache_write_1h, excluded.cache_write_1h), "
+            "fast = max(fast, excluded.fast)",
             rows,
         )
         conn.execute(
@@ -172,6 +184,115 @@ def ingest(conn: sqlite3.Connection) -> None:
                 _ingest_file(conn, path, offset)
         except OSError:
             continue  # the file went away between the listing and the read
+
+
+# --------------------------------------------------------------------------- #
+# What it cost
+# --------------------------------------------------------------------------- #
+DAY = 86400.0
+
+
+@dataclass(frozen=True)
+class Window:
+    """One period's consumption: tokens by kind, and what they cost.
+
+    ``cost`` covers the priced part only, and ``unpriced`` says how many tokens are not in
+    it -- a model the price table does not know, or a fast-mode reply, which bills at rates
+    the table does not carry. Reading ``cost`` as the whole bill while ``unpriced`` is
+    non-zero understates it, which is why the renderer shows both.
+    """
+
+    input: int = 0
+    output: int = 0
+    cache_write: int = 0
+    cache_read: int = 0
+    cost: float = 0.0
+    unpriced: int = 0
+
+    @property
+    def tokens(self) -> int:
+        return self.input + self.output + self.cache_write + self.cache_read
+
+
+@dataclass(frozen=True)
+class Spend:
+    """What this machine's transcripts say was consumed, over three periods."""
+
+    today: Window
+    week: Window
+    all_time: Window
+
+
+#: `ts >= ?` per window. Today is local midnight, not 24 hours back: "today" is read off a
+#: calendar, and a figure that silently dropped this morning's work at noon would be wrong
+#: in the way nobody checks.
+def _midnight(now: float) -> float:
+    local = datetime.fromtimestamp(now)
+    return local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+
+_GROUPED = (
+    "SELECT model, fast, (input + cache_read + cache_write) > ? AS long_prompt, "
+    "sum(input) AS input, sum(output) AS output, sum(cache_read) AS cache_read, "
+    "sum(cache_write) AS cache_write, sum(cache_write_1h) AS cache_write_1h "
+    "FROM usage_messages WHERE ts >= ?{where} GROUP BY model, fast, long_prompt"
+)
+
+
+def window(
+    conn: sqlite3.Connection, since: float, sessions: tuple[str, ...] | None = None
+) -> Window:
+    """Everything recorded at or after ``since``, priced.
+
+    ``sessions`` narrows it to those session ids -- a conversation resumed twice has
+    several, and a subagent's messages are recorded against the parent, so passing a
+    conversation's ids gives that conversation's whole cost. None means every session.
+
+    Grouping before pricing is exact, not an approximation: every rate is dollars per
+    token, so the cost of a group equals the sum of its rows' costs as long as the group
+    shares the model, the speed and the price tier -- which is what it is grouped by.
+    """
+    if sessions is not None and not sessions:
+        return Window()
+    where = "" if sessions is None else f" AND session_id IN ({','.join('?' * len(sessions))})"
+    sql = _GROUPED.format(where=where)
+    args: tuple = (prices.LONG_PROMPT_TOKENS, since, *(sessions or ()))
+    totals = {"input": 0, "output": 0, "cache_write": 0, "cache_read": 0}
+    cost, unpriced = 0.0, 0
+    for row in conn.execute(sql, args):
+        write_1h = row["cache_write_1h"]
+        write_5m = row["cache_write"] - write_1h
+        for key in totals:
+            totals[key] += row[key]
+        rates = (
+            None if row["fast"] else prices.price_of(row["model"], long_prompt=row["long_prompt"])
+        )
+        if rates is None:
+            unpriced += row["input"] + row["output"] + row["cache_write"] + row["cache_read"]
+            continue
+        cost += (
+            row["input"] * rates.input
+            + write_5m * rates.cache_write_5m
+            + write_1h * rates.cache_write_1h
+            + row["cache_read"] * rates.cache_read
+            + row["output"] * rates.output
+        ) / prices.PER_MILLION
+    return Window(**totals, cost=cost, unpriced=unpriced)
+
+
+def spend(
+    conn: sqlite3.Connection, now: float | None = None, sessions: tuple[str, ...] | None = None
+) -> Spend:
+    """Today, the last 7 days, and everything on record. Reads the DB; does not ingest.
+
+    ``sessions`` narrows every window to one conversation; None covers the machine.
+    """
+    at = time.time() if now is None else now
+    return Spend(
+        today=window(conn, _midnight(at), sessions),
+        week=window(conn, at - 7 * DAY, sessions),
+        all_time=window(conn, 0.0, sessions),
+    )
 
 
 def summarize(since: float) -> dict[str, Any]:

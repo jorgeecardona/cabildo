@@ -278,12 +278,18 @@ def fmt_cpu(cpu: float) -> str:
 
 
 def fmt_count(n: int) -> str:
-    """``954``, ``54k``, ``1.2M``."""
+    """``954``, ``54k``, ``1.2M``, ``9.3B``.
+
+    Billions are reached by a cache-read total over a long history, where ``9321.7M`` is
+    a number nobody reads at a glance.
+    """
     if n < 1000:
         return str(n)
     if n < 999_500:
         return f"{n / 1000:.0f}k"
-    return f"{n / 1_000_000:.1f}M"
+    if n < 999_500_000:
+        return f"{n / 1_000_000:.1f}M"
+    return f"{n / 1_000_000_000:.1f}B"
 
 
 def fmt_mb(mb: float) -> str:

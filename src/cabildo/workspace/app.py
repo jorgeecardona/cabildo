@@ -11,6 +11,7 @@ Run:   cabildo [working-dir]      (default: current directory)
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import os
 import sys
 import time
@@ -34,9 +35,10 @@ from textual.timer import Timer
 from textual.widgets import ContentSwitcher, DataTable, Input, Label, Static
 from textual.worker import get_current_worker
 
-from cabildo import __version__, cloud, names, sessions_ops, store
+from cabildo import __version__, cloud, config, names, sessions_ops, store
 from cabildo.workspace import (
     agents,
+    heatmap,
     intents,
     keys,
     launch,
@@ -45,6 +47,7 @@ from cabildo.workspace import (
     plan,
     rooms,
     sessions,
+    spend,
     state,
     usage,
 )
@@ -254,6 +257,70 @@ def fmt_intents(items: tuple[intents.Intent, ...], now: float) -> list[tuple[str
     return out
 
 
+def fmt_money(dollars: float) -> str:
+    """``$0.84``, ``$12.34``, ``$4,821.79``: cents always, because a daily figure is often
+    cents and rounding them away would show an active day as ``$0``.
+    """
+    return f"${dollars:,.2f}"
+
+
+SPENT = "spent"  # the column's header when there is nothing billed to compare it with
+NO_SPEND_ROW = "-"  # remembered when the login turned out to want no spend row at all
+
+
+def fmt_spend(r: spend.Report, label: str = "api key", width: int = 1000) -> list[str]:
+    """The consumption table, one row per period, under a header::
+
+        api key        spent    tokens
+        today         $12.34      4.2M
+        7d           $103.90     38.1M
+        all          $421.07    162.4M
+
+    Tokens are every billed token: input, output, cache writes and cache reads. ``spent``
+    covers only what the price table could price, so a period holding tokens it could not
+    carries ``+<n> unpriced`` and its dollar figure is a floor, not the total.
+
+    With an Admin API key configured, a ``billed`` column comes first and ``spent``
+    becomes ``est``, because the two answer different questions -- the organization's
+    actual cost against this machine's computed one::
+
+        api key       billed       est    tokens
+        today              -   $241.91    241.2M
+        7d         $4,712.08 $4,829.36      5.4B
+
+    A window the cost API has no data for is a dash, never ``$0.00``: today's billed cost
+    is usually missing, since that data lands hours late, and a zero there would read as
+    a free morning.
+
+    With a conversation shown, a ``session`` column holds its share of each period, so
+    what this conversation is costing is readable beside what the machine is costing.
+
+    Columns are dropped from the right when the list is too narrow for them, the way the
+    tokens line drops its cache figure. The money column is never dropped.
+    """
+    names = ("today", "7d", "all")
+    machine = (r.spend.today, r.spend.week, r.spend.all_time)
+    billed = (r.billed_today, r.billed_week, r.billed_all)
+    # Each column is a header and a cell per period, in the order they earn their place.
+    columns: list[tuple[str, list[str]]] = []
+    if r.any_billed:
+        columns.append(("billed", ["-" if b is None else fmt_money(b) for b in billed]))
+    columns.append(("est" if r.any_billed else SPENT, [fmt_money(w.cost) for w in machine]))
+    if r.session is not None:
+        mine = (r.session.today, r.session.week, r.session.all_time)
+        columns.append(("session", [fmt_money(w.cost) for w in mine]))
+    columns.append(("tokens", [fmt_count(w.tokens) for w in machine]))
+
+    tails = [f"  +{fmt_count(w.unpriced)} unpriced" if w.unpriced else "" for w in machine]
+    while len(columns) > 2 and len(label) + 10 * len(columns) > width:
+        columns.pop()  # the rightmost column is the least missed
+    rows = [f"{label:<11}" + "".join(f"{head:>10}" for head, _ in columns)]
+    for i, name in enumerate(names):
+        line = f"{name:<11}" + "".join(f"{cells[i]:>10}" for _, cells in columns)
+        rows.append((line + tails[i]).rstrip())
+    return rows
+
+
 def plan_style(p: PlanUsage) -> str:
     """Amber from 70% of either limit, red from 90%; like the context line."""
     worst = max((lim.percent for lim in (p.five_hour, p.seven_day) if lim), default=0.0)
@@ -412,6 +479,61 @@ class KeysScreen(ModalScreen[None]):
         self.dismiss(None)
 
 
+#: The shade of each heatmap level, lightest first. Level 0 is a day with nothing, and it
+#: is drawn, not left blank: the grid's shape is the point, and gaps are part of it.
+HEAT_COLORS = ("grey30", "#f6c17a", "#e8873e", "#cc4b1f", "#8f2a0c")
+HEAT_CELL_W = 2  # a cell and a space, so three-letter month labels do not collide
+
+
+def heat_text(cal: heatmap.Calendar) -> Text:
+    """The calendar as one styled block: months, then a labelled row per weekday."""
+    out = Text()
+    out.append("    " + heatmap.month_line(cal, HEAT_CELL_W) + "\n", "dim")
+    for i, row in enumerate(cal.rows()):
+        out.append(f"{heatmap.ROW_LABELS[i]:<4}", "dim")
+        for cell in row:
+            out.append(cell.char + " ", HEAT_COLORS[cell.level])
+        out.append("\n")
+    return out
+
+
+def heat_legend(cal: heatmap.Calendar) -> Text:
+    """``1.4T tokens · 312 days · Less ▪▪▪▪▪ More``, under the grid."""
+    days = sum(1 for week in cal.weeks for cell in week if cell.tokens)
+    out = Text(f"{fmt_count(cal.total)} tokens over {days} day{'' if days == 1 else 's'}", "dim")
+    out.append("     Less ", "dim")
+    for color in HEAT_COLORS:
+        out.append(heatmap.CELL + " ", color)
+    out.append("More", "dim")
+    return out
+
+
+class HeatScreen(ModalScreen[None]):
+    """`A`: a year of token use, one cell per day, like any contribution graph.
+
+    Tokens rather than dollars: a rate card changes and a price table goes stale, but the
+    tokens a day spent are the same fact a year later.
+    """
+
+    BINDINGS = [Binding("escape,q,A", "close", "Close")]
+
+    def __init__(self, cal: heatmap.Calendar) -> None:
+        super().__init__()
+        self._cal = cal
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="top"):
+            yield Static(
+                "Tokens per day on this machine · input, output and cache · q closes",
+                id="top-title",
+            )
+            yield Static(heat_text(self._cal), id="heat-grid")
+            yield Static(heat_legend(self._cal), id="heat-legend")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class TopScreen(ModalScreen[None]):
     """`T`: CPU, wakeups and memory of every running session and of its processes, like
     top. The app refreshes it every TOP_SAMPLE_SECONDS while it is open.
@@ -546,6 +668,7 @@ class SwitcherApp(App[None]):
         Binding("ctrl+q", "quit", show=False),  # not priority: inside Claude it is Claude's
         Binding("question_mark", "toggle_keys", "Keys"),
         Binding("T", "top", "Top"),
+        Binding("A", "activity", "Activity"),
         Binding("j", "cursor_down", show=False),
         Binding("k", "cursor_up", show=False),
     ]
@@ -575,6 +698,10 @@ class SwitcherApp(App[None]):
         self.reading = False  # a scan for a new scope is on its way
         self.plan_usage: PlanUsage | None = None  # the subscription's limits, once fetched
         self.plan_pace: plan.PlanPace | None = None  # how fast they fill
+        self.spend: spend.Report | None = None  # consumed tokens and cost, when shown
+        self.spend_label = ""  # "" while the mode line shows no spend row
+        self.spend_mode = "never"  # [workspace].spend; read at mount
+        self._auth_seen = ""  # the row's label once the login has been read, on the worker
         self._cwd_key = cloud.project_key(cwd)  # what the intents of "here" are matched on
         self.intents: tuple[intents.Intent, ...] = ()  # the push queue and its latest results
         self._intents_seen = False  # the bus has been read once: show the group, even if empty
@@ -638,6 +765,7 @@ class SwitcherApp(App[None]):
         if usage.available():
             self.set_interval(SAMPLE_SECONDS, self._sample_tick)
         self._plan_tick()
+        self._spend_start()
         self._intents_tick()
         self.set_interval(INTENT_POLL_SECONDS, self._intents_tick)
 
@@ -667,6 +795,69 @@ class SwitcherApp(App[None]):
             # a failed ask has no sample: the last one stays
             self.plan_usage, self.plan_pace = found.usage, found.pace
             self._modeline()
+
+    def _spend_start(self) -> None:
+        """Start the spend refresh, unless the config turns the row off.
+
+        Which login this is, is decided on the worker thread, not here: reading the
+        credentials means a `security` subprocess on macOS, and app start is not the
+        place to wait on one.
+        """
+        self.spend_mode = config.spend_mode(self.cwd)
+        if self.spend_mode == "never":
+            return
+        self._spend_tick()
+        self.set_interval(spend.REFRESH_SECONDS, self._spend_tick)
+
+    def _spend_tick(self) -> None:
+        self.run_worker(self._spend_fetch, thread=True, group="spend", exclusive=True)
+
+    def _spend_fetch(self) -> None:
+        """Off the UI thread: which login this is, and what it consumed.
+
+        The login is read once and remembered -- it does not change while the app runs,
+        and on macOS reading it is a subprocess. Only this worker touches `_auth_seen`,
+        and it is exclusive in its group, so there is no second thread to race with.
+        """
+        if not self._auth_seen:
+            self._auth_seen = self._spend_heading() or NO_SPEND_ROW
+        label = "" if self._auth_seen == NO_SPEND_ROW else self._auth_seen
+        found = spend.load(time.time(), self.cwd, self._shown_ids()) if label else None
+        self._to_ui(self._spend_got, found, label)
+
+    def _spend_heading(self) -> str:
+        """The row's label, or "" when there is to be no row.
+
+        "auto" shows it exactly where a subscription would have shown its limits -- on an
+        API key, where there is no published limit -- and stays silent when the login
+        cannot be read. "always" shows it either way, which is how someone on a
+        subscription sees what their work would have cost.
+        """
+        if self.spend_mode == "never":
+            return ""
+        kind = plan.auth_kind()
+        if self.spend_mode == "always":
+            return "api key" if kind == plan.API_KEY else "spend"
+        return "api key" if kind == plan.API_KEY else ""
+
+    def _shown_ids(self) -> tuple[str, ...]:
+        """Every session id of the conversation in the main pane, for its own spend row.
+
+        Every id, not the current one: a conversation resumed twice is three session ids
+        and one piece of work, and charging only the latest would read as a cheap session
+        every time one is resumed.
+        """
+        shown = self.shown_session()
+        if not shown:
+            return ()
+        row = next((r for r in self.rows if shown in r.ids), None)
+        return tuple(row.ids) if row else (shown,)
+
+    def _spend_got(self, found: spend.Report | None, label: str = "") -> None:
+        if (found, label) == (self.spend, self.spend_label) or found is None:
+            return
+        self.spend, self.spend_label = found, label
+        self._modeline()
 
     def on_resize(self, _event) -> None:
         if self._max_width() != self.max_width:
@@ -854,6 +1045,9 @@ class SwitcherApp(App[None]):
         if self.plan_usage:
             style = plan_style(self.plan_usage)
             groups.append([(x, style) for x in fmt_plan(self.plan_usage, self.plan_pace)])
+        if self.spend and self.spend_label:
+            rows_ = fmt_spend(self.spend, self.spend_label, width)
+            groups.append([(x, "") for x in rows_])
         if self.intents or (self._intents_seen and store.db_path().exists()):
             groups.append(
                 fmt_intents(
@@ -1211,6 +1405,21 @@ class SwitcherApp(App[None]):
             lines.append((Text("measuring…"), "", "", ""))
         return lines
 
+    def action_activity(self) -> None:
+        """`A`: the year's token use as a calendar. Reads the DB on a worker, since a
+        cold transcript scan is seconds and the key press must not wait on it.
+        """
+        self.run_worker(self._activity_fetch, thread=True, group="activity", exclusive=True)
+
+    def _activity_fetch(self) -> None:
+        self._to_ui(self._activity_got, spend.calendar(dt.date.today()))
+
+    def _activity_got(self, cal: heatmap.Calendar | None) -> None:
+        if cal is None:
+            self.notify("No token history yet: the bus DB has nothing to draw", severity="warning")
+            return
+        self.push_screen(HeatScreen(cal))
+
     def action_top(self) -> None:
         if not usage.available():
             self.notify("CPU and memory per session need Linux /proc", severity="warning")
@@ -1329,6 +1538,8 @@ class SwitcherApp(App[None]):
             pane.focus()
         self._refresh_marks()
         self.refresh_live()  # a new Claude: its state shows without waiting a poll
+        if self.spend_mode != "never":
+            self._spend_tick()  # the session column is about the pane that just appeared
         self._save_state()
 
     # --- open conversations across runs (state.py) -------------------------

@@ -298,6 +298,18 @@ def destructive_mode(cwd: str | None = None, project_name: str | None = None) ->
     return mode if mode in ("guard", "off") else "guard"
 
 
+def spend_mode(cwd: str | None = None, project_name: str | None = None) -> str:
+    """``[workspace].spend``: when the mode line shows consumed tokens and cost.
+
+    "auto" (the default) shows it on an API-key login, where there is no subscription
+    limit to show instead, and hides it on a subscription. "always" shows it either way,
+    which is also how someone on a subscription sees what their work would have cost.
+    "never" hides it. An unknown value falls back to "auto".
+    """
+    mode = str(get(cwd, "workspace", "spend", project_name=project_name, default="auto")).lower()
+    return mode if mode in ("auto", "always", "never") else "auto"
+
+
 def trunk_mode(cwd: str | None = None, project_name: str | None = None) -> str:
     """``[trunk].mode`` for this project: "off" (the default) or "guard".
 
