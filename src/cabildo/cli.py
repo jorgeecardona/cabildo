@@ -2032,6 +2032,18 @@ def cmd_guard_uninstall(args) -> int:
     return 0
 
 
+def cmd_mcp(args) -> int:
+    """Run the MCP server on stdio, the same as the ``cabildo-mcp`` script.
+
+    MCP registries start a PyPI server as ``uvx <package> <args>``, which runs the ``cabildo``
+    script, so the server must also be reachable as a subcommand.
+    """
+    from cabildo.mcp_server import main as mcp_main
+
+    mcp_main()
+    return 0
+
+
 def cmd_doctor(args) -> int:
     """One health check across the whole install: the six hooks, both MCP
     servers, the bus DB (reachable + WAL), the daemon, and the platform features
@@ -2535,6 +2547,9 @@ def main(argv: list[str] | None = None) -> int:
         "doctor", help="verify the install (hooks, MCP, DB, daemon) and flag platform gaps"
     )
     dr.set_defaults(fn=cmd_doctor)
+
+    mc = sub.add_parser("mcp", help="run the MCP server on stdio (same as cabildo-mcp)")
+    mc.set_defaults(fn=cmd_mcp)
 
     gh = sub.add_parser(
         "githook",

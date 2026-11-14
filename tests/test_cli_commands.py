@@ -41,6 +41,7 @@ COMMANDS = [
     "service",
     "viewer",
     "doctor",
+    "mcp",
     "githook",
     "guard",
 ]
@@ -53,3 +54,13 @@ def test_help_lists_exactly_these_commands() -> None:
     found = re.search(r"\{([^}]*)\}", out.getvalue())
     assert found is not None
     assert found.group(1).split(",") == COMMANDS
+
+
+def test_mcp_subcommand_runs_the_mcp_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``cabildo mcp`` starts the same server as ``cabildo-mcp``, for ``uvx cabildo mcp``."""
+    from cabildo import mcp_server
+
+    calls: list[str] = []
+    monkeypatch.setattr(mcp_server, "main", lambda: calls.append("ran"))
+    assert cli.main(["mcp"]) == 0
+    assert calls == ["ran"]

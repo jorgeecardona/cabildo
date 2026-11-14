@@ -4,6 +4,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- `cabildo mcp` runs the MCP server, so `uvx cabildo mcp` starts it. cabildo is listed in the
+  official MCP registry as `io.github.jorgeecardona/cabildo` (`server.json`).
 - cabildo has no dependency on prodc and no issue tracking of its own. Issue tracking is not
   cabildo's responsibility: `pip install cabildo` now pulls `mcp`, `zeroconf`, `textual`,
   `textual-tty` and `playwright`, nothing else. What went with it: the `claim_issue`,

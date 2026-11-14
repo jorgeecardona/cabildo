@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.jorgeecardona/cabildo",
+  "title": "cabildo",
+  "description": "Messaging and advisory locks for Claude Code sessions working on the same repository",
+  "repository": {
+    "url": "https://github.com/jorgeecardona/cabildo",
+    "source": "github"
+  },
+  "websiteUrl": "https://cardona-oss.gitlab.io/cabildo/",
+  "version": "0.1.185",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "cabildo",
+      "version": "0.1.185",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ]
+    }
+  ]
+}
