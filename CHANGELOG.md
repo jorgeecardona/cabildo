@@ -12,6 +12,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   the handoff note written on SessionEnd, the `📋 register:` line in the SessionStart banner,
   and the `mcp.issues` doctor check. A project that wants a register wires that server itself;
   [prodc](https://pypi.org/project/prodc/) serves the same `docs/issues/` folder.
+- The PyPI page starts with what cabildo does, then install and the quickstart. Install now
+  documents `cabildo install`, which also wires the hooks and the push mod.
 - `cabildo improve daily` scans friction and writes proposals; Fable argues against each. The
   ones it approves pop up with Approve and Reject, and Approve has an agent apply the change.
 - `cabildo friction scan` finds the turns where you corrected or complained about the tools.

@@ -1,7 +1,7 @@
 [project]
 name = "cabildo"
 dynamic = ["version"]  # the single source of truth is __version__ in src/cabildo/__init__.py (see [tool.hatch.version])
-description = "IPC bus + chat room for coordinating parallel Claude Code agents: messaging, presence, and advisory locks with hook-level enforcement"
+description = "Messaging and advisory locks for Claude Code sessions working on the same repository"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
