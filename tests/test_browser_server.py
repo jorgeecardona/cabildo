@@ -47,6 +47,7 @@ class FakeLocator:
 
 class FakePage:
     url = "https://example.test/"
+    frames: ClassVar[list[Any]] = []
 
     def __init__(self) -> None:
         self.log: list[tuple[str, ...]] = []

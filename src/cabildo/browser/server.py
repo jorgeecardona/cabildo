@@ -37,12 +37,18 @@ from playwright.async_api import (
 )
 from playwright.async_api import Error as PlaywrightError
 
+from cabildo import desktop
+from cabildo.browser.login import write_state
+
 _REF = re.compile(r"^(f\d+)?e\d+$")
 _VIEWPORT: ViewportSize = {"width": 1280, "height": 720}
 _KEEP = 500
 _WAIT_MS = 30_000
 _LEVEL = {"error": "error", "warning": "warning", "debug": "debug"}
 _RANK = {"error": 0, "warning": 1, "info": 2, "debug": 3}
+_CHALLENGE_TITLES = ("just a moment", "attention required! | cloudflare", "verifying you are human")
+_CHALLENGE_HOST = "challenges.cloudflare.com"
+_CF_COOKIES = ("cf_clearance", "__cf_bm")
 
 Modifier = Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]
 
@@ -64,6 +70,7 @@ class Session:
     _browser: Browser | None = None
     _context: BrowserContext | None = None
     _state_mtime: float = 0.0  # mtime of the storage-state file the context last loaded
+    handoff_seconds: float = 120.0  # how long a Cloudflare check waits for the human
 
     async def context(self) -> BrowserContext:
         """The browser context, started on first use. Parallel first calls start one browser."""
@@ -159,6 +166,75 @@ class Session:
                 await pw.stop()
 
 
+def is_challenge(title: str, frame_urls: list[str]) -> bool:
+    """Return True when the page is a Cloudflare bot check that waits for a human."""
+    lowered = title.strip().lower()
+    if any(lowered.startswith(t) for t in _CHALLENGE_TITLES):
+        return True
+    return any(_CHALLENGE_HOST in url for url in frame_urls)
+
+
+def merge_cf_cookies(state: dict[str, Any], cookies: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return ``state`` with the Cloudflare cookies from ``cookies`` added or replaced.
+
+    Only ``cf_clearance`` and ``__cf_bm`` are taken: the handoff saves what the human earned
+    on the check, nothing else from the agent's session.
+    """
+    fresh = [c for c in cookies if c.get("name") in _CF_COOKIES]
+    keys = {(c["name"], c.get("domain"), c.get("path")) for c in fresh}
+    kept = [
+        c
+        for c in state.get("cookies", [])
+        if (c.get("name"), c.get("domain"), c.get("path")) not in keys
+    ]
+    return {**state, "cookies": kept + fresh, "origins": state.get("origins", [])}
+
+
+async def _on_challenge(page: Page) -> bool:
+    title = await page.title()
+    return is_challenge(title, [f.url for f in page.frames])
+
+
+async def handoff(session: Session, page: Page) -> str:
+    """Ask the human to pass a Cloudflare check in the visible window, then keep its cookie.
+
+    Returns a line for the agent. The agent never clicks the check itself.
+    """
+    host = page.url.split("/")[2] if "://" in page.url else page.url
+    with suppress(PlaywrightError):
+        await page.bring_to_front()
+    desktop.notify(
+        "Cloudflare check",
+        f"An agent browser is stopped on {host}. Pass the check in its window.",
+        urgent=True,
+    )
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + session.handoff_seconds
+    while loop.time() < deadline:
+        await asyncio.sleep(1)
+        with suppress(PlaywrightError):
+            if not await _on_challenge(page):
+                return "Cloudflare check passed by the human. " + await _save_cf(session)
+    return (
+        f"blocked by a Cloudflare check on {host}: nobody passed it in "
+        f"{session.handoff_seconds:.0f}s. Ask the human to pass it, then navigate again."
+    )
+
+
+async def _save_cf(session: Session) -> str:
+    path = session.storage_state
+    if path is None or session._context is None:
+        return "No storage-state file: the cookie lasts until this browser closes."
+    try:
+        current = json.loads(path.read_text()) if path.is_file() else {}
+    except (OSError, ValueError):
+        current = {}
+    cookies = [dict(c) for c in await session._context.cookies()]
+    write_state(path, merge_cf_cookies(current, cookies))
+    session._state_mtime = session._mtime()
+    return f"Saved its cookie to {path}."
+
+
 class DialogOpenError(RuntimeError):
     """A dialog is open. The message says what it is and which tool answers it."""
 
@@ -188,9 +264,12 @@ async def state(session: Session) -> str:
     if session.dialog is not None:
         return dialog_message(session.dialog)
     page = await session.page()
+    note = ""
+    if await _on_challenge(page):
+        note = f"### Note\n{await handoff(session, page)}\n"
     snapshot = await page.aria_snapshot(mode="ai")
     return (
-        f"### Page\n- URL: {page.url}\n- Title: {await page.title()}\n"
+        f"{note}### Page\n- URL: {page.url}\n- Title: {await page.title()}\n"
         f"### Snapshot\n```yaml\n{snapshot}\n```"
     )
 

@@ -6,6 +6,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 - `cabildo mcp` runs the MCP server, so `uvx cabildo mcp` starts it. cabildo is listed in the
   official MCP registry as `io.github.jorgeecardona/cabildo` (`server.json`).
+- The agent browser stops on a Cloudflare bot check and asks you, with a desktop notification,
+  to pass it in its window. It waits up to 2 minutes, never clicks the check itself, and saves
+  the `cf_clearance` cookie you earned to the storage-state file, so later runs skip the check.
 - cabildo has no dependency on prodc and no issue tracking of its own. Issue tracking is not
   cabildo's responsibility: `pip install cabildo` now pulls `mcp`, `zeroconf`, `textual`,
   `textual-tty` and `playwright`, nothing else. What went with it: the `claim_issue`,
