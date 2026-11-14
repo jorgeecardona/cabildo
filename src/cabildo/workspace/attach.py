@@ -31,6 +31,8 @@ pinned exactly for that reason. The seams used are ``Board.pty``/``Board.process
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import fcntl
 import json
 import os
@@ -73,6 +75,27 @@ def keep_across_exec(fd: int) -> int:
     flags = fcntl.fcntl(kept, fcntl.F_GETFD)
     fcntl.fcntl(kept, fcntl.F_SETFD, flags & ~fcntl.FD_CLOEXEC)
     return kept
+
+
+def release(pty) -> None:
+    """Let go of a pseudo-terminal without hanging its child up.
+
+    A terminal object dropped as it stands leaves two things behind. The event loop is
+    still watching the descriptor: bittty arms ``add_reader`` before each read and
+    disarms it inside the callback, so a read cancelled mid-await leaves it armed. And
+    the descriptor itself is closed later, by the garbage collector, at a moment nobody
+    chose. A closed descriptor the loop is still watching is what makes asyncio complain
+    on Linux, whose selector keeps its own map of them; kqueue drops them quietly, which
+    is why macOS showed nothing. So: unregister, then close, in that order.
+
+    Not ``pty.close()``, which signals the child's process group -- the one thing a
+    detach must not do. Closing this descriptor is safe because the caller duplicated it
+    first, and a pseudo-terminal hangs up on its last master, not its first.
+    """
+    with contextlib.suppress(RuntimeError, ValueError, OSError, KeyError):
+        asyncio.get_running_loop().remove_reader(pty.master_fd)
+    with contextlib.suppress(OSError):
+        pty.master_file.close()
 
 
 def encode(panes: list[Handed]) -> str:

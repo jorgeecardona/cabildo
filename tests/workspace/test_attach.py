@@ -235,3 +235,60 @@ def test_a_hung_up_child_ends(child):
     attach.hangup(proc.pid)
     assert wait_for(lambda: proc.poll() is not None)
     assert proc.returncode in (0, -signal.SIGHUP)
+
+
+# --------------------------------------------------------------------------- #
+# Letting go of a terminal the event loop is watching
+# --------------------------------------------------------------------------- #
+def test_release_unwatches_the_descriptor_before_closing_it(child):
+    """The asyncio error a reload showed on Linux. bittty arms `add_reader` before each
+    read and disarms it in the callback, so a read cancelled mid-await leaves it armed;
+    closing a descriptor the loop still watches is what the selector complains about.
+    """
+    import asyncio
+
+    master, _ = child
+    kept = attach.keep_across_exec(master)
+
+    async def go() -> tuple[bool, bool]:
+        loop = asyncio.get_running_loop()
+        pty = attach.attached_pty(master, 24, 80)
+        loop.add_reader(pty.master_fd, lambda: None)  # armed, as a cancelled read leaves it
+        watched_before = pty.master_fd in loop._selector.get_map()
+        attach.release(pty)
+        return watched_before, pty.master_fd in (loop._selector.get_map() or {})
+
+    before, after = asyncio.run(go())
+    assert before is True
+    assert after is False  # unwatched, so the loop never polls a closed descriptor
+    with pytest.raises(OSError):
+        os.fstat(master)  # and the original is closed, not left to the collector
+    os.close(kept)
+
+
+def test_release_does_not_hang_the_child_up(child):
+    """It closes a master, so the duplicate must be what keeps the child alive."""
+    import asyncio
+
+    master, proc = child
+    kept = attach.keep_across_exec(master)
+
+    async def go() -> None:
+        attach.release(attach.attached_pty(master, 24, 80))
+
+    asyncio.run(go())
+    time.sleep(0.1)
+    assert proc.poll() is None
+    os.write(kept, b"still here\n")
+    assert wait_for(lambda: b"still here" in os.read(kept, 4096))
+    os.close(kept)
+
+
+def test_release_is_quiet_outside_an_event_loop(child):
+    """A detach can run where no loop is current; it must still close the descriptor."""
+    master, _ = child
+    kept = attach.keep_across_exec(master)
+    attach.release(attach.attached_pty(master, 24, 80))
+    with pytest.raises(OSError):
+        os.fstat(master)
+    os.close(kept)

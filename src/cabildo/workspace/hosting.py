@@ -208,8 +208,9 @@ class ClaudePane(Terminal):
 
         The descriptor is duplicated onto one that survives ``exec`` and the board is
         emptied, so the unmount that follows finds nothing to close and Claude is never
-        hung up. Dropping the terminal object closes only the original descriptor, and a
-        pseudo-terminal hangs up on its last master, not its first.
+        hung up. The original is unwatched and closed deliberately (`attach.release`)
+        rather than left to the garbage collector, and a pseudo-terminal hangs up on its
+        last master, not its first.
         """
         board, process = self.board, self.board.process
         if board.pty is None or process is None or self.exited or self.closing:
@@ -219,6 +220,7 @@ class ClaudePane(Terminal):
         except OSError:
             return None
         board.host.disconnect()
+        attach.release(board.pty)  # unwatch and close the original, never the duplicate
         board.pty = None  # so stop_process() and the unmount after it close nothing
         board.process = None
         _HELD.append(process)  # keep the handle until exec, so nothing warns or reaps
