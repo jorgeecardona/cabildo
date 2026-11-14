@@ -131,7 +131,7 @@ provides-extras = ["docs"]
 [package.metadata.requires-dev]
 dev = [
     { name = "musil", marker = "python_full_version >= '3.12'", specifier = ">=0.35" },
-    { name = "prodc", specifier = ">=0.10.6,<0.11" },
+    { name = "prodc", specifier = ">=0.11.0,<0.12" },
     { name = "pyright", extras = ["nodejs"], specifier = ">=1.1.390" },
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.6" },
@@ -997,14 +997,14 @@ wheels = [
 
 [[package]]
 name = "prodc"
-version = "0.10.6"
+version = "0.11.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/67/75/57862b2c7369491f14d9f375e77613322f2b422491b26c38749596d47c7b/prodc-0.10.6.tar.gz", hash = "sha256:8f67692fc0035966548cf8870a071d5e5cbedc9e56768267b2ab3b3767d3d974", size = 322592, upload-time = "2026-11-12T18:03:42.608Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/90/05/3255d7f13f0bb0ccc9c9d631057aec06dce4ba3328dbe3a4aff929032d79/prodc-0.11.1.tar.gz", hash = "sha256:788ac0e02a090caabe49a09931892078172eda5318d3a4ad453a46f1dc0c1077", size = 325221, upload-time = "2026-11-14T12:26:11.834Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/92/e0/acc27ccef92e257b9338fd0fa04534d071be73dd447b880ba87fa19bdd3f/prodc-0.10.6-py3-none-any.whl", hash = "sha256:50696de3675317876b27def311c222f9636c331e3434d7bfb0cea0a43a7269c3", size = 223084, upload-time = "2026-11-12T18:03:43.829Z" },
+    { url = "https://files.pythonhosted.org/packages/52/b3/e6273be02c32849b135192d9562f7b4cc8a512c9249c140f29bff5264a23/prodc-0.11.1-py3-none-any.whl", hash = "sha256:5674239f65ebae5b3154f305ba192efede8182f464b1e1a173563bb8b6466735", size = 222091, upload-time = "2026-11-14T12:26:12.939Z" },
 ]
 
 [[package]]

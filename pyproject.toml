@@ -73,7 +73,7 @@ dev = [
     # This repo keeps its own follow-ups in docs/issues/, which prodc owns (`prodc issue board`).
     # Dev-only on purpose: the package serves no register, so prodc must never reach
     # [project.dependencies] — `pip install cabildo` is the bus and nothing else.
-    "prodc>=0.10.6,<0.11",
+    "prodc>=0.11.0,<0.12",
 ]
 
 [tool.pytest.ini_options]
