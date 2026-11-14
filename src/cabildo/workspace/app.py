@@ -36,6 +36,7 @@ from textual.widgets import ContentSwitcher, DataTable, Input, Label, Static
 from textual.worker import get_current_worker
 
 from cabildo import __version__, cloud, config, names, sessions_ops, store
+from cabildo import usage as usage_tokens
 from cabildo.workspace import (
     agents,
     attach,
@@ -266,28 +267,59 @@ def fmt_money(dollars: float) -> str:
 
 
 SPENT = "spent"  # the column's header when there is nothing billed to compare it with
+MODEL_ROWS = 4  # models shown in the per-model block, dearest first
+
+
+def fmt_models(models: tuple[usage_tokens.ModelSpend, ...], width: int = 1000) -> list[str]:
+    """Today split by model, dearest first::
+
+        today          spent    tokens
+        opus 5       $584.12    622.2M
+        sonnet 5.5    $47.56    113.5M
+        fable 5.2     $12.58     13.8M
+
+    This is the one place a token count is shown, and the reason is the same one that
+    keeps it out of the table above: tokens of different models are not the same amount,
+    so they are only worth printing beside the name of the model that spent them. A model
+    whose rates are not known shows its tokens and ``?`` for the money.
+    """
+    if not models:
+        return []
+    rows = [grid("today", "spent", "tokens")]
+    for m in models[:MODEL_ROWS]:
+        money = fmt_money(m.cost) if m.priced else "?"
+        rows.append(grid(sessions.model_name(m.model), money, fmt_count(m.tokens)).rstrip())
+    rest = models[MODEL_ROWS:]
+    if rest:
+        spent = sum(m.cost for m in rest)
+        rows.append(
+            grid(f"{len(rest)} more", fmt_money(spent), fmt_count(sum(m.tokens for m in rest)))
+        )
+    return [r for r in rows if len(r) <= width] or rows[:1]
+
+
 NO_SPEND_ROW = "-"  # remembered when the login turned out to want no spend row at all
 
 
 def fmt_spend(r: spend.Report, label: str = "api key", width: int = 1000) -> list[str]:
     """The consumption table, one row per period, under a header::
 
-        api key        spent    tokens
-        today         $12.34      4.2M
-        7d           $103.90     38.1M
-        all          $421.07    162.4M
+        api key        spent
+        today         $12.34
+        7d           $103.90
+        all          $421.07
 
-    Tokens are every billed token: input, output, cache writes and cache reads. ``spent``
-    covers only what the price table could price, so a period holding tokens it could not
-    carries ``+<n> unpriced`` and its dollar figure is a floor, not the total.
+    Dollars only: a token count adds a Haiku token to a Fable token as if they were the
+    same thing. ``spent`` covers only what the price table could price, so a period
+    holding tokens it could not carries ``+<n> unpriced`` and its figure is a floor.
 
     With an Admin API key configured, a ``billed`` column comes first and ``spent``
     becomes ``est``, because the two answer different questions -- the organization's
     actual cost against this machine's computed one::
 
-        api key       billed       est    tokens
-        today              -   $241.91    241.2M
-        7d         $4,712.08 $4,829.36      5.4B
+        api key       billed       est
+        today              -   $241.91
+        7d         $4,712.08 $4,829.36
 
     A window the cost API has no data for is a dash, never ``$0.00``: today's billed cost
     is usually missing, since that data lands hours late, and a zero there would read as
@@ -310,10 +342,9 @@ def fmt_spend(r: spend.Report, label: str = "api key", width: int = 1000) -> lis
     if r.session is not None:
         mine = (r.session.today, r.session.week, r.session.all_time)
         columns.append(("session", [fmt_money(w.cost) for w in mine]))
-    columns.append(("tokens", [fmt_count(w.tokens) for w in machine]))
 
     tails = [f"  +{fmt_count(w.unpriced)} unpriced" if w.unpriced else "" for w in machine]
-    while len(columns) > 2 and len(label) + 10 * len(columns) > width:
+    while len(columns) > 1 and len(label) + 10 * len(columns) > width:
         columns.pop()  # the rightmost column is the least missed
     rows = [f"{label:<11}" + "".join(f"{head:>10}" for head, _ in columns)]
     for i, name in enumerate(names):
@@ -457,6 +488,7 @@ KEYS = """\
    Tab          back to Claude
    j k          move (also the arrows)
    T            CPU, wakeups and memory of each session (like top)
+   A            a year of estimated cost, one cell per day
    q  C-q       quit (asks while a Claude runs)
    R            reload: start again on the installed code, keeping the sessions
    ?            these keys
@@ -499,9 +531,9 @@ def heat_text(cal: heatmap.Calendar) -> Text:
 
 
 def heat_legend(cal: heatmap.Calendar) -> Text:
-    """``1.4T tokens · 312 days · Less ▪▪▪▪▪ More``, under the grid."""
-    days = sum(1 for week in cal.weeks for cell in week if cell.tokens)
-    out = Text(f"{fmt_count(cal.total)} tokens over {days} day{'' if days == 1 else 's'}", "dim")
+    """``$7,752 over 20 days · Less ▪▪▪▪▪ More``, under the grid."""
+    days = sum(1 for week in cal.weeks for cell in week if cell.value)
+    out = Text(f"{fmt_money(cal.total)} over {days} day{'' if days == 1 else 's'}", "dim")
     out.append("     Less ", "dim")
     for color in HEAT_COLORS:
         out.append(heatmap.CELL + " ", color)
@@ -510,10 +542,10 @@ def heat_legend(cal: heatmap.Calendar) -> Text:
 
 
 class HeatScreen(ModalScreen[None]):
-    """`A`: a year of token use, one cell per day, like any contribution graph.
+    """`A`: a year of estimated cost, one cell per day, like any contribution graph.
 
-    Tokens rather than dollars: a rate card changes and a price table goes stale, but the
-    tokens a day spent are the same fact a year later.
+    Dollars rather than tokens: tokens of different models are not the same amount, so a
+    day on Haiku and a day on Fable would otherwise shade alike.
     """
 
     BINDINGS = [Binding("escape,q,A", "close", "Close")]
@@ -525,7 +557,7 @@ class HeatScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="top"):
             yield Static(
-                "Tokens per day on this machine · input, output and cache · q closes",
+                "Estimated cost per day on this machine · q closes",
                 id="top-title",
             )
             yield Static(heat_text(self._cal), id="heat-grid")
@@ -703,6 +735,7 @@ class SwitcherApp(App[None]):
         self.spend_label = ""  # "" while the mode line shows no spend row
         self.spend_mode = "never"  # [workspace].spend; read at mount
         self._auth_seen = ""  # the row's label once the login has been read, on the worker
+        self._spend_busy = False  # a spend refresh is in flight
         self._cwd_key = cloud.project_key(cwd)  # what the intents of "here" are matched on
         self.intents: tuple[intents.Intent, ...] = ()  # the push queue and its latest results
         self._intents_seen = False  # the bus has been read once: show the group, even if empty
@@ -814,7 +847,17 @@ class SwitcherApp(App[None]):
         self.set_interval(spend.REFRESH_SECONDS, self._spend_tick)
 
     def _spend_tick(self) -> None:
-        self.run_worker(self._spend_fetch, thread=True, group="spend", exclusive=True)
+        """Start a refresh unless one is in flight.
+
+        Not `exclusive=True`: that cancels the running worker, and a cancelled worker is
+        an error to anything waiting on the worker manager. Switching panes can fire this
+        while the periodic tick runs, so the two must not race. The one in flight already
+        reads the pane that is shown when it gets there, and the next tick follows soon.
+        """
+        if self._spend_busy:
+            return
+        self._spend_busy = True
+        self.run_worker(self._spend_fetch, thread=True, group="spend")
 
     def _spend_fetch(self) -> None:
         """Off the UI thread: which login this is, and what it consumed.
@@ -826,7 +869,10 @@ class SwitcherApp(App[None]):
         if not self._auth_seen:
             self._auth_seen = self._spend_heading() or NO_SPEND_ROW
         label = "" if self._auth_seen == NO_SPEND_ROW else self._auth_seen
-        found = spend.load(time.time(), self.cwd, self._shown_ids()) if label else None
+        try:
+            found = spend.load(time.time(), self.cwd, self._shown_ids()) if label else None
+        finally:
+            self._spend_busy = False
         self._to_ui(self._spend_got, found, label)
 
     def _spend_heading(self) -> str:
@@ -1050,8 +1096,9 @@ class SwitcherApp(App[None]):
             style = plan_style(self.plan_usage)
             groups.append([(x, style) for x in fmt_plan(self.plan_usage, self.plan_pace)])
         if self.spend and self.spend_label:
-            rows_ = fmt_spend(self.spend, self.spend_label, width)
-            groups.append([(x, "") for x in rows_])
+            groups.append([(x, "") for x in fmt_spend(self.spend, self.spend_label, width)])
+            if by_model := fmt_models(self.spend.models, width):
+                groups.append([(x, "") for x in by_model])
         if self.intents or (self._intents_seen and store.db_path().exists()):
             groups.append(
                 fmt_intents(

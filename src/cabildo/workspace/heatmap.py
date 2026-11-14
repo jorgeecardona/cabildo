@@ -1,9 +1,9 @@
 """A year of token use as a calendar, the shape every contribution graph uses.
 
 One cell per day, weeks as columns and weekdays as rows, so a year is one glance: which
-weeks were heavy, which days were quiet, where the gaps are. The shade is total tokens,
-not dollars -- tokens never go stale when a rate card changes and they cover models the
-price table does not know, which matters for a figure meant to be read a year later.
+weeks were heavy, which days were quiet, where the gaps are. The shade is estimated
+dollars, because tokens of different models are not the same amount: a Haiku token and a
+Fable token are 80 times apart in price, and a sum of them says little.
 
 Levels are quartiles of the days that had any use, not fixed thresholds: a week of heavy
 work and a week of light work should both show their own range, and an absolute scale
@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime as dt
 import sqlite3
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 #: Shades from "nothing" to "most". Five, like every graph of this shape, because more
@@ -35,29 +36,26 @@ BLANK = " "
 #: Weekday rows are labelled like the published graphs: every other day, Monday first.
 ROW_LABELS = ("M", "", "W", "", "F", "", "")
 
-_BY_DAY = (
-    "SELECT date(ts, 'unixepoch', 'localtime') AS day, "
-    "sum(input + output + cache_read + cache_write) AS tokens "
-    "FROM usage_messages WHERE ts >= ? GROUP BY day"
-)
 
+def by_day(conn: sqlite3.Connection, since: float) -> dict[str, float]:
+    """Estimated dollars per local calendar day, from ``since`` (unix seconds) onward.
 
-def by_day(conn: sqlite3.Connection, since: float) -> dict[str, int]:
-    """Tokens per local calendar day, from ``since`` (unix seconds) onward.
-
-    Local, not UTC, to agree with the mode line's "today": a day is the one whose work
-    the human remembers doing, not the one the data happens to be bucketed into.
+    Dollars, not tokens: a Haiku token and a Fable token are not the same amount of work
+    or money, and a sum of them says little. Local, not UTC, to agree with the mode line's
+    "today": a day is the one whose work the human remembers doing.
     """
-    return {r["day"]: int(r["tokens"] or 0) for r in conn.execute(_BY_DAY, (since,))}
+    from cabildo import usage
+
+    return usage.cost_by_day(conn, since)
 
 
-def thresholds(tokens: list[int]) -> list[int]:
+def thresholds(values: Sequence[float]) -> list[float]:
     """The quartile cuts of the days that had any use, smallest first.
 
     Returns ``LEVELS - 2`` cuts: a day at or above cut *i* is at least level *i* + 2.
     An empty history has no cuts, and every day then reads as the lightest level.
     """
-    used = sorted(t for t in tokens if t > 0)
+    used = sorted(v for v in values if v > 0)
     if not used:
         return []
     cuts = []
@@ -67,23 +65,23 @@ def thresholds(tokens: list[int]) -> list[int]:
     return cuts
 
 
-def level(tokens: int, cuts: list[int]) -> int:
+def level(value: float, cuts: list[float]) -> int:
     """Which shade a day's token count falls in: 0 for nothing, 1..LEVELS-1 otherwise."""
-    if tokens <= 0:
+    if value <= 0:
         return EMPTY
     found = LIGHTEST
     for i, cut in enumerate(cuts):
-        if tokens >= cut:
+        if value >= cut:
             found = i + 2
     return min(found, MOST)
 
 
 @dataclass(frozen=True)
 class Cell:
-    """One day: when it was, what it cost in tokens, and how dark it reads."""
+    """One day: when it was, what it cost, and how dark it reads."""
 
     day: str  # YYYY-MM-DD; "" for a padding cell before the first week starts
-    tokens: int
+    value: float  # estimated dollars
     level: int
 
     @property
@@ -97,14 +95,14 @@ class Calendar:
 
     weeks: tuple[tuple[Cell, ...], ...]
     months: tuple[tuple[int, str], ...]  # (column, "Nov") where a month's first week sits
-    total: int
+    total: float
 
     def rows(self) -> list[list[Cell]]:
         """The same grid by weekday, which is the order a terminal draws it in."""
         return [[week[d] for week in self.weeks] for d in range(DAYS)]
 
 
-def build(per_day: dict[str, int], today: dt.date, weeks: int = WEEKS) -> Calendar:
+def build(per_day: Mapping[str, float], today: dt.date, weeks: int = WEEKS) -> Calendar:
     """The calendar ending on ``today``'s week, with ``weeks`` columns.
 
     The last column is the current, part-finished week: its days after today are padding,
@@ -114,18 +112,18 @@ def build(per_day: dict[str, int], today: dt.date, weeks: int = WEEKS) -> Calend
     start = end - dt.timedelta(days=weeks * DAYS - 1)  # a Monday
     cuts = thresholds(list(per_day.values()))
     grid, months, seen = [], [], set()
-    total = 0
+    total = 0.0
     for w in range(weeks):
         column = []
         for d in range(DAYS):
             date = start + dt.timedelta(days=w * DAYS + d)
             if date > today:
-                column.append(Cell("", 0, EMPTY))
+                column.append(Cell("", 0.0, EMPTY))
                 continue
             key = date.isoformat()
-            tokens = per_day.get(key, 0)
-            total += tokens
-            column.append(Cell(key, tokens, level(tokens, cuts)))
+            value = per_day.get(key, 0.0)
+            total += value
+            column.append(Cell(key, value, level(value, cuts)))
         grid.append(tuple(column))
         first = start + dt.timedelta(days=w * DAYS)
         if first.month not in seen or first.day <= DAYS:

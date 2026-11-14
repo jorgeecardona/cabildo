@@ -5,6 +5,8 @@ from __future__ import annotations
 import datetime as dt
 import time
 
+import pytest
+
 from cabildo.workspace import heatmap
 
 MONDAY = dt.date(2026, 11, 9)
@@ -104,4 +106,23 @@ def test_by_day_buckets_on_the_local_calendar(conn):
         (local,),
     )
     conn.commit()
-    assert heatmap.by_day(conn, 0.0) == {"2026-11-13": 10}
+    # an unknown model cannot be priced: the day still shows, at the lightest shade
+    assert heatmap.by_day(conn, 0.0) == {"2026-11-13": pytest.approx(1e-9)}
+
+
+def test_a_day_on_a_cheap_model_shades_lighter_than_one_on_an_expensive_one(conn):
+    """The reason the calendar is in dollars: the same token count on Haiku and on Fable
+    is not the same amount, and a token total would paint both days alike.
+    """
+    day1 = time.mktime((2026, 11, 12, 12, 0, 0, 0, 0, -1))
+    day2 = time.mktime((2026, 11, 13, 12, 0, 0, 0, 0, -1))
+    for ts, model in ((day1, "claude-haiku-5-5"), (day2, "claude-fable-5-2")):
+        conn.execute(
+            "INSERT INTO usage_messages (message_id, ts, session_id, agent_id, project, model, "
+            "input, output, cache_read, cache_write) VALUES (?, ?, 's', NULL, 'p', ?, "
+            "50000, 50000, 0, 0)",  # under Haiku 5.5's 100K tier line
+            (model, ts, model),
+        )
+    conn.commit()
+    got = heatmap.by_day(conn, 0.0)
+    assert got["2026-11-13"] > 50 * got["2026-11-12"]

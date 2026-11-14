@@ -56,6 +56,9 @@ class Report:
 
     ``session`` is the shown conversation's own consumption over the same three periods,
     so a long conversation's cost is readable against the machine's.
+
+    ``models`` splits today by model. It is the one place tokens are reported, because a
+    token only means something next to others of its own model.
     """
 
     spend: usage.Spend
@@ -63,6 +66,7 @@ class Report:
     billed_week: float | None = None
     billed_all: float | None = None
     session: usage.Spend | None = None  # the shown conversation's share; None when none
+    models: tuple[usage.ModelSpend, ...] = ()  # today, per model, dearest first
 
     @property
     def any_billed(self) -> bool:
@@ -113,11 +117,12 @@ def load(
             pass  # another writer holds it: price what is already recorded
         computed = usage.spend(conn, at)
         mine = usage.spend(conn, at, sessions) if sessions else None
+        models = tuple(usage.by_model(conn, usage._midnight(at)))
         try:
             today, week, all_time = billed_windows(conn, cwd, at)
         except sqlite3.Error:
             today = week = all_time = None  # the billed column is an extra; computed is not
-        return Report(computed, today, week, all_time, mine)
+        return Report(computed, today, week, all_time, mine, models)
     except sqlite3.Error:
         return None
     finally:

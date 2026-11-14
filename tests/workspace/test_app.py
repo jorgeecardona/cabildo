@@ -685,10 +685,10 @@ def test_the_spend_table_lines_up_under_a_header() -> None:
         all_time=Window(input=9_000_000_000, output=2_000_000, cost=4821.79),
     )
     rows = [line.split() for line in fmt_spend(Report(s))]
-    assert rows[0] == ["api", "key", "spent", "tokens"]
-    assert rows[1] == ["today", "$0.84", "3k"]
-    assert rows[2] == ["7d", "$103.90", "3.0M"]
-    assert rows[3] == ["all", "$4,821.79", "9.0B"]  # thousands and billions stay readable
+    assert rows[0] == ["api", "key", "spent"]
+    assert rows[1] == ["today", "$0.84"]
+    assert rows[2] == ["7d", "$103.90"]
+    assert rows[3] == ["all", "$4,821.79"]  # thousands stay readable
 
 
 def test_the_spend_table_names_tokens_it_could_not_price() -> None:
@@ -720,7 +720,7 @@ def test_a_billed_figure_gets_its_own_column_and_a_gap_is_a_dash() -> None:
         all_time=Window(output=1_000, cost=7440.23),
     )
     rows = [line.split() for line in fmt_spend(Report(s, None, 4712.08, 21004.55))]
-    assert rows[0] == ["api", "key", "billed", "est", "tokens"]
+    assert rows[0] == ["api", "key", "billed", "est"]
     assert rows[1][:3] == ["today", "-", "$241.91"]
     assert rows[2][:3] == ["7d", "$4,712.08", "$4,829.36"]
     assert rows[3][:3] == ["all", "$21,004.55", "$7,440.23"]
@@ -734,7 +734,7 @@ def test_the_shown_conversation_gets_its_own_column() -> None:
     machine = Spend(Window(cost=307.33), Window(cost=4894.78), Window(cost=7505.65))
     mine = Spend(Window(cost=35.02), Window(cost=49.59), Window(cost=49.59))
     rows = [line.split() for line in fmt_spend(Report(machine, session=mine), width=60)]
-    assert rows[0] == ["api", "key", "spent", "session", "tokens"]
+    assert rows[0] == ["api", "key", "spent", "session"]
     assert rows[1][:3] == ["today", "$307.33", "$35.02"]
     assert rows[3][:3] == ["all", "$7,505.65", "$49.59"]
 
@@ -809,3 +809,38 @@ def test_the_keys_screen_shows_the_version(transcript, monkeypatch) -> None:
 
     drive(monkeypatch, scenario)
     assert f"workspace {__version__}" in seen[0]
+
+
+def test_the_per_model_block_shows_tokens_beside_the_model_that_spent_them() -> None:
+    """Tokens are kept out of the table above because summing them across models says
+    nothing. Next to one model's name they are that model's own measure of work.
+    """
+    from cabildo.usage import ModelSpend
+    from cabildo.workspace.app import fmt_models
+
+    rows = [
+        line.split()
+        for line in fmt_models(
+            (
+                ModelSpend("claude-opus-5", 622_200_000, 584.12, True),
+                ModelSpend("claude-fable-5-2", 13_800_000, 12.58, True),
+            )
+        )
+    ]
+    assert rows[0] == ["today", "spent", "tokens"]
+    assert rows[1] == ["opus", "5", "$584.12", "622.2M"]
+    assert rows[2] == ["fable", "5.2", "$12.58", "13.8M"]
+
+
+def test_a_model_the_price_table_cannot_price_shows_its_tokens_and_a_question_mark() -> None:
+    from cabildo.usage import ModelSpend
+    from cabildo.workspace.app import fmt_models
+
+    rows = fmt_models((ModelSpend("claude-opus-9", 500_000, 0.0, False),))
+    assert rows[1].split() == ["opus", "9", "?", "500k"]  # not $0.00, which reads as free
+
+
+def test_nothing_spent_today_draws_no_per_model_block() -> None:
+    from cabildo.workspace.app import fmt_models
+
+    assert fmt_models(()) == []

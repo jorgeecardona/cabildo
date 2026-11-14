@@ -271,3 +271,41 @@ def test_the_billed_column_appears_when_the_cost_api_answers(root, conn, monkeyp
     assert found.billed_week == pytest.approx(250.0 * 11)  # one row per 31-day chunk
     assert found.billed_today is None  # the horizon has not reached today
     assert found.spend.all_time.cost > 0  # the computed figure is still there
+
+
+# --------------------------------------------------------------------------- #
+# Split by model
+# --------------------------------------------------------------------------- #
+def test_by_model_splits_a_period_and_puts_the_dearest_first(root, conn):
+    now = 1_800_000_000.0
+    (root / "proj" / "a.jsonl").write_text(
+        line("cheap", at(now, 60), model="claude-haiku-5-5", output=1_000_000)
+        + line("dear", at(now, 60), model="claude-fable-5-2", output=1_000_000)
+    )
+    usage.ingest(conn)
+    found = usage.by_model(conn, 0.0)
+    assert [m.model for m in found] == ["claude-fable-5-2", "claude-haiku-5-5"]
+    assert found[0].cost == pytest.approx(prices.PRICES["claude-fable-5-2"].output)
+    assert found[0].tokens == found[1].tokens == 1_000_000  # same tokens, 80x the cost
+    assert found[0].cost > 50 * found[1].cost
+
+
+def test_a_model_without_rates_keeps_its_tokens_and_reports_no_cost(root, conn):
+    """Its tokens are real and its cost is not known, which is not the same as free."""
+    now = 1_800_000_000.0
+    (root / "proj" / "a.jsonl").write_text(
+        line("m1", at(now, 60), model="claude-opus-9", output=500_000)
+    )
+    usage.ingest(conn)
+    found = usage.by_model(conn, 0.0)
+    assert (found[0].tokens, found[0].cost, found[0].priced) == (500_000, 0.0, False)
+
+
+def test_by_model_can_be_narrowed_to_one_conversation(root, conn):
+    now = 1_800_000_000.0
+    (root / "proj" / "a.jsonl").write_text(line("m1", at(now, 60), output=1000))
+    usage.ingest(conn)
+    conn.execute("UPDATE usage_messages SET session_id = 'other' WHERE message_id = 'm1'")
+    conn.commit()
+    assert usage.by_model(conn, 0.0, ("mine",)) == []
+    assert [m.model for m in usage.by_model(conn, 0.0, ("other",))] == ["claude-opus-5-5"]

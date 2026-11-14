@@ -280,6 +280,101 @@ def window(
     return Window(**totals, cost=cost, unpriced=unpriced)
 
 
+_BY_DAY_MODEL = (
+    "SELECT date(ts, 'unixepoch', 'localtime') AS day, model, fast, "
+    "(input + cache_read + cache_write) > ? AS long_prompt, "
+    "sum(input) AS input, sum(output) AS output, sum(cache_read) AS cache_read, "
+    "sum(cache_write) AS cache_write, sum(cache_write_1h) AS cache_write_1h "
+    "FROM usage_messages WHERE ts >= ? GROUP BY day, model, fast, long_prompt"
+)
+
+#: What a day holds when it has usage but none the price table can price. Any positive
+#: amount draws the lightest shade, so the day does not read as idle.
+UNPRICED_DAY = 1e-9
+
+
+def cost_by_day(conn: sqlite3.Connection, since: float) -> dict[str, float]:
+    """Estimated dollars per local calendar day, each token at its own model's rate.
+
+    This is the common unit a Haiku token and a Fable token can be added in. A day with
+    use that cannot be priced is ``UNPRICED_DAY``, not absent and not zero.
+    """
+    out: dict[str, float] = {}
+    for row in conn.execute(_BY_DAY_MODEL, (prices.LONG_PROMPT_TOKENS, since)):
+        used = row["input"] + row["output"] + row["cache_read"] + row["cache_write"]
+        rates = (
+            None if row["fast"] else prices.price_of(row["model"], long_prompt=row["long_prompt"])
+        )
+        write_1h = row["cache_write_1h"]
+        dollars = 0.0
+        if rates is not None:
+            dollars = (
+                row["input"] * rates.input
+                + (row["cache_write"] - write_1h) * rates.cache_write_5m
+                + write_1h * rates.cache_write_1h
+                + row["cache_read"] * rates.cache_read
+                + row["output"] * rates.output
+            ) / prices.PER_MILLION
+        if used or dollars:
+            out[row["day"]] = out.get(row["day"], 0.0) + (dollars or UNPRICED_DAY)
+    return out
+
+
+@dataclass(frozen=True)
+class ModelSpend:
+    """One model's share of a period: its own tokens, and what they cost.
+
+    Tokens are reported here and nowhere else, because here they mean something. Summed
+    across models they are a number without a unit -- a Haiku token and a Fable token are
+    80 times apart in price. Within one model they are the model's own measure of work.
+    """
+
+    model: str
+    tokens: int
+    cost: float
+    priced: bool
+
+
+def by_model(
+    conn: sqlite3.Connection, since: float, sessions: tuple[str, ...] | None = None
+) -> list[ModelSpend]:
+    """Each model's tokens and cost since ``since``, dearest first.
+
+    A model whose rates are unknown, or a fast-mode reply, reports ``priced=False`` and a
+    cost of 0: its tokens are real and its cost is not known, which is not the same as
+    free.
+    """
+    if sessions is not None and not sessions:
+        return []
+    where = "" if sessions is None else f" AND session_id IN ({','.join('?' * len(sessions))})"
+    sql = _GROUPED.format(where=where)
+    args: tuple = (prices.LONG_PROMPT_TOKENS, since, *(sessions or ()))
+    found: dict[str, ModelSpend] = {}
+    for row in conn.execute(sql, args):
+        write_1h = row["cache_write_1h"]
+        used = row["input"] + row["output"] + row["cache_read"] + row["cache_write"]
+        rates = (
+            None if row["fast"] else prices.price_of(row["model"], long_prompt=row["long_prompt"])
+        )
+        dollars = 0.0
+        if rates is not None:
+            dollars = (
+                row["input"] * rates.input
+                + (row["cache_write"] - write_1h) * rates.cache_write_5m
+                + write_1h * rates.cache_write_1h
+                + row["cache_read"] * rates.cache_read
+                + row["output"] * rates.output
+            ) / prices.PER_MILLION
+        was = found.get(row["model"])
+        found[row["model"]] = ModelSpend(
+            model=row["model"],
+            tokens=(was.tokens if was else 0) + used,
+            cost=(was.cost if was else 0.0) + dollars,
+            priced=(was.priced if was else True) and rates is not None,
+        )
+    return sorted(found.values(), key=lambda m: (-m.cost, -m.tokens))
+
+
 def spend(
     conn: sqlite3.Connection, now: float | None = None, sessions: tuple[str, ...] | None = None
 ) -> Spend:

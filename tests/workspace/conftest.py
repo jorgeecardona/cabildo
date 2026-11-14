@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 from lines import PROJECT
 
-from cabildo.workspace import sessions
+from cabildo.workspace import plan, sessions
 
 # The tests render the app and its terminal pane. Under `moon run` in CI (a non-TTY run) moon
 # exports NO_COLOR to its task children, which puts Textual in monochrome mode -- and the
@@ -103,3 +103,19 @@ def bus_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "bus"
     monkeypatch.setenv("CABILDO_HOME", str(home))
     return home
+
+
+@pytest.fixture(autouse=True)
+def no_keychain(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test: the login is unknown, never the developer's own.
+
+    `CLAUDE_CONFIG_DIR` points at an empty directory above, so there is no credentials
+    file to read -- but on macOS the fallback is the login Keychain, which is real, is
+    the person's, and would make the suite's behaviour depend on whose machine it runs
+    on. An unreadable login is the right answer for a test.
+
+    A test marked `real_keychain` is testing that fallback itself, and keeps it.
+    """
+    if request.node.get_closest_marker("real_keychain"):
+        return
+    monkeypatch.setattr(plan, "_keychain", lambda: None)

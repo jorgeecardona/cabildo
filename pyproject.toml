@@ -79,6 +79,9 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "real_keychain: let the test reach the keychain fallback the workspace fixtures stub out",
+]
 
 [tool.uv]
 # After the pre-commit hook auto-bumps __version__ in the package __init__, uv must treat the

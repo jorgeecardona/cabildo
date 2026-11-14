@@ -4,6 +4,8 @@ import sqlite3
 import subprocess
 import time
 
+import pytest
+
 from cabildo import store
 from cabildo.workspace import plan, xdgdirs
 from cabildo.workspace.app import fmt_plan, plan_style
@@ -309,6 +311,7 @@ def test_two_reads_of_the_same_sample_show_the_same_pace(monkeypatch):
     assert first == plan.shared(not_before=0)
 
 
+@pytest.mark.real_keychain
 def test_macos_reads_the_token_from_the_keychain(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))  # no .credentials.json here
     monkeypatch.setenv("USER", "jorge")

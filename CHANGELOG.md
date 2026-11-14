@@ -27,10 +27,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   Requests still pending pop again when the daemon starts.
 
 - On an API-key login the workspace mode line shows what has been consumed, where a
-  subscription shows its 5h/7d limits: tokens for today, the last 7 days and all time,
-  with the dollar cost beside them. The tokens come from the transcripts, the prices from
-  a table in `cabildo.prices`; a model the table does not know, or a fast-mode reply, is
-  counted in tokens and named as `unpriced` rather than guessed at. The figure covers this
+  subscription shows its 5h/7d limits: dollars for today, the last 7 days and all time.
+  There is no token total, since it would add tokens of different models as if they were
+  the same. The tokens come from the transcripts, the prices from a table in
+  `cabildo.prices`; a model the table does not know, or a fast-mode reply, is named as
+  `unpriced` rather than guessed at. The figure covers this
   machine only. `[workspace] spend = "always"` shows the rows on a subscription too,
   `"never"` hides them.
 - With an Admin API key, the same rows carry a `billed` column: what the organization's
@@ -50,11 +51,17 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   know: a pane's scrollback is lost, because it lived in the program being replaced (Claude
   redraws its current screen), and a session whose Claude died during the restart is hung
   up rather than left on a terminal nobody reads.
-- `A` in the workspace opens a year of token use as a calendar, one cell per day, weeks as
-  columns: the shape every contribution graph uses. Shaded by tokens rather than dollars,
-  since tokens do not go stale when a rate card changes and they cover models the price
-  table does not know. The shades are quartiles of the days that had use, so a quiet month
-  and a busy one each show their own range instead of one flat colour.
+- Under those rows, today split by model: what each one cost and how many tokens it spent.
+  This is the one place a token count appears, and for the same reason it is absent above:
+  tokens of different models are not the same amount, so they are only worth printing
+  beside the name of the model that spent them. A model whose rates are not known shows
+  its tokens and `?` for the money, never `$0.00`.
+- `A` in the workspace opens a year of estimated cost as a calendar, one cell per day, weeks
+  as columns: the shape every contribution graph uses. Shaded by dollars rather than
+  tokens, because a Haiku token and a Fable token are 80 times apart in price and a sum of
+  them says little; a day whose use cannot be priced still draws, at the lightest shade.
+  The shades are quartiles of the days that had use, so a quiet month and a busy one each
+  show their own range instead of one flat colour.
 - The same rows carry a `session` column for the conversation in the main pane: its share
   of today, the week and all time, beside the machine's. It counts every session id of
   that conversation, so resuming one does not reset its cost to zero. Columns drop from
