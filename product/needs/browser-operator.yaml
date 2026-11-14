@@ -80,7 +80,7 @@ needs:
         observed_at: '2026-11-07'
     proofs:
       - "test:tests/test_browser_login.py::test_write_state_is_mode_600_and_counts"
-      - "test:tests/test_browser_login.py::test_collect_returns_the_last_state_read_before_the_browser_closed"
+      - "test:tests/test_browser_login.py::test_plain_command_has_no_automation_flag"
       - "test:tests/test_browser_login.py::test_free_profile_stops_that_browser_and_removes_the_locks"
 
   - id: BROWSER-5
