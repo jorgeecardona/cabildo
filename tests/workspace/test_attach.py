@@ -38,6 +38,22 @@ def wait_for(check, timeout: float = 3.0) -> bool:
     return False
 
 
+def read_until(fd: int, want: bytes, timeout: float = 3.0) -> bool:
+    """True once ``want`` has been read from ``fd``. A non-blocking fd with nothing yet
+    raises ``BlockingIOError``; that means wait, not fail.
+    """
+    seen = bytearray()
+
+    def check() -> bool:
+        try:
+            seen.extend(os.read(fd, 4096))
+        except BlockingIOError:
+            return False
+        return want in seen
+
+    return wait_for(check, timeout)
+
+
 @pytest.fixture
 def child():
     master, proc = spawn_on_pty()
@@ -71,7 +87,7 @@ def test_closing_the_original_does_not_hang_the_child_up(child):
     time.sleep(0.1)
     assert proc.poll() is None  # still running, on the duplicate
     os.write(kept, b"still here\n")
-    assert wait_for(lambda: b"still here" in os.read(kept, 4096))
+    assert read_until(kept, b"still here")
     os.close(kept)
 
 
@@ -280,7 +296,7 @@ def test_release_does_not_hang_the_child_up(child):
     time.sleep(0.1)
     assert proc.poll() is None
     os.write(kept, b"still here\n")
-    assert wait_for(lambda: b"still here" in os.read(kept, 4096))
+    assert read_until(kept, b"still here")
     os.close(kept)
 
 
