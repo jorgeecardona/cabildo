@@ -17,6 +17,7 @@ snapshot taken after the title arrived.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -27,6 +28,15 @@ from textual_tty import Terminal
 
 from cabildo.workspace import attach
 from cabildo.workspace.agents import title_name
+
+#: A progress report dressed as a notification. `ESC ] 9 ; 4 ; state ; percent` is the
+#: ConEmu convention for a taskbar progress bar, which Claude emits while it works (state
+#: 3 while busy, 0 when done). OSC 9 is *also* iTerm's desktop-notification sequence, so a
+#: parser that routes all of OSC 9 to "notify" turns each of those into a toast: `4;3;`
+#: when a turn starts, `4;0;` when it ends. Nothing here wants a progress bar, so they are
+#: dropped; a real notification still gets through.
+_OSC9_PROGRESS = re.compile(r"^4;[0-9;]*$")
+
 
 #: Popen handles of detached children, kept only so nothing reaps or warns about them
 #: between the detach and the exec that follows it within the same breath.
@@ -91,6 +101,12 @@ class ClaudePane(Terminal):
         self.exited = False
         self.closing = False  # the app is ending it (quit, delete, x)
         self._last_cell: Offset | None = None  # the cursor cell last reported
+        self._chrome.on_notify = self._notify  # drop the progress reports; see _OSC9_PROGRESS
+
+    def _notify(self, text: str) -> None:
+        """Show a notification Claude asked for, unless it is a progress report."""
+        if not _OSC9_PROGRESS.match(text):
+            self.app.notify(text)
 
     # --- the cursor: the real terminal cursor, not a painted cell ------------------
     # textual-tty paints its own cursor (a white block that blinks on its own timer).

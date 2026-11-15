@@ -1165,3 +1165,40 @@ def test_a_restarted_app_attaches_to_the_claude_it_was_handed(three, monkeypatch
     finally:
         child.kill()
         child.wait()
+
+
+# --- OSC 9: a notification, or a progress bar wearing its clothes -------------------
+
+
+def test_a_progress_report_is_not_shown_as_a_notification(three, monkeypatch) -> None:
+    """`ESC ] 9 ; 4 ; state ; percent` is ConEmu's taskbar progress, which Claude emits
+    while it works. OSC 9 is also iTerm's notification sequence, so a parser that routes
+    all of OSC 9 to "notify" pops a toast reading `4;3;` on every turn.
+    """
+    seen: list[str] = []
+
+    async def scenario(app, pilot) -> None:
+        pane = await open_row(app, pilot, 0)
+        monkeypatch.setattr(type(app), "notify", lambda self, text, **kw: seen.append(text))
+        pane._notify("4;3;")  # a turn starts
+        pane._notify("4;0;")  # and ends
+        pane._notify("Build finished")  # a real one
+        await settle(app, pilot)
+
+    drive(monkeypatch, scenario)
+    assert seen == ["Build finished"]
+
+
+def test_the_pane_filters_what_the_terminal_reports(three, monkeypatch) -> None:
+    """The filter is wired to the seam the terminal engine actually calls."""
+    seen: list[str] = []
+
+    async def scenario(app, pilot) -> None:
+        pane = await open_row(app, pilot, 0)
+        monkeypatch.setattr(type(app), "notify", lambda self, text, **kw: seen.append(text))
+        pane._chrome.on_notify("4;3;")
+        pane._chrome.on_notify("done")
+        await settle(app, pilot)
+
+    drive(monkeypatch, scenario)
+    assert seen == ["done"]
