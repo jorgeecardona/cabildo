@@ -13,6 +13,7 @@ wrapper over cabildo.store.
 from __future__ import annotations
 
 import os
+import subprocess
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -1336,6 +1337,84 @@ def peers() -> list[dict[str, Any]]:
         for node, peer in pair.load_peers().items()
     ]
     return [*paired, *wan.peers_report()]
+
+
+# --------------------------------------------------------------------------- #
+# GitLab CI of the repo this session works in
+# --------------------------------------------------------------------------- #
+def _ci_repo():
+    from . import ci
+
+    return ci, ci.repo_here(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
+
+
+def _human_allows(what: str) -> bool:
+    """Ask the human with a desktop popup; True only on an explicit Allow."""
+    from . import desktop
+
+    answer = desktop.ask("cabildo: CI request", what, ["Allow", "Deny"], timeout_ms=120_000)
+    return answer == "Allow"
+
+
+@mcp.tool()
+def ci_status(ref: str | None = None, pipeline_id: int | None = None) -> dict[str, Any]:
+    """The newest GitLab pipeline of this repo's ``ref`` (default: the pipeline of HEAD) and
+    each job's status. ``passed`` is True, False, or None while it still runs.
+    """
+    try:
+        ci, repo = _ci_repo()
+        sha = None
+        if not (ref or pipeline_id):
+            sha = (
+                subprocess.run(
+                    ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+                ).stdout.strip()
+                or None
+            )
+        p = ci.pipeline(repo, sha=sha, ref=ref, pipeline_id=pipeline_id)
+    except RuntimeError as e:
+        return {"ok": False, "error": str(e)}
+    if p is None:
+        return {"ok": False, "error": "no pipeline"}
+    passed = {ci.Exit.PASSED: True, ci.Exit.FAILED: False}.get(p.exit)
+    return {"ok": True, "passed": passed, **ci.as_dict(p)}
+
+
+@mcp.tool()
+def ci_retry(job_id: int) -> dict[str, Any]:
+    """Run a finished GitLab job of this repo again, for example a failed test job."""
+    try:
+        ci, repo = _ci_repo()
+        job = ci.retry(repo, job_id)
+    except RuntimeError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "job": job.__dict__}
+
+
+@mcp.tool()
+def ci_run(ref: str) -> dict[str, Any]:
+    """Start a new GitLab pipeline on ``ref``. The human approves it in a popup first."""
+    try:
+        ci, repo = _ci_repo()
+        if not _human_allows(f"Start a pipeline on {repo.path}@{ref}?"):
+            return {"ok": False, "error": "the human did not allow it"}
+        p = ci.run(repo, ref)
+    except RuntimeError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, **ci.as_dict(p)}
+
+
+@mcp.tool()
+def ci_play(job_id: int) -> dict[str, Any]:
+    """Start a manual GitLab job (often a deploy). The human approves it in a popup first."""
+    try:
+        ci, repo = _ci_repo()
+        if not _human_allows(f"Run manual job {job_id} on {repo.path}?"):
+            return {"ok": False, "error": "the human did not allow it"}
+        job = ci.play(repo, job_id)
+    except RuntimeError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "job": job.__dict__}
 
 
 @mcp.tool()

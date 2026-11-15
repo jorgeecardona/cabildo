@@ -118,5 +118,5 @@ def test_a_401_on_the_glab_token_falls_back_to_glab(tmp_path, monkeypatch):
         raise urllib.error.HTTPError("u", 401, "Unauthorized", None, None)  # type: ignore[arg-type]
 
     monkeypatch.setattr(gitlab.urllib.request, "urlopen", deny)
-    monkeypatch.setattr(gitlab.ci_watch, "_glab", lambda _h, _e: [{"id": 1}])
+    monkeypatch.setattr(gitlab.ci_watch, "_glab", lambda _h, _e, _m="GET": [{"id": 1}])
     assert gitlab.api("gitlab.com", "projects/x/pipelines") == [{"id": 1}]

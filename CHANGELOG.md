@@ -4,6 +4,12 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- `cabildo ci status` prints the pipeline of HEAD (or `--ref`, `--id`) with one tab-separated
+  line per job, or `--json`. Exit code: 0 passed, 1 failed, 2 running, 3 no pipeline.
+  `cabildo ci run`, `play <job>` and `retry <job>` start a pipeline, a manual job, or a rerun.
+  Agents get the same as the `ci_status`, `ci_retry`, `ci_run` and `ci_play` MCP tools;
+  `ci_run` and `ci_play` wait for you to click Allow in a desktop popup.
+- The GitLab token is also read from `~/.netrc` (or `$NETRC`): the password of the host's entry.
 - `cabildo mcp` runs the MCP server, so `uvx cabildo mcp` starts it. cabildo is listed in the
   official MCP registry as `io.github.jorgeecardona/cabildo` (`server.json`).
 - The agent browser stops on a Cloudflare bot check and asks you, with a desktop notification,

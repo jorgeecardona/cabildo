@@ -35,6 +35,7 @@ COMMANDS = [
     "opencode",
     "minutes",
     "messages",
+    "ci",
     "friction",
     "improve",
     "notes",

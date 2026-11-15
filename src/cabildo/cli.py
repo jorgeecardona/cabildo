@@ -1521,6 +1521,60 @@ def cmd_minutes(args) -> int:
     return 0
 
 
+def cmd_ci(args) -> int:
+    """``cabildo ci status|run|play|retry``: GitLab CI of the repo in the current directory."""
+    import json as _json
+    import subprocess as _sp
+
+    from . import ci
+
+    cwd = os.getcwd()
+    try:
+        repo = ci.repo_here(cwd)
+        if args.what == "run":
+            ref = (
+                args.ref
+                or _sp.run(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                ).stdout.strip()
+            )
+            p = ci.run(repo, ref)
+            print(_json.dumps(ci.as_dict(p)) if args.json else ci.lines(p))
+            return 0
+        if args.what in {"play", "retry"} and args.job and args.job.isdigit() and not args.id:
+            job_id = int(args.job)
+        else:
+            sha = None
+            if not (args.ref or args.id):
+                sha = (
+                    _sp.run(
+                        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+                    ).stdout.strip()
+                    or None
+                )
+            p = ci.pipeline(repo, sha=sha, ref=args.ref, pipeline_id=args.id)
+            if p is None:
+                print("no pipeline", file=sys.stderr)
+                return int(ci.Exit.NONE)
+            if args.what == "status":
+                print(_json.dumps(ci.as_dict(p)) if args.json else ci.lines(p))
+                return int(p.exit)
+            job = ci.find_job(p, args.job or "")
+            if job is None:
+                print(f"no job {args.job!r} in pipeline {p.id}", file=sys.stderr)
+                return int(ci.Exit.NONE)
+            job_id = job.id
+        done = ci.play(repo, job_id) if args.what == "play" else ci.retry(repo, job_id)
+    except ci.CiError as e:
+        print(f"cabildo ci: {e}", file=sys.stderr)
+        return int(ci.Exit.NONE)
+    print(f"{done.status}\t{done.stage}\t{done.name}\t{done.id}\t{done.url}")
+    return 0
+
+
 def cmd_friction(args) -> int:
     """``cabildo friction scan|report``: classify new user turns, or group the friction."""
     from . import friction
@@ -2429,6 +2483,19 @@ def main(argv: list[str] | None = None) -> int:
         help="record every transcript on disk and in the workspace trash, then exit",
     )
     mg.set_defaults(fn=cmd_messages)
+
+    ci_p = sub.add_parser("ci", help="GitLab CI of this repo: status, run, play, retry")
+    ci_p.add_argument(
+        "what",
+        choices=["status", "run", "play", "retry"],
+        help="status: jobs of the pipeline (exit 0 passed, 1 failed, 2 running, 3 none); "
+        "run: start a pipeline; play: start a manual job; retry: rerun a job",
+    )
+    ci_p.add_argument("job", nargs="?", help="play/retry: job name or id")
+    ci_p.add_argument("--ref", help="branch or tag (default: the pipeline of HEAD)")
+    ci_p.add_argument("--id", type=int, help="pipeline id")
+    ci_p.add_argument("--json", action="store_true", help="print JSON instead of lines")
+    ci_p.set_defaults(fn=cmd_ci)
 
     fr = sub.add_parser("friction", help="turns where you corrected or complained about the tools")
     fr.add_argument("what", choices=["scan", "report"], help="scan new turns, or show the report")

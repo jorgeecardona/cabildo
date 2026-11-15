@@ -6,7 +6,8 @@ ended ``failed`` is reported once: as an urgent DM to the agent that pushed the
 commit through cabildo, else as an urgent post to the project channel. Both wake
 an idle agent through the push plugin.
 
-The token comes from ``CABILDO_GITLAB_TOKEN`` or ``GITLAB_TOKEN``, then
+The token comes from ``CABILDO_GITLAB_TOKEN`` or ``GITLAB_TOKEN``, then the
+password of the host's ``~/.netrc`` entry (or ``$NETRC``), then
 ``~/.cabildo/gitlab-token``, then glab's config file (read as a file; the ``glab``
 binary is only a last resort when no token is found).
 """
@@ -14,6 +15,7 @@ binary is only a last resort when no token is found).
 from __future__ import annotations
 
 import json
+import netrc
 import os
 import re
 import sqlite3
@@ -112,10 +114,19 @@ def _token_glab_config(host: str, path: Path = _GLAB_CONFIG) -> str | None:
     return None
 
 
+def _token_netrc(host: str) -> str | None:
+    """Return the password of ``host`` in ``$NETRC`` or ``~/.netrc``, or None."""
+    try:
+        entry = netrc.netrc(os.environ.get("NETRC")).authenticators(host)
+    except (OSError, netrc.NetrcParseError):
+        return None
+    return entry[2] if entry and entry[2] else None
+
+
 def _own_token(host: str) -> str | None:
-    """A token set for cabildo itself: the environment or ``~/.cabildo/gitlab-token``."""
+    """A token the user set: the environment, ``~/.netrc``, or ``~/.cabildo/gitlab-token``."""
     env = os.environ.get("CABILDO_GITLAB_TOKEN") or os.environ.get("GITLAB_TOKEN")
-    return env or _token_file(host)
+    return env or _token_netrc(host) or _token_file(host)
 
 
 def token(host: str) -> str | None:
@@ -123,30 +134,32 @@ def token(host: str) -> str | None:
     return _own_token(host) or _token_glab_config(host)
 
 
-def api(host: str, endpoint: str) -> object:
-    """GET ``https://<host>/api/v4/<endpoint>``: parsed JSON, or text for a job trace.
+def api(host: str, endpoint: str, method: str = "GET") -> object:
+    """Call ``https://<host>/api/v4/<endpoint>``: parsed JSON, or text for a job trace.
 
-    With no token it falls back to ``glab api`` if glab is installed.
+    ``method`` is ``GET`` or ``POST``; parameters of a POST go in the endpoint's query
+    string. With no token it falls back to ``glab api`` if glab is installed.
 
     Raises:
         GitlabError: no token and no glab, an HTTP error, or a network error.
     """
     tok = token(host)
     if tok is None:
-        return _glab_fallback(host, endpoint)
+        return _glab_fallback(host, endpoint, method)
     # glab's OAuth2 token expires every 2 hours and only glab refreshes it, so a
     # 401 on that token goes through ``glab api``, which refreshes and retries.
     from_glab = tok == _token_glab_config(host) and not _own_token(host)
     req = urllib.request.Request(
         f"https://{host}/api/v4/{endpoint}",
         headers={"Authorization": f"Bearer {tok}", "Accept": "application/json"},
+        method=method,
     )
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
             body = resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         if e.code == 401 and from_glab:
-            return _glab_fallback(host, endpoint)
+            return _glab_fallback(host, endpoint, method)
         raise GitlabError(f"GitLab {e.code} on {endpoint}") from e
     except (urllib.error.URLError, OSError) as e:
         raise GitlabError(f"GitLab unreachable: {e}") from e
@@ -158,9 +171,9 @@ def api(host: str, endpoint: str) -> object:
         raise GitlabError(f"GitLab returned non-JSON for {endpoint}") from e
 
 
-def _glab_fallback(host: str, endpoint: str) -> object:
+def _glab_fallback(host: str, endpoint: str, method: str = "GET") -> object:
     try:
-        return ci_watch._glab(host, endpoint)
+        return ci_watch._glab(host, endpoint, method)
     except FileNotFoundError as e:
         msg = f"no GitLab token for {host} (set GITLAB_TOKEN or ~/.cabildo/gitlab-token)"
         raise GitlabError(msg) from e

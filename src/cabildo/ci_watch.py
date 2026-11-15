@@ -78,10 +78,10 @@ def clean_tail(trace: str, lines: int = TAIL_LINES) -> str:
     return "\n".join(kept[-lines:])
 
 
-def _glab(host: str, endpoint: str) -> object:
+def _glab(host: str, endpoint: str, method: str = "GET") -> object:
     """Call ``glab api`` and return the parsed JSON, or the raw text for a job trace."""
     p = subprocess.run(
-        ["glab", "api", "--hostname", host, endpoint],
+        ["glab", "api", "--hostname", host, "--method", method, endpoint],
         capture_output=True,
         text=True,
         timeout=60,

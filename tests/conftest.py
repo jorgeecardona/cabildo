@@ -53,6 +53,12 @@ def _real_repo_untouched():
     assert not new, f"test run polluted the real repo: {sorted(new)}"
 
 
+@pytest.fixture(autouse=True)
+def _no_real_netrc(tmp_path, monkeypatch):
+    """Keep the user's ``~/.netrc`` token out of tests that check where a token comes from."""
+    monkeypatch.setenv("NETRC", str(tmp_path / "no-netrc"))
+
+
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("CABILDO_HOME", str(tmp_path))
