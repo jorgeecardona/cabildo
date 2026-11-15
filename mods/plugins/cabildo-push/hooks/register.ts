@@ -261,6 +261,10 @@ async function runDoorbell($: EngineInterface): Promise<void> {
       if (r.rebound) {
         // A /clear: new session id, same pid, no session.start.
         const next = r
+        // Claude Code keeps its own crons across a /clear; keep ours too.
+        await cab($, ['cron', 'move', `--from=${sid}`, `--session=${next.session_id}`, '--json']).catch(
+          () => {},
+        )
         await update($, sessionIdA, () => next.session_id)
         await update($, cursorA, () => next.cursor)
         await update($, awaitingA, () => ({})) // the old session's asks are moot
@@ -427,6 +431,117 @@ function notifyPending($: EngineInterface, pending: readonly PullRow[]): void {
 }
 
 // --------------------------------------------------------------------------- //
+// Crons: CronCreate / CronDelete / CronList / ScheduleWakeup stored in cabildo
+// --------------------------------------------------------------------------- //
+// The hooks below answer Claude Code's scheduling tools (the tools /loop calls)
+// by writing the job to cabildo's `crons` table, and `runCrons` fires due jobs
+// into this session. Any failure on the cabildo side falls back to `next(e)`,
+// so Claude Code schedules the job itself: the worst case is today's /loop.
+
+// The longest the fire loop sleeps, so a job added meanwhile fires at most this late.
+const CRON_TICK_MS = 15_000
+const CRON_MIN_SLEEP_MS = 1_000
+
+// One job as `cabildo cron ... --json` prints it.
+type CronJob = {
+  id: string
+  kind: 'cron' | 'wakeup'
+  cron: string | null
+  humanSchedule: string
+  prompt: string
+  recurring: boolean
+  nextFireAt: number
+}
+type CronDue = { jobs: CronJob[]; nextFireAt: number | null }
+type CronWakeup = CronJob & { clampedDelaySeconds: number; wasClamped: boolean }
+
+let cronRunning = false
+
+// The model reads this after the tool result: the job id (ScheduleWakeup's result
+// has none) and the facts that differ from Claude Code's own wording.
+function cronNote(id: string): string {
+  return (
+    `The job you just scheduled has id ${id}. cabildo stores it, not Claude Code: it does ` +
+    'not expire after 7 days and is not in .claude/scheduled_tasks.json. CronList and ' +
+    'CronDelete work on it.'
+  )
+}
+
+// Claude Code resolves the autonomous-loop sentinels into its own instructions
+// at fire time; cabildo cannot, so those jobs stay native.
+function nativeOnly(prompt: string): boolean {
+  return prompt.includes('<<autonomous-loop')
+}
+
+function isCabildoId(id: string): boolean {
+  return /^cab-\d+$/.test(id.trim())
+}
+
+// A "/name args" prompt runs as that slash command; anything else is submitted
+// as the person's own words, the way a Claude Code cron fire reads. A command
+// the session does not know falls back to plain text.
+async function firePrompt($: EngineInterface, prompt: string): Promise<void> {
+  const m = /^\/([\w:.-]+)(?:\s+([\s\S]*))?$/.exec(prompt.trim())
+  if (m) {
+    const command = m[1] ?? ''
+    const args = (m[2] ?? '').trim()
+    const known = await $.command
+      .list()
+      .then((cs) => cs.some((c) => c.name === command))
+      .catch(() => false)
+    if (known) {
+      void $.command.run({ command, args }).catch((err: unknown) => {
+        $.ui.log(`${PLUGIN}: cron command /${command} failed: ${String(err)}`, { to: 'debug' })
+      })
+      return
+    }
+  }
+  void $.prompt.submit({ text: prompt, asUser: true })
+}
+
+// A wakeup comes from a dynamic /loop, and its prompt is the /loop input; firing
+// it as `/loop <input>` re-enters the skill, so the model schedules the next one.
+function wakeupPrompt(job: CronJob): string {
+  return /^\/loop(\s|$)/.test(job.prompt) ? job.prompt : `/loop ${job.prompt}`
+}
+
+// For the session's life: claim due jobs and fire them. DND holds every job;
+// when it lifts, each held job fires once (cabildo coalesces missed matches).
+async function runCrons($: EngineInterface): Promise<void> {
+  if (cronRunning) return
+  cronRunning = true
+  try {
+    let sleepMs = CRON_TICK_MS
+    for (;;) {
+      await $.clock.sleep(sleepMs)
+      sleepMs = CRON_TICK_MS
+      if (await isDnd($)) continue
+      const sid = await read($, sessionIdA)
+      if (!sid) continue
+      let due: CronDue | null = null
+      try {
+        due = (await cab($, ['cron', 'due', `--session=${sid}`])) as CronDue
+      } catch (err) {
+        $.ui.log(`${PLUGIN}: cron due failed: ${String(err)}`, { to: 'debug' })
+        continue
+      }
+      for (const job of due?.jobs ?? []) {
+        await firePrompt($, job.kind === 'wakeup' ? wakeupPrompt(job) : job.prompt)
+        await cab($, ['meter', `--session=${sid}`, '--event=cron_fire', '--json']).catch(() => {})
+      }
+      if (due?.nextFireAt) {
+        const wait = due.nextFireAt - (await $.clock.now())
+        sleepMs = Math.min(CRON_TICK_MS, Math.max(CRON_MIN_SLEEP_MS, wait))
+      }
+    }
+  } catch {
+    // the module is unloading; a reload starts a fresh loop
+  } finally {
+    cronRunning = false
+  }
+}
+
+// --------------------------------------------------------------------------- //
 // Registration
 // --------------------------------------------------------------------------- //
 export const register: Register = (on) => {
@@ -472,6 +587,7 @@ export const register: Register = (on) => {
     // arrives after start, not on the backlog.
     await ensureSession($)
     void runDoorbell($)
+    void runCrons($)
     if (!retryRunning) {
       retryRunning = true
       void retryDeferred($).finally(() => {
@@ -607,4 +723,117 @@ export const register: Register = (on) => {
       return toolResult(`cabildo_reply failed: ${String(err)}`, true)
     }
   }).catch(() => toolResult('cabildo_reply was cut short.', true))
+
+  // CronCreate: store the job in cabildo. Anything cabildo refuses (a bad
+  // expression, no daemon-free CLI, no bound session) goes to Claude Code.
+  on('tool.call', { tool: 'CronCreate' }, async ($, e, next) => {
+    if (nativeOnly(e.prompt)) return next(e)
+    const sid = await ensureSession($)
+    if (!sid) return next(e)
+    try {
+      const job = (await cab($, [
+        'cron',
+        'add',
+        `--session=${sid}`,
+        `--cron=${e.cron}`,
+        ...(e.recurring === false ? ['--once'] : []),
+        '--json',
+        '--',
+        e.prompt,
+      ])) as CronJob
+      // Claude Code writes the model's text from `result` with its own words
+      // ("auto-expires after 7 days"); the context line says what is true here.
+      return {
+        result: {
+          id: job.id,
+          humanSchedule: job.humanSchedule,
+          recurring: job.recurring,
+          nextFireAt: job.nextFireAt,
+        },
+        context: [cronNote(job.id)],
+      }
+    } catch (err) {
+      $.ui.log(`${PLUGIN}: cron add failed, Claude Code schedules it: ${String(err)}`, {
+        to: 'debug',
+      })
+      return next(e)
+    }
+  }).catch(($, e, next) => (next.called ? next(e) : next(e)))
+
+  // CronDelete: a cab-N id is ours; any other id is Claude Code's.
+  on('tool.call', { tool: 'CronDelete' }, async ($, e, next) => {
+    if (!isCabildoId(e.id)) return next(e)
+    const sid = await ensureSession($)
+    try {
+      await cab($, ['cron', 'rm', e.id, ...(sid ? [`--session=${sid}`] : []), '--json'])
+      return { result: { id: e.id } }
+    } catch {
+      return { deny: `No cabildo cron job with id ${e.id} in this session.` }
+    }
+  })
+
+  // CronList: Claude Code's jobs (the fallbacks) plus this session's cabildo jobs.
+  on('tool.call', { tool: 'CronList' }, async ($, e, next) => {
+    const native = await next(e)
+    if (native.deny !== undefined || native.isError === true) return native
+    const sid = await ensureSession($)
+    if (!sid) return native
+    const ours = (await cab($, ['cron', 'list', `--session=${sid}`, '--json']).catch(
+      () => null,
+    )) as { jobs: CronJob[] } | null
+    const extra = (ours?.jobs ?? []).map((j) => ({
+      id: j.id,
+      cron: j.cron ?? '',
+      humanSchedule: j.humanSchedule,
+      prompt: j.prompt,
+      recurring: j.recurring,
+      nextFireAt: j.nextFireAt,
+    }))
+    return { result: { jobs: [...native.result.jobs, ...extra] } }
+  })
+
+  // ScheduleWakeup: a one-shot cabildo wakeup. `stop` cancels ours and Claude
+  // Code's, and reports both counts as one.
+  on('tool.call', { tool: 'ScheduleWakeup' }, async ($, e, next) => {
+    const sid = await ensureSession($)
+    if (e.stop) {
+      const ours = sid
+        ? ((await cab($, ['cron', 'stop-wakeups', `--session=${sid}`, '--json']).catch(
+            () => null,
+          )) as { cancelled: number } | null)
+        : null
+      const native = await next(e)
+      if (native.deny !== undefined || native.isError === true) return native
+      const cancelled = (native.result.cancelledWakeups ?? 0) + (ours?.cancelled ?? 0)
+      return { result: { ...native.result, cancelledWakeups: cancelled } }
+    }
+    if (!sid || !e.prompt || nativeOnly(e.prompt) || typeof e.delaySeconds !== 'number') {
+      return next(e)
+    }
+    try {
+      const w = (await cab($, [
+        'cron',
+        'wakeup',
+        `--session=${sid}`,
+        `--delay=${e.delaySeconds}`,
+        ...(e.reason ? [`--reason=${e.reason}`] : []),
+        '--json',
+        '--',
+        e.prompt,
+      ])) as CronWakeup
+      return {
+        context: [cronNote(w.id)],
+        result: {
+          scheduledFor: w.nextFireAt,
+          clampedDelaySeconds: w.clampedDelaySeconds,
+          wasClamped: w.wasClamped,
+        },
+      }
+    } catch (err) {
+      $.ui.log(`${PLUGIN}: cron wakeup failed, Claude Code schedules it: ${String(err)}`, {
+        to: 'debug',
+      })
+      return next(e)
+    }
+  }).catch(($, e, next) => (next.called ? next(e) : next(e)))
 }

@@ -2098,6 +2098,119 @@ def cmd_mcp(args) -> int:
     return 0
 
 
+def cmd_cron(args) -> int:
+    """Scheduled prompts the cabildo-push mod fires (crons.py). JSON for the mod."""
+    from . import crons
+
+    conn = store.connect()
+    verb = args.cron_cmd or "list"
+
+    if verb == "list":
+        sid = None if args.all else _me_session(conn, args)
+        jobs = crons.list_jobs(conn, sid)
+        if args.json:
+            print(json.dumps({"jobs": [j.to_json() for j in jobs]}))
+            return 0
+        if not jobs:
+            print(f"{C.DIM}no cabildo crons{C.OFF}")
+        for j in jobs:
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(j.next_fire_at))
+            owner = names.robot_name(j.session_id)
+            print(f"{j.public_id:>8}  {when}  {j.human_schedule:<24} {owner:<22} {j.prompt[:60]}")
+        return 0
+
+    if verb == "rm":
+        job_id = crons.parse_id(args.id)
+        if job_id is None:
+            print(f"not a cabildo cron id: {args.id!r}", file=sys.stderr)
+            return 1
+        owner = None
+        if args.session:
+            owner = _resolve_me(conn, args)
+            if owner is None:
+                return 1
+        ok = crons.delete_job(conn, job_id, owner)
+        if args.json:
+            print(json.dumps({"id": f"{crons.ID_PREFIX}{job_id}", "deleted": ok}))
+        else:
+            print(f"deleted {args.id}" if ok else f"no such cron: {args.id}")
+        return 0 if ok else 1
+
+    sid = _resolve_me(conn, args)
+    if sid is None:
+        return 1
+    me = store.get_session(conn, sid)
+    project = me["project"] if me else None
+
+    if verb == "add":
+        prompt = " ".join(args.prompt).strip()
+        if not prompt:
+            print("cron add needs a prompt", file=sys.stderr)
+            return 1
+        try:
+            job = crons.add_cron(
+                conn,
+                session_id=sid,
+                cron=args.cron,
+                prompt=prompt,
+                recurring=not args.once,
+                project=project,
+            )
+        except crons.CronError as e:
+            print(str(e), file=sys.stderr)
+            return 1
+        print(json.dumps(job.to_json()) if args.json else f"added {job.public_id}")
+        return 0
+
+    if verb == "wakeup":
+        prompt = " ".join(args.prompt).strip()
+        if not prompt:
+            print("cron wakeup needs a prompt", file=sys.stderr)
+            return 1
+        w = crons.add_wakeup(
+            conn,
+            session_id=sid,
+            delay_s=args.delay,
+            prompt=prompt,
+            reason=args.reason,
+            project=project,
+        )
+        out = {
+            **w.job.to_json(),
+            "clampedDelaySeconds": w.clamped_delay_s,
+            "wasClamped": w.was_clamped,
+        }
+        print(json.dumps(out) if args.json else f"added {w.job.public_id}")
+        return 0
+
+    if verb == "stop-wakeups":
+        n = crons.delete_wakeups(conn, sid)
+        print(json.dumps({"cancelled": n}) if args.json else f"cancelled {n} wakeup(s)")
+        return 0
+
+    if verb == "due":
+        jobs = crons.claim_due(conn, sid)
+        nxt = crons.next_due_at(conn, sid)
+        print(
+            json.dumps(
+                {
+                    "session_id": sid,
+                    "jobs": [j.to_json() for j in jobs],
+                    "nextFireAt": None if nxt is None else int(nxt * 1000),
+                }
+            )
+        )
+        return 0
+
+    if verb == "move":
+        n = crons.move_jobs(conn, args.from_session, sid)
+        print(json.dumps({"moved": n}) if args.json else f"moved {n} cron(s)")
+        return 0
+
+    print(f"unknown cron command: {verb}", file=sys.stderr)
+    return 2
+
+
 def cmd_doctor(args) -> int:
     """One health check across the whole install: the six hooks, both MCP
     servers, the bus DB (reachable + WAL), the daemon, and the platform features
@@ -2616,6 +2729,42 @@ def main(argv: list[str] | None = None) -> int:
         "doctor", help="verify the install (hooks, MCP, DB, daemon) and flag platform gaps"
     )
     dr.set_defaults(fn=cmd_doctor)
+
+    cr = sub.add_parser("cron", help="scheduled prompts that /loop and CronCreate store in cabildo")
+    cr.add_argument("--session", help="act as this session id (default: resolve from the pid walk)")
+    cr.add_argument("--json", action="store_true", help="machine-readable output")
+    cr.add_argument("--all", action="store_true", help="list: every session's crons")
+    cr.set_defaults(fn=cmd_cron, cron_cmd=None)
+    cr_sub = cr.add_subparsers(dest="cron_cmd")
+
+    def _cron_common(p: argparse.ArgumentParser) -> None:
+        # Repeated on each verb so `cabildo cron add --session=X` parses too.
+        p.add_argument("--session", default=argparse.SUPPRESS, help="act as this session id")
+        p.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="JSON")
+
+    c_list = cr_sub.add_parser("list", help="this session's crons (--all: every session)")
+    _cron_common(c_list)
+    c_list.add_argument("--all", action="store_true", default=argparse.SUPPRESS)
+    c_add = cr_sub.add_parser("add", help="add a cron job: --cron 'M H DoM Mon DoW' -- PROMPT")
+    _cron_common(c_add)
+    c_add.add_argument("--cron", required=True, help="5-field cron expression, local time")
+    c_add.add_argument("--once", action="store_true", help="fire once, then delete")
+    c_add.add_argument("prompt", nargs="+")
+    c_wk = cr_sub.add_parser("wakeup", help="add a one-shot wakeup: --delay SECONDS -- PROMPT")
+    _cron_common(c_wk)
+    c_wk.add_argument("--delay", type=float, required=True, help="seconds, clamped to 60-3600")
+    c_wk.add_argument("--reason", help="why this delay (shown in cron list)")
+    c_wk.add_argument("prompt", nargs="+")
+    c_rm = cr_sub.add_parser("rm", help="delete a cron by id (cab-N)")
+    _cron_common(c_rm)
+    c_rm.add_argument("id")
+    c_stop = cr_sub.add_parser("stop-wakeups", help="cancel this session's pending wakeups")
+    _cron_common(c_stop)
+    c_due = cr_sub.add_parser("due", help="claim this session's due jobs (JSON, for the mod)")
+    _cron_common(c_due)
+    c_mv = cr_sub.add_parser("move", help="give another session's crons to this one (/clear)")
+    _cron_common(c_mv)
+    c_mv.add_argument("--from", dest="from_session", required=True, help="the old session id")
 
     mc = sub.add_parser("mcp", help="run the MCP server on stdio (same as cabildo-mcp)")
     mc.set_defaults(fn=cmd_mcp)

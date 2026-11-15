@@ -42,6 +42,7 @@ COMMANDS = [
     "service",
     "viewer",
     "doctor",
+    "cron",
     "mcp",
     "githook",
     "guard",

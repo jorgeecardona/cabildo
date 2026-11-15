@@ -542,6 +542,26 @@ CREATE TABLE IF NOT EXISTS schedule_deliveries (
     PRIMARY KEY (schedule_id, session_id)
 );
 
+-- Scheduled prompts (crons.py). The cabildo-push mod writes a row when the model
+-- calls CronCreate or ScheduleWakeup, and fires it into session_id when due.
+--   kind         : 'cron' (cron is a 5-field expression) | 'wakeup' (one-shot)
+--   next_fire_at : epoch seconds; a recurring row moves forward after each fire
+CREATE TABLE IF NOT EXISTS crons (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id     TEXT NOT NULL,
+    project        TEXT,
+    kind           TEXT NOT NULL DEFAULT 'cron',
+    cron           TEXT,
+    prompt         TEXT NOT NULL,
+    recurring      INTEGER NOT NULL DEFAULT 1,
+    next_fire_at   REAL NOT NULL,
+    created_at     REAL NOT NULL,
+    last_fired_at  REAL,
+    fire_count     INTEGER NOT NULL DEFAULT 0,
+    reason         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_crons_due ON crons(session_id, next_fire_at);
+
 -- Every fetched percent of a subscription limit. The workspace's own history keeps only recent
 -- samples in the runtime directory; fitting and backtesting a forecast need all past windows.
 CREATE TABLE IF NOT EXISTS plan_samples (

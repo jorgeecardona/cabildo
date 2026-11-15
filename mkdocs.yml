@@ -63,4 +63,5 @@ nav:
   - Channels and tags: channels.md
   - Roles: roles.md
   - Browser: browser.md
+  - Crons: crons.md
   - Changelog: changelog.md

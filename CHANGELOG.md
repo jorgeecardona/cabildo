@@ -4,6 +4,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- `/loop` and `CronCreate` jobs are stored in cabildo by the cabildo-push mod (0.3.0). Every agent
+  sees them with `cabildo cron list --all`, and they do not expire after 7 days. When cabildo
+  fails, Claude Code schedules the job as before. See [Crons](docs/crons.md).
 - `cabildo ci status` prints the pipeline of HEAD (or `--ref`, `--id`) with one tab-separated
   line per job, or `--json`. Exit code: 0 passed, 1 failed, 2 running, 3 no pipeline.
   `cabildo ci run`, `play <job>` and `retry <job>` start a pipeline, a manual job, or a rerun.
