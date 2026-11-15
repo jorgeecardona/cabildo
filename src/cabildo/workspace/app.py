@@ -266,91 +266,86 @@ def fmt_money(dollars: float) -> str:
     return f"${dollars:,.2f}"
 
 
-SPENT = "spent"  # the column's header when there is nothing billed to compare it with
-MODEL_ROWS = 4  # models shown in the per-model block, dearest first
-
-
-def fmt_models(models: tuple[usage_tokens.ModelSpend, ...], width: int = 1000) -> list[str]:
-    """Today split by model, dearest first::
-
-        today          spent    tokens
-        opus 5       $584.12    622.2M
-        sonnet 5.5    $47.56    113.5M
-        fable 5.2     $12.58     13.8M
-
-    This is the one place a token count is shown, and the reason is the same one that
-    keeps it out of the table above: tokens of different models are not the same amount,
-    so they are only worth printing beside the name of the model that spent them. A model
-    whose rates are not known shows its tokens and ``?`` for the money.
-    """
-    if not models:
-        return []
-    rows = [grid("today", "spent", "tokens")]
-    for m in models[:MODEL_ROWS]:
-        money = fmt_money(m.cost) if m.priced else "?"
-        rows.append(grid(sessions.model_name(m.model), money, fmt_count(m.tokens)).rstrip())
-    rest = models[MODEL_ROWS:]
-    if rest:
-        spent = sum(m.cost for m in rest)
-        rows.append(
-            grid(f"{len(rest)} more", fmt_money(spent), fmt_count(sum(m.tokens for m in rest)))
-        )
-    return [r for r in rows if len(r) <= width] or rows[:1]
-
-
 NO_SPEND_ROW = "-"  # remembered when the login turned out to want no spend row at all
+COL = 10  # every numeric column, so the rows line up under each other
+LABEL = 11
+TOTAL, BILLED, TOKENS = "total", "billed", "tokens"
 
 
 def fmt_spend(r: spend.Report, label: str = "api key", width: int = 1000) -> list[str]:
-    """The consumption table, one row per period, under a header::
+    """One matrix: a row per period, a column per model, and what each row came to::
 
-        api key        spent
-        today         $12.34
-        7d           $103.90
-        all          $421.07
+        api key        opus 5 sonnet 5.5     total    billed
+        today           $1.59      $0.03     $1.62         -
+        7d          $4,980.11     $74.00 $5,054.11 $4,712.08
+        all         $7,800.00    $170.69 $7,970.69 $21,004.55
+        session       $310.25          -   $310.25
+        tokens          623.8M     115.9M
 
-    Dollars only: a token count adds a Haiku token to a Fable token as if they were the
-    same thing. ``spent`` covers only what the price table could price, so a period
-    holding tokens it could not carries ``+<n> unpriced`` and its figure is a floor.
+    ``total`` is this machine's, computed from the transcripts at the rates in
+    `cabildo.prices`. ``billed`` is the organization's, from its cost API -- a different
+    question, so a different column: it covers every machine and lands hours late, which
+    is why today's is usually a dash rather than a zero.
 
-    With an Admin API key configured, a ``billed`` column comes first and ``spent``
-    becomes ``est``, because the two answer different questions -- the organization's
-    actual cost against this machine's computed one::
+    ``session`` is the conversation in the main pane, over its whole life.
 
-        api key       billed       est
-        today              -   $241.91
-        7d         $4,712.08 $4,829.36
+    The ``tokens`` row has no total on purpose. Summing tokens across models is the one
+    number this table refuses to print: a Haiku token and a Fable token are 80 times apart
+    in price. Beside the name of the model that spent them they mean something, so that is
+    the only place they appear.
 
-    A window the cost API has no data for is a dash, never ``$0.00``: today's billed cost
-    is usually missing, since that data lands hours late, and a zero there would read as
-    a free morning.
-
-    With a conversation shown, a ``session`` column holds its share of each period, so
-    what this conversation is costing is readable beside what the machine is costing.
-
-    Columns are dropped from the right when the list is too narrow for them, the way the
-    tokens line drops its cache figure. The money column is never dropped.
+    Narrow lists lose the cheapest model columns first; ``total`` and ``billed`` stay.
     """
-    names = ("today", "7d", "all")
-    machine = (r.spend.today, r.spend.week, r.spend.all_time)
-    billed = (r.billed_today, r.billed_week, r.billed_all)
-    # Each column is a header and a cell per period, in the order they earn their place.
-    columns: list[tuple[str, list[str]]] = []
-    if r.any_billed:
-        columns.append(("billed", ["-" if b is None else fmt_money(b) for b in billed]))
-    columns.append(("est" if r.any_billed else SPENT, [fmt_money(w.cost) for w in machine]))
-    if r.session is not None:
-        mine = (r.session.today, r.session.week, r.session.all_time)
-        columns.append(("session", [fmt_money(w.cost) for w in mine]))
+    models = [m.model for m in r.models]
 
-    tails = [f"  +{fmt_count(w.unpriced)} unpriced" if w.unpriced else "" for w in machine]
-    while len(columns) > 1 and len(label) + 10 * len(columns) > width:
-        columns.pop()  # the rightmost column is the least missed
-    rows = [f"{label:<11}" + "".join(f"{head:>10}" for head, _ in columns)]
-    for i, name in enumerate(names):
-        line = f"{name:<11}" + "".join(f"{cells[i]:>10}" for _, cells in columns)
-        rows.append((line + tails[i]).rstrip())
-    return rows
+    periods: list[tuple[str, usage_tokens.Window | None, float | None]] = [
+        ("today", r.spend.today, r.billed_today),
+        ("7d", r.spend.week, r.billed_week),
+        ("all", r.spend.all_time, r.billed_all),
+    ]
+    if r.session is not None:
+        periods.append(("session", r.session.all_time, None))
+
+    by_model = {m.model: m for m in r.models}
+
+    def column_cells(column: str) -> list[str]:
+        """The header and every row's cell for one column, top to bottom."""
+        cells = [sessions.model_name(column) if column not in (TOTAL, BILLED) else column]
+        for name, window, billed in periods:
+            if column == TOTAL:
+                cells.append(fmt_money(window.cost) if window else "-")
+            elif column == BILLED:
+                cells.append("-" if billed is None else fmt_money(billed))
+            else:
+                found = r.split.get(name, {}).get(column)
+                cells.append(fmt_money(found.cost) if found and found.priced else "-")
+        # Tokens, per model, over the same window as the `all` row -- and no total. The
+        # blank is the point: a sum of tokens across models is the number this refuses.
+        found = by_model.get(column)
+        cells.append(fmt_count(found.tokens) if found else "")
+        return cells
+
+    def table(shown: list[str]) -> list[str]:
+        """Rows for these columns, each column only as wide as it needs, a space apart."""
+        columns = shown + [TOTAL] + ([BILLED] if r.any_billed else [])
+        grids = [column_cells(c) for c in columns]
+        widths = [max(len(c) for c in cells) for cells in grids]
+        names = [label, *(name for name, *_ in periods), TOKENS]
+        rows = []
+        for i, name in enumerate(names):
+            line = f"{name:<{LABEL}}" + " ".join(
+                f"{cells[i]:>{w}}" for cells, w in zip(grids, widths, strict=True)
+            )
+            if i and (window := periods[i - 1][1] if i <= len(periods) else None):
+                line += f"  +{fmt_count(window.unpriced)} unpriced" if window.unpriced else ""
+            rows.append(line.rstrip())
+        return [x for x in rows if x.strip() != TOKENS]  # no tokens row when there is none
+
+    out = table(models)
+    while len(models) > 1 and max(len(x) for x in out) > width:
+        models.pop()
+        out = table(models)
+    return out
 
 
 def plan_style(p: PlanUsage) -> str:
@@ -1097,8 +1092,6 @@ class SwitcherApp(App[None]):
             groups.append([(x, style) for x in fmt_plan(self.plan_usage, self.plan_pace)])
         if self.spend and self.spend_label:
             groups.append([(x, "") for x in fmt_spend(self.spend, self.spend_label, width)])
-            if by_model := fmt_models(self.spend.models, width):
-                groups.append([(x, "") for x in by_model])
         if self.intents or (self._intents_seen and store.db_path().exists()):
             groups.append(
                 fmt_intents(

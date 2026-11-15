@@ -24,7 +24,8 @@ from __future__ import annotations
 import datetime as dt
 import sqlite3
 import time
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from cabildo import billing, store, usage
@@ -66,7 +67,10 @@ class Report:
     billed_week: float | None = None
     billed_all: float | None = None
     session: usage.Spend | None = None  # the shown conversation's share; None when none
-    models: tuple[usage.ModelSpend, ...] = ()  # today, per model, dearest first
+    models: tuple[usage.ModelSpend, ...] = ()  # all time, per model, dearest first
+    #: period label -> that period's split by model. Keyed by the same labels the rows
+    #: use, so the renderer reads a cell as `split[row][model]`.
+    split: Mapping[str, Mapping[str, usage.ModelSpend]] = field(default_factory=dict)
 
     @property
     def any_billed(self) -> bool:
@@ -117,12 +121,23 @@ def load(
             pass  # another writer holds it: price what is already recorded
         computed = usage.spend(conn, at)
         mine = usage.spend(conn, at, sessions) if sessions else None
-        models = tuple(usage.by_model(conn, usage._midnight(at)))
+        models = tuple(usage.by_model(conn, 0.0))
+        windows: dict[str, tuple[float, tuple[str, ...] | None]] = {
+            "today": (usage._midnight(at), None),
+            "7d": (at - 7 * 86400, None),
+            "all": (0.0, None),
+        }
+        if sessions:
+            windows["session"] = (0.0, sessions)
+        split = {
+            label: {m.model: m for m in usage.by_model(conn, since, ids)}
+            for label, (since, ids) in windows.items()
+        }
         try:
             today, week, all_time = billed_windows(conn, cwd, at)
         except sqlite3.Error:
             today = week = all_time = None  # the billed column is an extra; computed is not
-        return Report(computed, today, week, all_time, mine, models)
+        return Report(computed, today, week, all_time, mine, models, split)
     except sqlite3.Error:
         return None
     finally:

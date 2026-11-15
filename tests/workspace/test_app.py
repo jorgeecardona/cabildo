@@ -674,85 +674,76 @@ def test_the_tokens_line_shows_cache_reads_apart_from_input() -> None:
     assert "cache" not in fmt_tokens(Tokens(53_000, 53_000, 2000))
 
 
-def test_the_spend_table_lines_up_under_a_header() -> None:
-    from cabildo.usage import Spend, Window
-    from cabildo.workspace.app import fmt_spend
+def _report(**over):
+    """A Report with a two-model split, for the matrix tests."""
+    from cabildo.usage import ModelSpend, Spend, Window
     from cabildo.workspace.spend import Report
 
-    s = Spend(
-        today=Window(input=1_000, output=2_000, cost=0.84),
-        week=Window(input=1_000_000, output=2_000_000, cost=103.9),
-        all_time=Window(input=9_000_000_000, output=2_000_000, cost=4821.79),
-    )
-    rows = [line.split() for line in fmt_spend(Report(s))]
-    assert rows[0] == ["api", "key", "spent"]
-    assert rows[1] == ["today", "$0.84"]
-    assert rows[2] == ["7d", "$103.90"]
-    assert rows[3] == ["all", "$4,821.79"]  # thousands stay readable
+    opus = ModelSpend("claude-opus-5", 623_800_000, 584.12, True)
+    sonnet = ModelSpend("claude-sonnet-5-5", 115_900_000, 47.84, True)
+    fields = {
+        "spend": Spend(Window(cost=1.62), Window(cost=5054.11), Window(cost=7970.69)),
+        "models": (opus, sonnet),
+        "split": {
+            "today": {"claude-opus-5": ModelSpend("claude-opus-5", 3_100_000, 1.59, True)},
+            "7d": {"claude-opus-5": opus, "claude-sonnet-5-5": sonnet},
+            "all": {"claude-opus-5": opus, "claude-sonnet-5-5": sonnet},
+        },
+    }
+    return Report(**(fields | over))
 
 
-def test_the_spend_table_names_tokens_it_could_not_price() -> None:
-    """A model the price table does not know makes the dollar figure a floor. Saying so is
-    the whole point: a cost line that quietly skipped them would read as the total.
+def test_the_spend_matrix_is_a_row_per_period_and_a_column_per_model() -> None:
+    from cabildo.workspace.app import fmt_spend
+
+    rows = [line.split() for line in fmt_spend(_report(), "spend", width=60)]
+    assert rows[0] == ["spend", "opus", "5", "sonnet", "5.5", "total"]
+    assert rows[1] == ["today", "$1.59", "-", "$1.62"]  # a model with nothing is a dash
+    assert rows[2] == ["7d", "$584.12", "$47.84", "$5,054.11"]
+
+
+def test_the_tokens_row_has_no_total() -> None:
+    """Summing tokens across models is the one number this table refuses to print, so the
+    row that carries them stops before the total column.
     """
-    from cabildo.usage import Spend, Window
     from cabildo.workspace.app import fmt_spend
-    from cabildo.workspace.spend import Report
 
-    priced = Window(input=1_000_000, cost=4.0)
-    mixed = Window(input=3_000_000, cost=4.0, unpriced=2_000_000)
-    rows = fmt_spend(Report(Spend(today=priced, week=mixed, all_time=mixed)))
-    assert "unpriced" not in rows[1]
-    assert rows[2].endswith("+2.0M unpriced")
+    tokens = next(x for x in fmt_spend(_report(), "spend", 60) if x.startswith("tokens"))
+    assert tokens.split() == ["tokens", "623.8M", "115.9M"]  # no third figure
+    assert "$" not in tokens
 
 
-def test_a_billed_figure_gets_its_own_column_and_a_gap_is_a_dash() -> None:
+def test_a_billed_column_sits_last_and_a_gap_is_a_dash() -> None:
     """Today's billed cost lands hours late. A dash says "not known yet"; a $0.00 there
     would read as a morning that cost nothing.
     """
+    from cabildo.workspace.app import fmt_spend
+
+    r = _report(billed_today=None, billed_week=4712.08, billed_all=21004.55)
+    rows = [line.split() for line in fmt_spend(r, "spend", width=70)]
+    assert rows[0][-1] == "billed"
+    assert rows[1][-1] == "-"  # today
+    assert rows[2][-1] == "$4,712.08"
+
+
+def test_the_shown_conversation_is_a_row_of_its_own() -> None:
     from cabildo.usage import Spend, Window
     from cabildo.workspace.app import fmt_spend
-    from cabildo.workspace.spend import Report
 
-    s = Spend(
-        today=Window(output=1_000, cost=241.91),
-        week=Window(output=1_000, cost=4829.36),
-        all_time=Window(output=1_000, cost=7440.23),
-    )
-    rows = [line.split() for line in fmt_spend(Report(s, None, 4712.08, 21004.55))]
-    assert rows[0] == ["api", "key", "billed", "est"]
-    assert rows[1][:3] == ["today", "-", "$241.91"]
-    assert rows[2][:3] == ["7d", "$4,712.08", "$4,829.36"]
-    assert rows[3][:3] == ["all", "$21,004.55", "$7,440.23"]
+    mine = Spend(Window(cost=12.0), Window(cost=100.0), Window(cost=310.25))
+    rows = fmt_spend(_report(session=mine), "spend", width=60)
+    assert next(x for x in rows if x.startswith("session")).split()[-1] == "$310.25"
 
 
-def test_the_shown_conversation_gets_its_own_column() -> None:
-    from cabildo.usage import Spend, Window
-    from cabildo.workspace.app import fmt_spend
-    from cabildo.workspace.spend import Report
-
-    machine = Spend(Window(cost=307.33), Window(cost=4894.78), Window(cost=7505.65))
-    mine = Spend(Window(cost=35.02), Window(cost=49.59), Window(cost=49.59))
-    rows = [line.split() for line in fmt_spend(Report(machine, session=mine), width=60)]
-    assert rows[0] == ["api", "key", "spent", "session"]
-    assert rows[1][:3] == ["today", "$307.33", "$35.02"]
-    assert rows[3][:3] == ["all", "$7,505.65", "$49.59"]
-
-
-def test_a_narrow_list_drops_columns_from_the_right_but_keeps_the_money() -> None:
-    """The list can be 33 cells wide. Something has to go, and it is the rightmost
-    column, never the one figure that is always known.
+def test_a_narrow_list_drops_the_cheapest_model_but_keeps_the_total() -> None:
+    """The list can be 36 cells wide. Something has to go, and the total is not it: it is
+    the one figure that still accounts for the models no longer shown.
     """
-    from cabildo.usage import Spend, Window
     from cabildo.workspace.app import fmt_spend
-    from cabildo.workspace.spend import Report
 
-    machine = Spend(Window(cost=307.33), Window(cost=4894.78), Window(cost=7505.65))
-    mine = Spend(Window(cost=35.02), Window(cost=49.59), Window(cost=49.59))
-    r = Report(machine, None, 4712.08, 21004.55, mine)
-    narrow = fmt_spend(r, width=33)
-    assert narrow[0].split() == ["api", "key", "billed", "est"]
-    assert all(len(line) <= 33 for line in narrow)
+    narrow = fmt_spend(_report(), "spend", width=36)
+    assert narrow[0].split() == ["spend", "opus", "5", "total"]  # sonnet dropped, total kept
+    assert all(len(line) <= 36 for line in narrow)
 
 
 def test_the_effort_line_is_empty_when_the_effort_is_unknown() -> None:
@@ -809,38 +800,3 @@ def test_the_keys_screen_shows_the_version(transcript, monkeypatch) -> None:
 
     drive(monkeypatch, scenario)
     assert f"workspace {__version__}" in seen[0]
-
-
-def test_the_per_model_block_shows_tokens_beside_the_model_that_spent_them() -> None:
-    """Tokens are kept out of the table above because summing them across models says
-    nothing. Next to one model's name they are that model's own measure of work.
-    """
-    from cabildo.usage import ModelSpend
-    from cabildo.workspace.app import fmt_models
-
-    rows = [
-        line.split()
-        for line in fmt_models(
-            (
-                ModelSpend("claude-opus-5", 622_200_000, 584.12, True),
-                ModelSpend("claude-fable-5-2", 13_800_000, 12.58, True),
-            )
-        )
-    ]
-    assert rows[0] == ["today", "spent", "tokens"]
-    assert rows[1] == ["opus", "5", "$584.12", "622.2M"]
-    assert rows[2] == ["fable", "5.2", "$12.58", "13.8M"]
-
-
-def test_a_model_the_price_table_cannot_price_shows_its_tokens_and_a_question_mark() -> None:
-    from cabildo.usage import ModelSpend
-    from cabildo.workspace.app import fmt_models
-
-    rows = fmt_models((ModelSpend("claude-opus-9", 500_000, 0.0, False),))
-    assert rows[1].split() == ["opus", "9", "?", "500k"]  # not $0.00, which reads as free
-
-
-def test_nothing_spent_today_draws_no_per_model_block() -> None:
-    from cabildo.workspace.app import fmt_models
-
-    assert fmt_models(()) == []
