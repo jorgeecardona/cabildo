@@ -1541,7 +1541,7 @@ def cmd_ci(args) -> int:
                     check=False,
                 ).stdout.strip()
             )
-            p = ci.run(repo, ref)
+            p = ci.run(repo, ref, workflow=args.job)
             print(_json.dumps(ci.as_dict(p)) if args.json else ci.lines(p))
             return 0
         if args.what in {"play", "retry"} and args.job and args.job.isdigit() and not args.id:
@@ -2491,7 +2491,9 @@ def main(argv: list[str] | None = None) -> int:
         help="status: jobs of the pipeline (exit 0 passed, 1 failed, 2 running, 3 none); "
         "run: start a pipeline; play: start a manual job; retry: rerun a job",
     )
-    ci_p.add_argument("job", nargs="?", help="play/retry: job name or id")
+    ci_p.add_argument(
+        "job", nargs="?", help="play/retry: job name or id; run on GitHub: the workflow file"
+    )
     ci_p.add_argument("--ref", help="branch or tag (default: the pipeline of HEAD)")
     ci_p.add_argument("--id", type=int, help="pipeline id")
     ci_p.add_argument("--json", action="store_true", help="print JSON instead of lines")

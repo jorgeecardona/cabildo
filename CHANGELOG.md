@@ -9,6 +9,12 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   `cabildo ci run`, `play <job>` and `retry <job>` start a pipeline, a manual job, or a rerun.
   Agents get the same as the `ci_status`, `ci_retry`, `ci_run` and `ci_play` MCP tools;
   `ci_run` and `ci_play` wait for you to click Allow in a desktop popup.
+- `cabildo ci` and the `ci_*` tools also work on GitHub Actions, picked from the `origin`
+  host. A workflow run shows as a pipeline, with the same status names and exit codes.
+  `ci run ci.yml --ref main` dispatches a workflow (it needs a `workflow_dispatch` trigger),
+  `ci retry <job>` reruns a job, and `ci play <run>` approves deployments waiting for a
+  reviewer. Token: `GH_TOKEN`/`GITHUB_TOKEN`, then `~/.netrc`, then gh's `hosts.yml`, else
+  `gh api`.
 - The GitLab token is also read from `~/.netrc` (or `$NETRC`): the password of the host's entry.
 - `cabildo mcp` runs the MCP server, so `uvx cabildo mcp` starts it. cabildo is listed in the
   official MCP registry as `io.github.jorgeecardona/cabildo` (`server.json`).

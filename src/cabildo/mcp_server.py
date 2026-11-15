@@ -1358,7 +1358,7 @@ def _human_allows(what: str) -> bool:
 
 @mcp.tool()
 def ci_status(ref: str | None = None, pipeline_id: int | None = None) -> dict[str, Any]:
-    """The newest GitLab pipeline of this repo's ``ref`` (default: the pipeline of HEAD) and
+    """The newest pipeline (GitLab) or workflow run (GitHub) of this repo's ``ref`` (default: the pipeline of HEAD) and
     each job's status. ``passed`` is True, False, or None while it still runs.
     """
     try:
@@ -1382,7 +1382,7 @@ def ci_status(ref: str | None = None, pipeline_id: int | None = None) -> dict[st
 
 @mcp.tool()
 def ci_retry(job_id: int) -> dict[str, Any]:
-    """Run a finished GitLab job of this repo again, for example a failed test job."""
+    """Run a finished CI job of this repo again (GitLab or GitHub), e.g. a failed test job."""
     try:
         ci, repo = _ci_repo()
         job = ci.retry(repo, job_id)
@@ -1392,13 +1392,16 @@ def ci_retry(job_id: int) -> dict[str, Any]:
 
 
 @mcp.tool()
-def ci_run(ref: str) -> dict[str, Any]:
-    """Start a new GitLab pipeline on ``ref``. The human approves it in a popup first."""
+def ci_run(ref: str, workflow: str | None = None) -> dict[str, Any]:
+    """Start a new pipeline on ``ref`` (GitHub: dispatch ``workflow``, e.g. ``ci.yml``).
+
+    The human approves it in a popup first.
+    """
     try:
         ci, repo = _ci_repo()
         if not _human_allows(f"Start a pipeline on {repo.path}@{ref}?"):
             return {"ok": False, "error": "the human did not allow it"}
-        p = ci.run(repo, ref)
+        p = ci.run(repo, ref, workflow=workflow)
     except RuntimeError as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, **ci.as_dict(p)}
@@ -1406,7 +1409,9 @@ def ci_run(ref: str) -> dict[str, Any]:
 
 @mcp.tool()
 def ci_play(job_id: int) -> dict[str, Any]:
-    """Start a manual GitLab job (often a deploy). The human approves it in a popup first."""
+    """Start a manual job (often a deploy); on GitHub, approve the waiting deployments of run
+    ``job_id``. The human approves it in a popup first.
+    """
     try:
         ci, repo = _ci_repo()
         if not _human_allows(f"Run manual job {job_id} on {repo.path}?"):
