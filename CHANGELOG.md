@@ -4,6 +4,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- `cabildo code "task"` runs a small coding agent against a local model. It talks to any
+  OpenAI-compatible endpoint (`--base-url`, default `http://localhost:8000/v1`; `--model`).
+  Tools: read, edit, bash, grep. The agent joins the bus as client `local` and takes a
+  `file:<path>` claim before each edit, so it cannot overwrite a file another agent holds.
+  Claims are released when the task ends.
 - `cabildo load` shows CPU, heat and power of this machine, and which agent uses the CPU. The
   daemon raises three new conditions, injected into Claude Code sessions once per episode:
   `cpu` (tasks waiting for a core), `power` (on battery, 30% or less) and `thermal` (the CPU

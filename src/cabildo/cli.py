@@ -837,6 +837,35 @@ def cmd_mem(args) -> int:
     return 0
 
 
+def cmd_code(args) -> int:
+    """Run the local-model coding agent on one task.
+
+    The agent is a bus client: it registers a session (client ``local``), claims each file
+    before it edits it, and releases the claims when the task ends.
+    """
+    import uuid
+    from pathlib import Path
+
+    from .agent.claims import BusClaims
+    from .agent.loop import run
+    from .agent.tools import TOOLS
+    from .agent.types import Context, Endpoint
+
+    cwd = Path.cwd()
+    claims = BusClaims(cwd, session_id=f"local-{uuid.uuid4().hex[:8]}")
+    try:
+        transcript = run(
+            args.task,
+            endpoint=Endpoint(base_url=args.base_url, model=args.model),
+            tools=TOOLS,
+            ctx=Context(cwd=cwd, claims=claims),
+        )
+    finally:
+        claims.release_all()
+    print(transcript[-1].text)
+    return 0
+
+
 def cmd_load(args) -> int:
     """CPU, heat and power of this machine, with CPU time attributed to agents.
 
@@ -2522,6 +2551,14 @@ def main(argv: list[str] | None = None) -> int:
     ld.add_argument("--window", type=float, default=1.5, help="seconds to measure over")
     ld.add_argument("--top", type=int, default=12, help="how many processes to list")
     ld.set_defaults(fn=cmd_load)
+
+    cd = sub.add_parser(
+        "code", help="a coding agent for a local model (OpenAI-compatible endpoint)"
+    )
+    cd.add_argument("task")
+    cd.add_argument("--base-url", default="http://localhost:8000/v1")
+    cd.add_argument("--model", default="Qwen3-0.6B")
+    cd.set_defaults(fn=cmd_code)
 
     bw = sub.add_parser("browser", help="the browser agents use: status, reap, doctor")
     bw_sub = bw.add_subparsers(dest="browser_cmd", required=True)
