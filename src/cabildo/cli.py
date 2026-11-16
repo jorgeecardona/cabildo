@@ -851,13 +851,27 @@ def cmd_code(args) -> int:
     from .agent.tools import TOOLS
     from .agent.types import Context, Endpoint
 
+    tools = TOOLS
+    if args.escalate:
+        import os
+
+        from .agent.escalate import Escalator, anthropic_ask
+
+        key = os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            print("--escalate needs ANTHROPIC_API_KEY (each escalation is billed to it)")
+            return 1
+        tools = (
+            *TOOLS,
+            Escalator(anthropic_ask(args.escalate, key), limit=args.max_escalations).tool(),
+        )
     cwd = Path.cwd()
     claims = BusClaims(cwd, session_id=f"local-{uuid.uuid4().hex[:8]}")
     try:
         transcript = run(
             args.task,
             endpoint=Endpoint(base_url=args.base_url, model=args.model),
-            tools=TOOLS,
+            tools=tools,
             ctx=Context(cwd=cwd, claims=claims),
         )
     finally:
@@ -2558,6 +2572,14 @@ def main(argv: list[str] | None = None) -> int:
     cd.add_argument("task")
     cd.add_argument("--base-url", default="http://localhost:8000/v1")
     cd.add_argument("--model", default="Qwen3-0.6B")
+    cd.add_argument(
+        "--escalate",
+        nargs="?",
+        const="claude-fable-5-2",
+        metavar="MODEL",
+        help="let the agent ask a Claude model hard questions (billed to ANTHROPIC_API_KEY)",
+    )
+    cd.add_argument("--max-escalations", type=int, default=3, help="cap on escalations per task")
     cd.set_defaults(fn=cmd_code)
 
     bw = sub.add_parser("browser", help="the browser agents use: status, reap, doctor")

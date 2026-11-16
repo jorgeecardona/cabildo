@@ -9,6 +9,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   Tools: read, edit, bash, grep. The agent joins the bus as client `local` and takes a
   `file:<path>` claim before each edit, so it cannot overwrite a file another agent holds.
   Claims are released when the task ends.
+  With `--escalate [MODEL]` the agent also gets an `escalate` tool that asks a Claude model
+  (default `claude-fable-5-2`) a hard question. It is billed to `ANTHROPIC_API_KEY` and capped
+  by `--max-escalations` (default 3).
 - `cabildo load` shows CPU, heat and power of this machine, and which agent uses the CPU. The
   daemon raises three new conditions, injected into Claude Code sessions once per episode:
   `cpu` (tasks waiting for a core), `power` (on battery, 30% or less) and `thermal` (the CPU
