@@ -7,6 +7,11 @@ from collections.abc import Callable, Mapping, Sequence
 from .client import chat
 from .types import Context, Endpoint, Message, Tool, ToolCall
 
+SYSTEM = (
+    "You are a coding agent. Use the tools to finish the task, then answer briefly. "
+    "Always read a file with the read tool before you edit it. "
+    "In an edit, copy 'old' exactly from the text you read."
+)
 MAX_STEPS = 30
 MAX_BAD_CALLS = 2  # consecutive invalid calls before the loop gives up
 
@@ -45,7 +50,7 @@ def run(
     endpoint: Endpoint,
     tools: Sequence[Tool],
     ctx: Context,
-    system: str = "You are a coding agent. Use the tools to finish the task, then answer briefly.",
+    system: str = SYSTEM,
     ask: Callable[[Endpoint, Sequence[Message], Sequence[Tool]], Message] = chat,
 ) -> tuple[Message, ...]:
     """Run ``task`` until the model stops calling tools. Returns the full transcript."""

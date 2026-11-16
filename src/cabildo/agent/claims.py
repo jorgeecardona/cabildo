@@ -22,7 +22,12 @@ class BusClaims:
 
     def __init__(self, cwd: Path, *, session_id: str) -> None:
         self.session_id = session_id
-        self.root, self.project_name = git_project(str(cwd))
+        root, name = git_project(str(cwd))
+        if not cwd.resolve().is_relative_to(root):
+            # git_project can name a project the folder is not inside (a pin or an env hint);
+            # claims are repo-relative, so fall back to the folder itself.
+            root, name = str(cwd.resolve()), cwd.resolve().name
+        self.root, self.project_name = root, name
         self._taken: list[str] = []
         conn = store.connect()
         try:

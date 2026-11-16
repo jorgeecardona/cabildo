@@ -41,3 +41,17 @@ def test_glob_claim_by_another_session_covers_the_file(home, tmp_path: Path) -> 
     )
     conn.close()
     assert agent.acquire(repo / "a.txt") is not None
+
+
+def test_folder_outside_the_resolved_project_still_gets_claims(
+    home, tmp_path: Path, monkeypatch
+) -> None:
+    from cabildo.agent import claims as claims_mod
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "a.txt").write_text("x")
+    monkeypatch.setattr(claims_mod, "git_project", lambda _cwd: ("/some/other/project", "other"))
+    agent = BusClaims(elsewhere, session_id="local-1")
+    assert agent.root == str(elsewhere.resolve())
+    assert agent.acquire(elsewhere / "a.txt") is None
