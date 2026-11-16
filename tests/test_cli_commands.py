@@ -25,6 +25,7 @@ COMMANDS = [
     "sessions",
     "stop",
     "mem",
+    "load",
     "browser",
     "cost",
     "pair",
