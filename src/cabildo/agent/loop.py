@@ -51,20 +51,32 @@ def run(
     tools: Sequence[Tool],
     ctx: Context,
     system: str = SYSTEM,
+    history: Sequence[Message] = (),
+    on_tool: Callable[[ToolCall, str], None] = lambda _c, _r: None,
     ask: Callable[[Endpoint, Sequence[Message], Sequence[Tool]], Message] = chat,
 ) -> tuple[Message, ...]:
-    """Run ``task`` until the model stops calling tools. Returns the full transcript."""
+    """Run ``task`` until the model stops calling tools. Returns the full transcript.
+
+    Pass the previous transcript as ``history`` to continue a conversation.
+    """
     by_name = {t.name: t for t in tools}
-    messages: tuple[Message, ...] = (Message("system", system), Message("user", task))
+    # A chat passes the earlier transcript back in, so the model keeps its context.
+    messages: tuple[Message, ...] = (
+        (*history, Message("user", task))
+        if history
+        else (Message("system", system), Message("user", task))
+    )
     bad = 0
     for _ in range(MAX_STEPS):
         reply = ask(endpoint, messages, tools)
         messages = (*messages, reply)
         if not reply.calls:
             return messages
-        results = tuple(
-            Message("tool", run_call(c, by_name, ctx), call_id=c.id) for c in reply.calls
-        )
+        results = []
+        for c in reply.calls:
+            result = run_call(c, by_name, ctx)
+            on_tool(c, result)  # lets a chat show each tool call as it finishes
+            results.append(Message("tool", result, call_id=c.id))
         messages = (*messages, *results)
         bad = bad + 1 if all(r.text.startswith("error:") for r in results) else 0
         if bad > MAX_BAD_CALLS:

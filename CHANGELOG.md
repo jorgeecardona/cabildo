@@ -4,11 +4,13 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
-- `cabildo code "task"` runs a small coding agent against a local model. It talks to any
+- `cabildo code` opens a chat with a small coding agent for a local model; `cabildo code "task"`
+  runs one task and exits. Text streams as it is written, each tool call is shown, Ctrl-C stops
+  the turn, `/clear` forgets the conversation, Ctrl-D leaves. It talks to any
   OpenAI-compatible endpoint (`--base-url`, default `http://localhost:8000/v1`; `--model`).
   Tools: read, edit, bash, grep. The agent joins the bus as client `local` and takes a
   `file:<path>` claim before each edit, so it cannot overwrite a file another agent holds.
-  Claims are released when the task ends.
+  Claims are released when you leave.
   With `--escalate [MODEL]` the agent also gets an `escalate` tool that asks a Claude model
   (default `claude-fable-5-2`) a hard question. It is billed to `ANTHROPIC_API_KEY` and capped
   by `--max-escalations` (default 3).

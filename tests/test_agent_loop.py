@@ -108,3 +108,49 @@ def test_parse_reply_marks_bad_json() -> None:
         ]
     }
     assert "__invalid__" in parse_reply(body).calls[0].args
+
+
+def test_history_continues_a_conversation(tmp_path: Path) -> None:
+    seen: list[int] = []
+
+    def ask(_e: Endpoint, messages: Sequence[Message], _t: Sequence[Tool]) -> Message:
+        seen.append(len(messages))
+        return Message("assistant", "ok")
+
+    kw = {"endpoint": Endpoint(), "tools": TOOLS, "ctx": Context(cwd=tmp_path), "ask": ask}
+    first = run("one", **kw)
+    run("two", history=first, **kw)
+    assert seen == [2, 4]  # system+user, then system+user+assistant+user
+
+
+def test_assemble_stream_joins_text_and_tool_call_pieces() -> None:
+    from cabildo.agent.client import assemble_stream
+
+    lines = [
+        'data: {"choices":[{"delta":{"content":"Hel"}}]}',
+        'data: {"choices":[{"delta":{"content":"lo"}}]}',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"read","arguments":"{\\"pa"}}]}}]}',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\\":\\"a\\"}"}}]}}]}',
+        'data: {"choices":[]}',
+        "data: [DONE]",
+    ]
+    pieces: list[str] = []
+    msg = assemble_stream(lines, pieces.append)
+    assert pieces == ["Hel", "lo"]
+    assert msg.text == "Hello"
+    assert msg.calls[0].name == "read"
+    assert dict(msg.calls[0].args) == {"path": "a"}
+
+
+def test_on_tool_sees_each_result(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("hi")
+    seen: list[tuple[str, str]] = []
+    run(
+        "x",
+        endpoint=Endpoint(),
+        tools=TOOLS,
+        ctx=Context(cwd=tmp_path),
+        on_tool=lambda c, r: seen.append((c.name, r)),
+        ask=scripted(call("read", path="a.txt"), Message("assistant", "ok")),
+    )
+    assert seen == [("read", "hi")]

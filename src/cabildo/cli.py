@@ -838,18 +838,22 @@ def cmd_mem(args) -> int:
 
 
 def cmd_code(args) -> int:
-    """Run the local-model coding agent on one task.
+    """Chat with the local-model coding agent, or run one task with `cabildo code "task"`.
 
     The agent is a bus client: it registers a session (client ``local``), claims each file
-    before it edits it, and releases the claims when the task ends.
+    before it edits it, and releases the claims when it exits. Text streams as the model
+    writes it, each tool call is shown, Ctrl-C stops the current turn, Ctrl-D exits.
     """
+    import contextlib
     import uuid
+    from functools import partial
     from pathlib import Path
 
     from .agent.claims import BusClaims
+    from .agent.client import chat_stream
     from .agent.loop import run
     from .agent.tools import TOOLS
-    from .agent.types import Context, Endpoint
+    from .agent.types import Context, Endpoint, Message, ToolCall
 
     tools = TOOLS
     if args.escalate:
@@ -867,16 +871,68 @@ def cmd_code(args) -> int:
         )
     cwd = Path.cwd()
     claims = BusClaims(cwd, session_id=f"local-{uuid.uuid4().hex[:8]}")
+    endpoint = Endpoint(base_url=args.base_url, model=args.model)
+    ctx = Context(cwd=cwd, claims=claims)
+
+    def write(piece: str) -> None:
+        sys.stdout.write(piece)
+        sys.stdout.flush()
+
+    def show_tool(call: ToolCall, result: str) -> None:
+        shown = ", ".join(f"{k}={str(v)[:60]!r}" for k, v in call.args.items())
+        first = (result.splitlines() or [""])[0][:100]
+        write(f"\n{C.DIM}● {call.name}({shown}) → {first}{C.OFF}\n")
+
+    def turn(line: str, history: tuple[Message, ...]) -> tuple[Message, ...]:
+        try:
+            out = run(
+                line,
+                endpoint=endpoint,
+                tools=tools,
+                ctx=ctx,
+                history=history,
+                on_tool=show_tool,
+                ask=partial(chat_stream, on_text=write),
+            )
+        except KeyboardInterrupt:
+            write(f"\n{C.DIM}(interrupted){C.OFF}\n")
+            return history
+        except OSError as exc:
+            write(f"\n{C.RED}cannot reach {endpoint.base_url}: {exc}{C.OFF}\n")
+            return history
+        write("\n")
+        return out
+
     try:
-        transcript = run(
-            args.task,
-            endpoint=Endpoint(base_url=args.base_url, model=args.model),
-            tools=tools,
-            ctx=Context(cwd=cwd, claims=claims),
+        if args.task:
+            turn(args.task, ())
+            return 0
+        with contextlib.suppress(ImportError):
+            import readline  # noqa: F401  (importing it gives input() line editing and history)
+        print(
+            f"{C.BOLD}cabildo code{C.OFF} {C.DIM}{endpoint.model} @ {endpoint.base_url} · {cwd}\n"
+            f"/clear forgets the conversation · /exit or Ctrl-D leaves{C.OFF}"
         )
+        history: tuple[Message, ...] = ()
+        while True:
+            try:
+                line = input(f"\n{C.GREEN}>{C.OFF} ").strip()
+            except EOFError:
+                print()
+                break
+            except KeyboardInterrupt:
+                print(f"{C.DIM}(Ctrl-D to leave){C.OFF}")
+                continue
+            if line in {"/exit", "/quit"}:
+                break
+            if line == "/clear":
+                history = ()
+                print(f"{C.DIM}conversation cleared{C.OFF}")
+                continue
+            if line:
+                history = turn(line, history)
     finally:
         claims.release_all()
-    print(transcript[-1].text)
     return 0
 
 
@@ -2569,7 +2625,7 @@ def main(argv: list[str] | None = None) -> int:
     cd = sub.add_parser(
         "code", help="a coding agent for a local model (OpenAI-compatible endpoint)"
     )
-    cd.add_argument("task")
+    cd.add_argument("task", nargs="?", help="one task, then exit; without it, start a chat")
     cd.add_argument("--base-url", default="http://localhost:8000/v1")
     cd.add_argument("--model", default="Qwen3-0.6B")
     cd.add_argument(
