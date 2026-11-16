@@ -32,10 +32,13 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from . import procs, store
+from . import machine, procs, store
 
 MEM_KEY = "mem"
 ORPHAN_KEY = "orphans"
+CPU_KEY = "cpu"
+POWER_KEY = "power"
+THERMAL_KEY = "thermal"
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,15 @@ class Thresholds:
     psi_critical: float = 25.0
     orphan_rss_mb: int = 250  # per-process floor: below it, not worth a word
     orphan_total_mb: int = 750  # total floor: one stray 300 MB process is life
+    cpu_psi_warn: float = 30.0  # PSI cpu some avg60: a third of the minute with a task waiting
+    cpu_psi_critical: float = 60.0
+    cpu_load_warn: float = 1.5  # load per core: used only when the kernel has no CPU PSI
+    cpu_load_critical: float = 3.0
+    cpu_clear_margin: float = 10.0  # PSI points of recovery (load: margin / 20 per core)
+    battery_warn_pct: float = 30.0  # on battery and below this → warn
+    battery_critical_pct: float = 15.0
+    battery_clear_margin: float = 5.0
+    thermal_hold_s: float = 300.0  # keep "throttling" raised this long after the last event
 
 
 def _gb(kb: int) -> str:
@@ -82,6 +94,47 @@ def level_for(snap: procs.Snapshot, th: Thresholds, *, sticky: str | None = None
     if mem.avail_pct <= crit_at or stall >= th.psi_critical:
         return "critical"
     if mem.avail_pct <= warn_at or stall >= th.psi_warn:
+        return "warn"
+    return None
+
+
+def cpu_level(cpu: machine.Cpu, th: Thresholds, *, sticky: str | None = None) -> str | None:
+    """The CPU level this reading deserves, or None.
+
+    PSI when the kernel has it (time tasks spent waiting for a core), otherwise the load
+    per core. Load is a weaker signal: a box can have load 20 on 16 cores and be fine.
+    ``sticky`` is the level currently raised; thresholds at or below it drop by the
+    margin, so leaving a level costs more than entering it.
+    """
+    if cpu.stall_pct is not None:
+        value, warn, crit = cpu.stall_pct, th.cpu_psi_warn, th.cpu_psi_critical
+        margin = th.cpu_clear_margin
+    else:
+        value, warn, crit = cpu.load_per_core, th.cpu_load_warn, th.cpu_load_critical
+        margin = th.cpu_clear_margin / 20.0
+    crit_at = crit - (margin if sticky == "critical" else 0.0)
+    warn_at = warn - (margin if sticky in ("warn", "critical") else 0.0)
+    if value >= crit_at:
+        return "critical"
+    if value >= warn_at:
+        return "warn"
+    return None
+
+
+def power_level(
+    bat: machine.Battery | None, th: Thresholds, *, sticky: str | None = None
+) -> str | None:
+    """The battery level this reading deserves. None on AC power, on a full battery,
+    or when there is no battery: running on AC is never news.
+    """
+    if bat is None or not bat.discharging:
+        return None
+    m = th.battery_clear_margin
+    crit_at = th.battery_critical_pct + (m if sticky == "critical" else 0.0)
+    warn_at = th.battery_warn_pct + (m if sticky in ("warn", "critical") else 0.0)
+    if bat.pct <= crit_at:
+        return "critical"
+    if bat.pct <= warn_at:
         return "warn"
     return None
 
@@ -148,6 +201,101 @@ def mem_payload(snap: procs.Snapshot, conn, *, limit: int = 3) -> dict:
     }
 
 
+CPU_ADVICE = {
+    "critical": (
+        "The CPU is saturated. Do not start builds, test suites or parallel work, and do "
+        "not spawn agents. If the line above says you are using CPU, finish or stop that. "
+        "`cabildo load` shows who uses what."
+    ),
+    "warn": (
+        "The CPU is busy. One heavy thing at a time: no parallel test suites, and lower "
+        "the worker count of the tools you run. `cabildo load` shows who uses what."
+    ),
+}
+
+POWER_ADVICE = {
+    "critical": (
+        "The battery is almost empty. Do not start long builds or test suites. Finish "
+        "what you have, commit, and push before the machine shuts down."
+    ),
+    "warn": (
+        "The machine is on battery. Avoid long builds and parallel test suites, and "
+        "prefer short steps that can be committed."
+    ),
+}
+
+THERMAL_ADVICE = (
+    "The CPU is slowing down to cool off, so builds and tests take longer than usual. "
+    "Do not add parallel work."
+)
+
+
+def cpu_headline(sample: machine.Sample) -> str:
+    c = sample.cpu
+    bits = []
+    if c.stall_pct is not None:
+        bits.append(f"{c.stall_pct:.0f}% of the last minute with a task waiting for a CPU core")
+    bits.append(f"load {c.load1:.1f} on {c.cores} cores")
+    if sample.busy_pct is not None:
+        bits.append(f"{sample.busy_pct:.0f}% busy now")
+    return " · ".join(bits)
+
+
+def power_headline(bat: machine.Battery) -> str:
+    bits = [f"on battery at {bat.pct:.0f}%"]
+    if bat.watts:
+        bits.append(f"drawing {bat.watts:.1f} W")
+    if bat.hours_left is not None:
+        h = bat.hours_left
+        bits.append(f"about {int(h)}h {int((h % 1) * 60):02d}m left")
+    return " · ".join(bits)
+
+
+def thermal_headline(sample: machine.Sample) -> str:
+    bits = ["the CPU is throttling for heat"]
+    if sample.cpu.temp_c is not None:
+        bits.append(f"{sample.cpu.temp_c:.0f}°C")
+    if sample.cpu.freq_mhz and sample.cpu.max_mhz:
+        bits.append(
+            f"running at {sample.cpu.freq_mhz / 1000:.1f} of {sample.cpu.max_mhz / 1000:.1f} GHz"
+        )
+    return " · ".join(bits)
+
+
+def cpu_payload(sample: machine.Sample, conn, *, limit: int = 3) -> dict:
+    """Who uses CPU, per session, for the whole fleet. Same shape idea as ``mem_payload``:
+    the daemon does the /proc work once, each hook does one lookup on its own id.
+    """
+    by_session: dict[str, dict] = {}
+    for p in sample.hogs:
+        if p.session_id:
+            by_session.setdefault(p.session_id, {"cpu_pct": 0.0, "count": 0, "procs": []})
+            row = by_session[p.session_id]
+            row["cpu_pct"] += p.cpu_pct
+            row["count"] += 1
+            row["procs"].append({"pid": p.pid, "cpu_pct": round(p.cpu_pct), "what": p.label()})
+    for row in by_session.values():
+        row["cpu_pct"] = round(row["cpu_pct"])
+        row["procs"] = sorted(row["procs"], key=lambda r: -r["cpu_pct"])[:limit]
+    top = [
+        {
+            "cpu_pct": round(p.cpu_pct),
+            "what": p.label(40),
+            "who": store.display_name(store.get_session(conn, p.session_id), p.session_id)
+            if p.session_id
+            else None,
+        }
+        for p in sample.hogs[:5]
+    ]
+    return {
+        "by_session": by_session,
+        "top": top,
+        "stall_pct": sample.cpu.stall_pct,
+        "load1": round(sample.cpu.load1, 1),
+        "cores": sample.cpu.cores,
+    }
+
+
 def orphan_payload(loose: list[procs.Proc], conn, *, limit: int = 6) -> dict:
     rows = []
     for p in sorted(loose, key=lambda p: p.rss_kb, reverse=True)[:limit]:
@@ -196,8 +344,15 @@ def sweep(
     log: list[str] = []
     log += _reconcile_mem(conn, snap, th, source)
     log += _reconcile_orphans(conn, snap, th, source, live_ids)
+    log += _reconcile_machine(conn, _SAMPLER.sample(), th, source, pid_to_session)
     store.prune_conditions(conn)
     return log
+
+
+# One sampler for the daemon: CPU and power rates need the previous reading.
+_SAMPLER = machine.Sampler()
+# Epoch of the last thermal throttle event seen, for the hold time.
+_last_throttle = 0.0
 
 
 def _current(conn, key: str) -> dict | None:
@@ -278,3 +433,100 @@ def _reconcile_orphans(
         source=source,
     )
     return [f"🧟 orphans {level}: {res['headline']}"] if res["announced"] else []
+
+
+def _reconcile_machine(
+    conn,
+    sample: machine.Sample,
+    th: Thresholds,
+    source: str,
+    pid_to_session: dict[int, str],
+) -> list[str]:
+    """Reconcile the cpu, power and thermal conditions from one sample."""
+    procs.attribute(list(sample.hogs), pid_to_session=pid_to_session)
+    log: list[str] = []
+    log += _reconcile_cpu(conn, sample, th, source)
+    log += _reconcile_power(conn, sample, th, source)
+    log += _reconcile_thermal(conn, sample, th, source)
+    return log
+
+
+def _reconcile_cpu(conn, sample: machine.Sample, th: Thresholds, source: str) -> list[str]:
+    cur = _current(conn, CPU_KEY)
+    level = cpu_level(sample.cpu, th, sticky=cur["level"] if cur else None)
+    if level is None:
+        if cur and store.clear_condition(
+            conn,
+            key=CPU_KEY,
+            source=source,
+            headline=f"CPU recovered, load {sample.cpu.load1:.1f} on {sample.cpu.cores} cores",
+        ):
+            return ["✅ cpu cleared"]
+        return []
+    res = store.raise_condition(
+        conn,
+        key=CPU_KEY,
+        level=level,
+        headline=cpu_headline(sample),
+        advice=CPU_ADVICE.get(level),
+        data=cpu_payload(sample, conn),
+        source=source,
+    )
+    return [f"⚠ cpu {level}: {res['headline']}"] if res["announced"] else []
+
+
+def _reconcile_power(conn, sample: machine.Sample, th: Thresholds, source: str) -> list[str]:
+    cur = _current(conn, POWER_KEY)
+    level = power_level(sample.battery, th, sticky=cur["level"] if cur else None)
+    if level is None or sample.battery is None:
+        if cur and store.clear_condition(
+            conn,
+            key=POWER_KEY,
+            source=source,
+            headline="power recovered: not low on battery any more",
+        ):
+            return ["✅ power cleared"]
+        return []
+    res = store.raise_condition(
+        conn,
+        key=POWER_KEY,
+        level=level,
+        headline=power_headline(sample.battery),
+        advice=POWER_ADVICE.get(level),
+        data={"pct": round(sample.battery.pct), "watts": sample.battery.watts},
+        source=source,
+    )
+    return [f"🔋 power {level}: {res['headline']}"] if res["announced"] else []
+
+
+def _reconcile_thermal(conn, sample: machine.Sample, th: Thresholds, source: str) -> list[str]:
+    """Raised on a new throttle event, cleared ``thermal_hold_s`` after the last one.
+
+    Throttling comes in bursts. Without the hold, every quiet gap between two bursts
+    would clear the condition and the next burst would announce it again.
+    """
+    global _last_throttle
+    now = time.time()
+    if sample.throttle_events > 0:
+        _last_throttle = now
+    holding = _last_throttle and now - _last_throttle < th.thermal_hold_s
+    cur = _current(conn, THERMAL_KEY)
+    if not holding:
+        if cur and store.clear_condition(
+            conn,
+            key=THERMAL_KEY,
+            source=source,
+            headline="the CPU is no longer throttling for heat",
+        ):
+            return ["✅ thermal cleared"]
+        return []
+    res = store.raise_condition(
+        conn,
+        key=THERMAL_KEY,
+        level="warn",
+        headline=thermal_headline(sample),
+        advice=THERMAL_ADVICE,
+        data={"temp_c": sample.cpu.temp_c},
+        source=source,
+    )
+    return [f"🌡 thermal: {res['headline']}"] if res["announced"] else []

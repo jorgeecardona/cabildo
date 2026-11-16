@@ -19,6 +19,7 @@ is unaffected by whether any agent happens to be awake.
     python -m cabildo.cli spawn qa "audit the gate" -r ~/repo   # queue an agent
     python -m cabildo.cli fleet                 # spawn ledger: who begat whom
     python -m cabildo.cli mem                   # RAM, attributed to the agents holding it
+    python -m cabildo.cli load                  # CPU, heat and power, attributed to agents
     python -m cabildo.cli conditions            # what the fleet is being told right now
     python -m cabildo.cli alert "CI is down"    # nudge every session on this machine
     python -m cabildo.cli cost -d 7 --rate 3    # what running cabildo cost you
@@ -833,6 +834,104 @@ def cmd_mem(args) -> int:
         )
     elif args.loose:
         print(f"{C.DIM}nothing left behind{C.OFF}")
+    return 0
+
+
+def cmd_load(args) -> int:
+    """CPU, heat and power of this machine, with CPU time attributed to agents.
+
+    A short powertop for the fleet: one screen of numbers, then who uses the CPU.
+    Every panel is optional. A panel is skipped when this machine has no source for it.
+    """
+    from . import machine, monitor, procs
+
+    conn = store.connect()
+    live = store.active_sessions(conn)
+    pid_to_session = {r["claude_pid"]: r["session_id"] for r in live if r["claude_pid"]}
+
+    sampler = machine.Sampler()
+    sampler.sample()
+    time.sleep(args.window)
+    s = sampler.sample()
+    c = s.cpu
+    th = monitor.Thresholds()
+
+    level = monitor.cpu_level(c, th)
+    col = _LEVEL_COLOR.get(level or "", C.GREEN)
+    busy = f"{s.busy_pct:.0f}% busy" if s.busy_pct is not None else "busy: n/a"
+    stall = (
+        f"stalled {c.stall_pct:.1f}% of the last minute"
+        if c.stall_pct is not None
+        else f"{C.DIM}no CPU PSI{C.OFF}"
+    )
+    print(
+        f"{col}{C.BOLD}CPU {busy}{C.OFF} · load {c.load1:.1f} / {c.load5:.1f} / {c.load15:.1f} "
+        f"on {c.cores} cores · {stall}" + (f" → {col}{level}{C.OFF}" if level else "")
+    )
+    hw = []
+    if c.freq_mhz:
+        max_part = f" of {c.max_mhz / 1000:.1f}" if c.max_mhz else ""
+        hw.append(f"{c.freq_mhz / 1000:.1f}{max_part} GHz")
+    if c.governor:
+        hw.append(c.governor)
+    if c.temp_c is not None:
+        hw.append(f"{c.temp_c:.0f}°C")
+    if s.throttle_events:
+        hw.append(f"{C.RED}{s.throttle_events} throttle event(s){C.OFF}")
+    if hw:
+        print(f"  {' · '.join(hw)}")
+
+    m = procs.memory()
+    if m.ok:
+        print(
+            f"RAM {m.avail_pct:.0f}% available ({m.available_kb / 1048576:.1f}G of "
+            f"{m.total_kb / 1048576:.1f}G)"
+        )
+
+    power = []
+    if s.battery:
+        b = s.battery
+        part = f"battery {b.pct:.0f}% {b.status.lower()}"
+        if b.watts:
+            part += f" at {b.watts:.1f} W"
+        if b.hours_left is not None:
+            part += f", about {int(b.hours_left)}h {int((b.hours_left % 1) * 60):02d}m left"
+        power.append(part)
+    if s.package_watts is not None:
+        power.append(f"CPU package {s.package_watts:.1f} W")
+    if power:
+        print("power: " + " · ".join(power))
+    else:
+        print(
+            f"{C.DIM}power: no readable source (no battery, and RAPL is root-only or absent){C.OFF}"
+        )
+
+    if not s.hogs:
+        print(f"\n{C.DIM}no process above {machine.HOG_MIN_PCT:.0f}% of a core{C.OFF}")
+        return 0
+    procs.attribute(list(s.hogs), pid_to_session=pid_to_session)
+    by_session: dict[str, list] = {}
+    for p in s.hogs:
+        if p.session_id:
+            by_session.setdefault(p.session_id, []).append(p)
+    if by_session:
+        ranked = sorted(by_session.items(), key=lambda kv: -sum(p.cpu_pct for p in kv[1]))
+        print(f"\n{C.BOLD}by agent{C.OFF} {C.DIM}(cores in use over {args.window:g}s){C.OFF}")
+        for sid, plist in ranked[: args.top]:
+            name = store.display_name(store.get_session(conn, sid), sid)
+            cores = sum(p.cpu_pct for p in plist) / 100.0
+            print(
+                f"  {_sender_color(name)}{name:<{_W}}{C.OFF} {cores:5.1f} cores  "
+                f"{len(plist)} proc(s)"
+            )
+    print(f"\n{C.BOLD}busiest processes{C.OFF}")
+    for p in s.hogs[: args.top]:
+        who = (
+            store.display_name(store.get_session(conn, p.session_id), p.session_id)
+            if p.session_id
+            else (f"claude {p.claude_pid}" if p.claude_pid else "—")
+        )
+        print(f"  {p.cpu_pct:>5.0f}%  {who:<{_W}} {C.DIM}{p.label(64)}{C.OFF}")
     return 0
 
 
@@ -2418,6 +2517,11 @@ def main(argv: list[str] | None = None) -> int:
     mm.add_argument("--min-mb", type=int, default=100, help="ignore processes below this")
     mm.add_argument("--top", type=int, default=12, help="how many processes to list")
     mm.set_defaults(fn=cmd_mem)
+
+    ld = sub.add_parser("load", help="this machine's CPU, heat and power, attributed to agents")
+    ld.add_argument("--window", type=float, default=1.5, help="seconds to measure over")
+    ld.add_argument("--top", type=int, default=12, help="how many processes to list")
+    ld.set_defaults(fn=cmd_load)
 
     bw = sub.add_parser("browser", help="the browser agents use: status, reap, doctor")
     bw_sub = bw.add_subparsers(dest="browser_cmd", required=True)

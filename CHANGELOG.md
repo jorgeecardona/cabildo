@@ -4,6 +4,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- `cabildo load` shows CPU, heat and power of this machine, and which agent uses the CPU. The
+  daemon raises three new conditions, injected into Claude Code sessions once per episode:
+  `cpu` (tasks waiting for a core), `power` (on battery, 30% or less) and `thermal` (the CPU
+  throttles for heat). Each source is optional; `cabildo doctor` says which ones this machine
+  has. Information only: nothing is blocked or killed.
 - The agent browser passes Hetzner's bot check: it no longer reports `navigator.webdriver`, and
   it shows the real screen size instead of a 1280x720 viewport.
 - `/loop` and `CronCreate` jobs are stored in cabildo by the cabildo-push mod (0.3.0). Every agent

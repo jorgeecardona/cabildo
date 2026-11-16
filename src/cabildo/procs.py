@@ -239,6 +239,7 @@ class Proc:
     session_id: str | None = None  # owning agent, once attributed
     claude_pid: int = 0
     via: str = ""  # 'path' | 'ancestry' — how we attributed it
+    cpu_pct: float = 0.0  # share of one core since the last sample; 0 when not measured
 
     @property
     def rss_mb(self) -> int:

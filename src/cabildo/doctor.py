@@ -479,6 +479,32 @@ def check_platform() -> list[Check]:
     return checks
 
 
+def check_power() -> Check | None:
+    """Which power sources `cabildo load` and the power condition can read.
+
+    None off Linux, where neither exists. WARN, not FAIL: a desktop has no battery, and
+    RAPL energy counters are root-only on many kernels.
+    """
+    if sys.platform != "linux":
+        return None
+    from . import machine
+
+    found = []
+    if machine.battery() is not None:
+        found.append("battery")
+    if machine.rapl_energy_uj() is not None:
+        found.append("RAPL")
+    if found:
+        return Check("platform.power", OK, f"power readable from: {', '.join(found)}")
+    return Check(
+        "platform.power",
+        WARN,
+        "no readable power source: `cabildo load` shows no watts and the power condition "
+        "never fires",
+        "no battery here, and RAPL (/sys/class/powercap) is absent or root-only",
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Aggregate
 # --------------------------------------------------------------------------- #
@@ -496,6 +522,9 @@ def run(cwd: str | os.PathLike | None = None) -> list[Check]:
     checks.append(check_installs())
     checks.extend(check_lan())
     checks.extend(check_platform())
+    power = check_power()
+    if power is not None:
+        checks.append(power)
     return checks
 
 

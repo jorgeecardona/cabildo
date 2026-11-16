@@ -172,7 +172,13 @@ def condition_text(conn: sqlite3.Connection, session_id: str, *, mark: bool = Tr
             f"{c['key']} [{c['level']}]: {c['headline']}"
         )
         mine = (c["data"].get("by_session") or {}).get(session_id)
-        if mine:
+        if mine and "cpu_pct" in mine:
+            what = ", ".join(f"{p['what']} ({p['cpu_pct']}%)" for p in mine.get("procs", []))
+            lines.append(
+                f"   YOU are using {mine['cpu_pct'] / 100:.1f} CPU cores in "
+                f"{mine['count']} process(es){': ' + what if what else ''}"
+            )
+        elif mine:
             what = ", ".join(f"{p['what']} ({p['rss_mb']}M)" for p in mine.get("procs", []))
             lines.append(
                 f"   YOU are holding {mine['rss_mb'] / 1024:.1f}G in "
