@@ -11,6 +11,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   Tools: read, edit, bash, grep. The agent joins the bus as client `local` and takes a
   `file:<path>` claim before each edit, so it cannot overwrite a file another agent holds.
   Claims are released when you leave.
+  The agent reads the nearest `AGENTS.md` (from the working folder up to the project root,
+  cut at 8000 characters) into its system prompt.
   With `--escalate [MODEL]` the agent also gets an `escalate` tool that asks a Claude model
   (default `claude-fable-5-2`) a hard question. It is billed to `ANTHROPIC_API_KEY` and capped
   by `--max-escalations` (default 3).

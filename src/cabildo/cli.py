@@ -851,7 +851,8 @@ def cmd_code(args) -> int:
 
     from .agent.claims import BusClaims
     from .agent.client import chat_stream
-    from .agent.loop import run
+    from .agent.instructions import with_instructions
+    from .agent.loop import SYSTEM, run
     from .agent.tools import TOOLS
     from .agent.types import Context, Endpoint, Message, ToolCall
 
@@ -871,6 +872,7 @@ def cmd_code(args) -> int:
         )
     cwd = Path.cwd()
     claims = BusClaims(cwd, session_id=f"local-{uuid.uuid4().hex[:8]}")
+    system, agents_md = with_instructions(SYSTEM, cwd, Path(claims.root))
     endpoint = Endpoint(base_url=args.base_url, model=args.model)
     ctx = Context(cwd=cwd, claims=claims)
 
@@ -891,6 +893,7 @@ def cmd_code(args) -> int:
                 tools=tools,
                 ctx=ctx,
                 history=history,
+                system=system,
                 on_tool=show_tool,
                 ask=partial(chat_stream, on_text=write),
             )
@@ -911,6 +914,7 @@ def cmd_code(args) -> int:
             import readline  # noqa: F401  (importing it gives input() line editing and history)
         print(
             f"{C.BOLD}cabildo code{C.OFF} {C.DIM}{endpoint.model} @ {endpoint.base_url} · {cwd}\n"
+            f"{agents_md.name + ' loaded · ' if agents_md else ''}"
             f"/clear forgets the conversation · /exit or Ctrl-D leaves{C.OFF}"
         )
         history: tuple[Message, ...] = ()
