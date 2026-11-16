@@ -32,7 +32,6 @@ from playwright.async_api import (
     Locator,
     Page,
     Playwright,
-    ViewportSize,
     async_playwright,
 )
 from playwright.async_api import Error as PlaywrightError
@@ -41,7 +40,12 @@ from cabildo import desktop
 from cabildo.browser.login import write_state
 
 _REF = re.compile(r"^(f\d+)?e\d+$")
-_VIEWPORT: ViewportSize = {"width": 1280, "height": 720}
+# Sites with a bot check (Hetzner's Heray) refuse a browser that reports
+# ``navigator.webdriver`` or a screen the size of the viewport. The window keeps its real size
+# and the real screen; only the automation marks go.
+_WINDOW = "--window-size=1280,800"
+_LAUNCH_ARGS = ("--disable-blink-features=AutomationControlled", _WINDOW)
+_NOT_DEFAULT_ARGS = ("--enable-automation",)
 _KEEP = 500
 _WAIT_MS = 30_000
 _LEVEL = {"error": "error", "warning": "warning", "debug": "debug"}
@@ -77,10 +81,15 @@ class Session:
         async with self._start:
             if self._context is None:
                 self._pw = await async_playwright().start()
-                self._browser = await self._pw.chromium.launch(channel=self.channel, headless=False)
+                self._browser = await self._pw.chromium.launch(
+                    channel=self.channel,
+                    headless=False,
+                    args=list(_LAUNCH_ARGS),
+                    ignore_default_args=list(_NOT_DEFAULT_ARGS),
+                )
                 state = self.storage_state
                 self._context = await self._browser.new_context(
-                    viewport=_VIEWPORT,
+                    no_viewport=True,
                     storage_state=str(state) if state and state.is_file() else None,
                 )
                 self._context.on("page", self._watch)

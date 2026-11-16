@@ -4,6 +4,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- The agent browser passes Hetzner's bot check: it no longer reports `navigator.webdriver`, and
+  it shows the real screen size instead of a 1280x720 viewport.
 - `/loop` and `CronCreate` jobs are stored in cabildo by the cabildo-push mod (0.3.0). Every agent
   sees them with `cabildo cron list --all`, and they do not expire after 7 days. When cabildo
   fails, Claude Code schedules the job as before. Docs: the Crons page.
