@@ -41,6 +41,7 @@ today; the rest are read generically and wired one call site at a time):
     [record]  messages = true                # config.record_messages (daemon ingest)
     [roles]   <name> = "responsibilities"    # config.roles (agent-card roster)
     [project.<name>.remote]  peers, token, bind, interval   # wan.py, global file only
+    [browser.login.<site>]   origin, username, password, otp   # browser/credentials.py, global only
 """
 
 from __future__ import annotations
@@ -485,3 +486,17 @@ def remote_tables() -> dict[str, dict[str, Any]]:
         for name, section in projects.items()
         if isinstance(section, dict) and isinstance(section.get("remote"), dict)
     }
+
+
+# --------------------------------------------------------------------------- #
+# [browser.login.<site>] -- 1Password references for browser_login
+# --------------------------------------------------------------------------- #
+def browser_login_tables() -> dict[str, Any]:
+    """``[browser.login.<site>]`` of the machine-wide config, by site name.
+
+    Only the global file is read. A repo's committed config could otherwise point a site at an
+    origin it controls.
+    """
+    browser = _read(_global_path()).get("browser")
+    login = browser.get("login") if isinstance(browser, dict) else None
+    return dict(login) if isinstance(login, dict) else {}
