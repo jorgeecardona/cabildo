@@ -16,8 +16,9 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import sys
 from collections import deque
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,7 +37,8 @@ from playwright.async_api import (
 )
 from playwright.async_api import Error as PlaywrightError
 
-from cabildo import desktop
+from cabildo import config, desktop, onepassword
+from cabildo.browser import credentials
 from cabildo.browser.login import write_state
 
 _REF = re.compile(r"^(f\d+)?e\d+$")
@@ -53,6 +55,10 @@ _RANK = {"error": 0, "warning": 1, "info": 2, "debug": 3}
 _CHALLENGE_TITLES = ("just a moment", "attention required! | cloudflare", "verifying you are human")
 _CHALLENGE_HOST = "challenges.cloudflare.com"
 _CF_COOKIES = ("cf_clearance", "__cf_bm")
+_CONCEALED = "<concealed>"
+_TEXT_FIELDS = ("INPUT", "TEXTAREA")
+# The document origin and kind of the element a login value would go into.
+_FIELD_INFO = "el => [el.ownerDocument.location.origin, el.tagName, el.type || '']"
 
 Modifier = Literal["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]
 
@@ -75,6 +81,10 @@ class Session:
     _context: BrowserContext | None = None
     _state_mtime: float = 0.0  # mtime of the storage-state file the context last loaded
     handoff_seconds: float = 120.0  # how long a Cloudflare check waits for the human
+    logins: Mapping[str, credentials.Credential] = field(default_factory=dict)
+    read_secret: Callable[[str], onepassword.Secret] = onepassword.read
+    # Secrets filled by browser_login that are still in the page. Cleared on navigation.
+    concealed: set[str] = field(default_factory=set)
 
     async def context(self) -> BrowserContext:
         """The browser context, started on first use. Parallel first calls start one browser."""
@@ -97,6 +107,12 @@ class Session:
             else:
                 await self._reload_logins(self._context)
             return self._context
+
+    def redact(self, text: str) -> str:
+        """``text`` with every concealed secret replaced, longest first."""
+        for value in sorted(self.concealed, key=len, reverse=True):
+            text = text.replace(value, _CONCEALED)
+        return text
 
     def _mtime(self) -> float:
         state = self.storage_state
@@ -151,6 +167,12 @@ class Session:
         )
         page.on("dialog", self._on_dialog)
         page.on("filechooser", self._on_chooser)
+        page.on("framenavigated", self._on_navigated)
+
+    def _on_navigated(self, frame: Any) -> None:
+        # The form was sent or the page left: the secret is no longer in this document.
+        if frame.parent_frame is None:
+            self.concealed.clear()
 
     def _on_dialog(self, dialog: Dialog) -> None:
         self.dialog = dialog
@@ -167,6 +189,7 @@ class Session:
         self._pw = self._browser = self._context = None
         self.current = 0
         self.dialog = self.chooser = None
+        self.concealed.clear()
         with suppress(PlaywrightError):
             if browser is not None:
                 await browser.close()
@@ -277,7 +300,7 @@ async def state(session: Session) -> str:
     if await _on_challenge(page):
         note = f"### Note\n{await handoff(session, page)}\n"
     snapshot = await page.aria_snapshot(mode="ai")
-    return (
+    return session.redact(
         f"{note}### Page\n- URL: {page.url}\n- Title: {await page.title()}\n"
         f"### Snapshot\n```yaml\n{snapshot}\n```"
     )
@@ -381,6 +404,22 @@ def build(session: Session) -> FastMCP:
         return await state(session)
 
     @mcp.tool()
+    async def browser_login(
+        site: str,
+        username_target: str,
+        password_target: str,
+        otp_target: str | None = None,
+        submit: bool = False,
+    ) -> str:
+        """Fill a login form from 1Password. The secret never comes back to you.
+
+        ``site`` is a name from the human's ``[browser.login.<site>]`` config. The fields are
+        snapshot refs. The page must be on the site's origin, or nothing is read or filled.
+        Set ``submit`` to press Enter in the last field.
+        """
+        return await login(session, site, username_target, password_target, otp_target, submit)
+
+    @mcp.tool()
     async def browser_press_key(key: str) -> str:
         """Press a key such as ``ArrowLeft`` or ``Enter``."""
         page = await session.page()
@@ -429,6 +468,11 @@ def build(session: Session) -> FastMCP:
         filename: str | None = None,
     ) -> str:
         """Evaluate a JavaScript function on the page, or on an element when ``target`` is set."""
+        if session.concealed:
+            return (
+                "refused: a login secret is in the page. Submit the form or navigate first: "
+                "script could read it."
+            )
         page = await session.page()
         if target:
             result: Any = await locate(page, target).evaluate(function)
@@ -489,18 +533,24 @@ def build(session: Session) -> FastMCP:
         level: Literal["error", "warning", "info", "debug"] = "info",
     ) -> str:
         """Console messages since the browser started, at ``level`` or more severe."""
-        return "\n".join(
-            f"[{lvl.upper()}] {text}" for lvl, text in session.console if _RANK[lvl] <= _RANK[level]
+        return session.redact(
+            "\n".join(
+                f"[{lvl.upper()}] {text}"
+                for lvl, text in session.console
+                if _RANK[lvl] <= _RANK[level]
+            )
         )
 
     @mcp.tool()
     async def browser_network_requests(static: bool = False) -> str:
         """Responses seen since the browser started. Static files are left out by default."""
         skip = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".css", ".js", ".woff", ".woff2", ".ico")
-        return "\n".join(
-            r
-            for r in session.requests
-            if static or not r.split(" ")[1].split("?")[0].endswith(skip)
+        return session.redact(
+            "\n".join(
+                r
+                for r in session.requests
+                if static or not r.split(" ")[1].split("?")[0].endswith(skip)
+            )
         )
 
     @mcp.tool()
@@ -542,6 +592,73 @@ def build(session: Session) -> FastMCP:
     return mcp
 
 
+async def _check_field(
+    cred: credentials.Credential, loc: Locator, *, password: bool, otp: bool = False
+) -> None:
+    """Raise unless ``loc`` is a text field of the right kind in a document on the origin."""
+    origin, tag, kind = await loc.evaluate(_FIELD_INFO)
+    credentials.check_origin(cred, origin)
+    if tag not in _TEXT_FIELDS:
+        msg = "the target is not a text field"
+        raise credentials.CredentialError(msg)
+    if password and kind != "password":
+        msg = "the password target is not a password field"
+        raise credentials.CredentialError(msg)
+    if not (password or otp) and kind == "password":
+        msg = "the username target is a password field"
+        raise credentials.CredentialError(msg)
+
+
+async def login(
+    session: Session,
+    site: str,
+    username_target: str,
+    password_target: str,
+    otp_target: str | None,
+    submit: bool,
+) -> str:
+    """Fill the login form for ``site``. Returns the page state, or ``refused: ...``.
+
+    The origin of the page and of each field is checked before ``op`` is called, and again just
+    before each fill. The password and the code are concealed from every tool result until the
+    page navigates.
+    """
+    cred = session.logins.get(site)
+    if cred is None:
+        known = ", ".join(sorted(session.logins)) or "none"
+        return f"refused: no login for {site!r}. Configured sites: {known}"
+    if otp_target and not cred.otp:
+        return f"refused: {site} has no otp reference"
+    page = await session.page()
+    # (target, reference, is_password, is_otp), in the order the fields are filled
+    plan = [
+        (username_target, cred.username, False, False),
+        (password_target, cred.password, True, False),
+    ]
+    if otp_target and cred.otp:
+        plan.append((otp_target, cred.otp, False, True))
+    try:
+        credentials.check_origin(cred, page.url)
+        for target, _ref, is_password, is_otp in plan:
+            await _check_field(cred, locate(page, target), password=is_password, otp=is_otp)
+        # op can wait on a human (unlock, biometrics), so the page may have moved by now.
+        values = [await asyncio.to_thread(session.read_secret, ref) for _t, ref, _p, _o in plan]
+        for (target, _ref, is_password, is_otp), secret in zip(plan, values, strict=True):
+            loc = locate(page, target)
+            credentials.check_origin(cred, page.url)
+            await _check_field(cred, loc, password=is_password, otp=is_otp)
+            if is_password or is_otp:
+                session.concealed.add(secret.reveal())
+            await loc.fill(secret.reveal())
+    except credentials.CredentialError as exc:
+        return f"refused: {exc}"
+    except onepassword.OpError as exc:
+        return f"refused: could not read from 1Password: {exc}"
+    if submit:
+        await locate(page, plan[-1][0]).press("Enter")
+    return f"filled {site} from 1Password\n{await state(session)}"
+
+
 def _save_text(session: Session, filename: str, text: str) -> str:
     """Write ``text`` under the output directory and say where."""
     return _save_bytes(session, filename, text.encode())
@@ -559,6 +676,14 @@ def _save_bytes(session: Session, filename: str, data: bytes) -> str:
 
 
 def serve(session: Session) -> int:
-    """Run the server on stdio until the client closes it."""
+    """Run the server on stdio until the client closes it.
+
+    The login table is read from the machine-wide config unless the session already has one.
+    """
+    if not session.logins:
+        table = credentials.load(config.browser_login_tables())
+        session.logins = table.by_site
+        for problem in table.problems:
+            print(f"cabildo-browser: skipped login {problem}", file=sys.stderr)
     build(session).run()
     return 0
