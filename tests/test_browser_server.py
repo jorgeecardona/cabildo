@@ -403,3 +403,102 @@ def test_a_newer_login_file_reaches_a_running_browser_once(tmp_path: Path) -> No
     asyncio.run(session._reload_logins(context))  # type: ignore[arg-type]
     asyncio.run(session._reload_logins(context))  # type: ignore[arg-type]
     assert context.added == [[{"name": "SID", "value": "1"}]]
+
+
+class StateContext:
+    """A context whose storage_state is a fixed dict."""
+
+    def __init__(self, state: dict[str, Any]) -> None:
+        self.state = state
+
+    async def storage_state(self) -> dict[str, Any]:
+        return self.state
+
+
+def _cookie(name: str, domain: str, value: str = "v", path: str = "/") -> dict[str, Any]:
+    return {"name": name, "value": value, "domain": domain, "path": path}
+
+
+def test_normalize_domains_reduces_urls_to_hosts() -> None:
+    got = server.normalize_domains(
+        ["https://Www.Splitwise.com/x", ".stripe.com", "stripe.com", " "]
+    )
+    assert got == ["www.splitwise.com", "stripe.com"]
+
+
+def test_merge_logins_replaces_only_the_named_domains_and_keeps_the_rest() -> None:
+    saved = {
+        "cookies": [_cookie("SID", ".other.com"), _cookie("s", ".splitwise.com", "old")],
+        "origins": [{"origin": "https://other.com", "localStorage": []}],
+    }
+    fresh = {
+        "cookies": [_cookie("s", ".splitwise.com", "new"), _cookie("x", ".evil.com")],
+        "origins": [{"origin": "https://secure.splitwise.com", "localStorage": []}],
+    }
+    merged = server.merge_logins(saved, fresh, ["splitwise.com"])
+    values = {(c["name"], c["domain"]): c["value"] for c in merged["cookies"]}
+    assert values == {("SID", ".other.com"): "v", ("s", ".splitwise.com"): "new"}
+    assert [o["origin"] for o in merged["origins"]] == [
+        "https://other.com",
+        "https://secure.splitwise.com",
+    ]
+
+
+def test_notsplit_domain_is_not_a_match() -> None:
+    # notsplitwise.com must not match splitwise.com
+    merged = server.merge_logins(
+        {}, {"cookies": [_cookie("a", "notsplitwise.com")]}, ["splitwise.com"]
+    )
+    assert merged["cookies"] == []
+
+
+def test_save_logins_writes_a_private_merged_file(tmp_path: Path) -> None:
+    import json
+    import stat
+
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"cookies": [_cookie("keep", ".other.com")]}))
+    session = Session(storage_state=state, output_dir=tmp_path / "out")
+    session._context = StateContext({"cookies": [_cookie("sess", ".splitwise.com")], "origins": []})  # type: ignore[assignment]
+    msg = asyncio.run(server.save_logins(session, ["splitwise.com"]))
+    assert "Saved 1 cookie(s) for splitwise.com" in msg
+    saved = json.loads(state.read_text())
+    assert {c["name"] for c in saved["cookies"]} == {"keep", "sess"}
+    assert stat.S_IMODE(state.stat().st_mode) == 0o600
+
+
+def test_save_logins_with_no_matching_cookie_saves_nothing(tmp_path: Path) -> None:
+    state = tmp_path / "state.json"
+    session = Session(storage_state=state, output_dir=tmp_path / "out")
+    session._context = StateContext({"cookies": [_cookie("a", ".other.com")]})  # type: ignore[assignment]
+    assert "nothing saved" in asyncio.run(server.save_logins(session, ["splitwise.com"]))
+    assert not state.exists()
+
+
+def test_login_notice_says_a_stale_or_missing_file_once(tmp_path: Path) -> None:
+    import json
+    import os
+    import time
+
+    state = tmp_path / "state.json"
+    session = Session(storage_state=state, output_dir=tmp_path / "out")
+    first = session.login_notice()
+    assert first is not None
+    assert "no saved login file" in first
+    assert "cabildo browser login" in first
+    assert session.login_notice() is None  # once
+
+    state.write_text(json.dumps({"cookies": [_cookie("a", ".x.com")]}))
+    old = time.time() - 40 * 86400
+    os.utime(state, (old, old))
+    stale = Session(storage_state=state, output_dir=tmp_path / "out").login_notice()
+    assert stale is not None
+    assert "40 days old" in stale
+
+    os.utime(state, None)
+    assert Session(storage_state=state, output_dir=tmp_path / "out").login_notice() is None
+
+
+def test_browser_save_logins_is_a_tool(tmp_path: Path) -> None:
+    _, mcp = make(tmp_path)
+    assert "browser_save_logins" in {t.name for t in run(mcp.list_tools())}

@@ -14,12 +14,13 @@ There is no headless mode. The browser always runs with a visible window.
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import re
 import sys
 from collections import deque
-from collections.abc import AsyncGenerator, Callable, Mapping
-from contextlib import asynccontextmanager, suppress
+from collections.abc import AsyncGenerator, Callable, Iterator, Mapping, Sequence
+from contextlib import asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -39,6 +40,7 @@ from playwright.async_api import Error as PlaywrightError
 
 from cabildo import config, desktop, onepassword
 from cabildo.browser import credentials
+from cabildo.browser.entry import STALE_DAYS, read_storage_state
 from cabildo.browser.login import write_state
 
 _REF = re.compile(r"^(f\d+)?e\d+$")
@@ -85,6 +87,27 @@ class Session:
     read_secret: Callable[[str], onepassword.Secret] = onepassword.read
     # Secrets filled by browser_login that are still in the page. Cleared on navigation.
     concealed: set[str] = field(default_factory=set)
+    _login_notice_given: bool = False
+
+    def login_notice(self) -> str | None:
+        """A line when the saved logins are missing, empty or old. Said once per server (#49)."""
+        if self._login_notice_given or self.storage_state is None:
+            return None
+        self._login_notice_given = True
+        saved = read_storage_state(self.storage_state)
+        if not saved.exists:
+            problem = "there is no saved login file"
+        elif saved.empty:
+            problem = "the saved login file holds no login"
+        elif saved.stale:
+            problem = f"the saved logins are {saved.age_days:.0f} days old (over {STALE_DAYS})"
+        else:
+            return None
+        return (
+            f"{problem}, so sites that need a login may fail. Ask the human to run "
+            "`cabildo browser login`. A login the human makes in this browser can be kept with "
+            "browser_save_logins."
+        )
 
     async def context(self) -> BrowserContext:
         """The browser context, started on first use. Parallel first calls start one browser."""
@@ -222,6 +245,88 @@ def merge_cf_cookies(state: dict[str, Any], cookies: list[dict[str, Any]]) -> di
     return {**state, "cookies": kept + fresh, "origins": state.get("origins", [])}
 
 
+def _host_matches(host: str, domains: Sequence[str]) -> bool:
+    """True when ``host`` is one of ``domains`` or a subdomain of one."""
+    host = host.lstrip(".").lower()
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
+def normalize_domains(domains: Sequence[str]) -> list[str]:
+    """``https://www.Example.com/x`` and ``.example.com`` both become a bare lowercase host."""
+    out: list[str] = []
+    for raw in domains:
+        host = raw.strip().lower().split("://")[-1].split("/")[0].split(":")[0].lstrip(".")
+        if host and host not in out:
+            out.append(host)
+    return out
+
+
+def merge_logins(
+    saved: dict[str, Any], fresh: dict[str, Any], domains: Sequence[str]
+) -> dict[str, Any]:
+    """``saved`` with the cookies and origins of ``domains`` taken from ``fresh``.
+
+    A cookie is replaced by the one with the same name, domain and path; every other saved entry
+    is kept, so one browser's save never removes the logins another one made (#49).
+    """
+    cookies = [
+        c for c in fresh.get("cookies", []) if _host_matches(str(c.get("domain", "")), domains)
+    ]
+    keys = {(c["name"], c.get("domain"), c.get("path")) for c in cookies}
+    kept = [
+        c
+        for c in saved.get("cookies", [])
+        if (c.get("name"), c.get("domain"), c.get("path")) not in keys
+    ]
+    origins = [
+        o
+        for o in fresh.get("origins", [])
+        if _host_matches(str(o.get("origin", "")).split("://")[-1].split(":")[0], domains)
+    ]
+    seen = {o.get("origin") for o in origins}
+    kept_origins = [o for o in saved.get("origins", []) if o.get("origin") not in seen]
+    return {**saved, "cookies": kept + cookies, "origins": kept_origins + origins}
+
+
+@contextmanager
+def _locked(path: Path) -> Iterator[None]:
+    """An exclusive lock beside ``path``: several browsers run at once, each may save."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_name(path.name + ".lock").open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+async def save_logins(session: Session, domains: Sequence[str]) -> str:
+    """Merge this browser's logins for ``domains`` into the saved login file."""
+    path = session.storage_state
+    hosts = normalize_domains(domains)
+    if not hosts:
+        return "Name at least one domain, for example `splitwise.com`."
+    if path is None:
+        return "No storage-state file is set for this server: nothing to save to."
+    if session._context is None:
+        return "This browser has not been used yet: there is no login to save."
+    fresh = dict(await session._context.storage_state())
+    with _locked(path):
+        try:
+            current = json.loads(path.read_text()) if path.is_file() else {}
+        except (OSError, ValueError):
+            current = {}
+        merged = merge_logins(current, fresh, hosts)
+        added = sum(
+            1 for c in fresh.get("cookies", []) if _host_matches(str(c.get("domain", "")), hosts)
+        )
+        if added == 0:
+            return f"No cookie for {', '.join(hosts)} in this browser: nothing saved."
+        write_state(path, merged)
+    session._state_mtime = session._mtime()
+    return f"Saved {added} cookie(s) for {', '.join(hosts)} to {path}."
+
+
 async def _on_challenge(page: Page) -> bool:
     title = await page.title()
     return is_challenge(title, [f.url for f in page.frames])
@@ -296,9 +401,12 @@ async def state(session: Session) -> str:
     if session.dialog is not None:
         return dialog_message(session.dialog)
     page = await session.page()
-    note = ""
+    notes = []
     if await _on_challenge(page):
-        note = f"### Note\n{await handoff(session, page)}\n"
+        notes.append(await handoff(session, page))
+    if notice := session.login_notice():
+        notes.append(notice)
+    note = "".join(f"### Note\n{n}\n" for n in notes)
     snapshot = await page.aria_snapshot(mode="ai")
     return session.redact(
         f"{note}### Page\n- URL: {page.url}\n- Title: {await page.title()}\n"
@@ -324,6 +432,16 @@ def build(session: Session) -> FastMCP:
         page = await session.page()
         await page.goto(url)
         return await state(session)
+
+    @mcp.tool()
+    async def browser_save_logins(domains: list[str]) -> str:
+        """Keep this browser's logins for the named sites in the saved login file.
+
+        Use it after the human has logged in here, two-step verification included, so later
+        browsers start logged in. Name each site by its domain, for example `splitwise.com`.
+        Only cookies of those domains and their subdomains are saved; nothing else is touched.
+        """
+        return await save_logins(session, domains)
 
     @mcp.tool()
     async def browser_navigate_back() -> str:

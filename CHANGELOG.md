@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- The browser server now says, in its first page result, when the saved login file is missing,
+  empty or older than 30 days, and names the fix (`cabildo browser login`). New tool
+  `browser_save_logins(domains)` merges the logins an agent browser holds for those domains into
+  the file. `cabildo browser login --storage-state PATH` chooses where to save (#49).
 - `join_topic` on a `shared` channel now says how many paired machines are reachable. When none
   is, it says so and points at `request(action="pair")` (#48). The `peers` tool lists the
   paired machines and their last sync.

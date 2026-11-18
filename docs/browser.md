@@ -30,6 +30,16 @@ sign-in works. Log into your sites, then close the window. A second window then 
 by itself: it reads the cookies. They go to the storage-state file with mode 600, and new agent
 browsers start from it. Running agent browsers add the new cookies on their next tool call.
 
+The file is `--storage-state` of the `cabildo-browser` entry, or
+`~/.claude/mcp-servers/playwright/storage-state.json` when there is none. To save somewhere else,
+pass `--storage-state PATH` to `cabildo browser login`.
+
+A login that an agent browser makes can be kept too. After you log in in that window (two-step
+verification included), the agent calls `browser_save_logins(["splitwise.com"])`. Only cookies of
+the named domains are merged into the file, under a lock, so browsers that run at the same time
+do not overwrite each other. The first page result of a server also says when the file is missing,
+empty or older than 30 days.
+
 ```bash
 cabildo browser doctor
 ```
@@ -59,7 +69,8 @@ It offers these tools: `browser_navigate`, `browser_navigate_back`, `browser_sna
 `browser_click`, `browser_type`, `browser_fill_form`, `browser_press_key`, `browser_hover`,
 `browser_select_option`, `browser_take_screenshot`, `browser_evaluate`, `browser_wait_for`,
 `browser_tabs`, `browser_console_messages`, `browser_network_requests`, `browser_handle_dialog`,
-`browser_file_upload`, `browser_resize`, `browser_login` and `browser_close`. Parameter names are snake_case, for
+`browser_file_upload`, `browser_resize`, `browser_login`, `browser_save_logins` and
+`browser_close`. Parameter names are snake_case, for
 example `double_click` and `full_page`.
 
 Not available yet: `browser_drag`, `browser_drop`, `browser_find`, `browser_network_request` and

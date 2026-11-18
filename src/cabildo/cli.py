@@ -1242,7 +1242,7 @@ def cmd_browser(args) -> int:
     except ValueError as exc:
         print(f"cabildo browser: {exc}", file=sys.stderr)
         return 1
-    saved = entry.flags.storage_state if entry else None
+    saved = getattr(args, "storage_state", None) or (entry.flags.storage_state if entry else None)
     state = browser_entry.read_storage_state(
         Path(saved).expanduser() if saved else browser_entry.DEFAULT_STATE
     )
@@ -2654,6 +2654,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     bw_login.add_argument(
         "--channel", default="chrome", help="Chrome channel to open (default: chrome)"
+    )
+    bw_login.add_argument(
+        "--storage-state",
+        help="where to save the logins (default: the --storage-state of the cabildo-browser "
+        "entry, else ~/.claude/mcp-servers/playwright/storage-state.json)",
     )
     bw_serve = bw_sub.add_parser("serve", help="run the browser MCP server (stdio)")
     bw_serve.add_argument("--channel", default="chrome", help="Chrome channel (default: chrome)")
