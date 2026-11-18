@@ -4,6 +4,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- The shared-checkout guard no longer denies `reset`, `rebase`, `merge`, `pull`, `cherry-pick`,
+  `revert` and `am` just because another session is present. It denies them only when a tracked
+  file has uncommitted changes (#55).
+- A session that left a checkout stops blocking it: the tool hooks refresh the stored folder
+  (#54).
 - `browser_login` fills a login form from 1Password. List sites in `[browser.login.<site>]` in
   `~/.cabildo/config.toml`. The agent never sees the password, and the page must be on the
   site's origin. Each field target is optional, so a login that spans two pages (password, then

@@ -477,6 +477,43 @@ def _sharers(conn: sqlite3.Connection, me: Actor) -> list[sqlite3.Row]:
     ]
 
 
+# Ops that move the branch tip but leave other agents' *files* alone while no tracked file
+# has uncommitted changes. checkout/switch/``branch -f`` are not here: they change which
+# branch a peer's next commit lands on, clean tree or not (2026-08-03).
+_TIP_MOVERS = frozenset({"reset", "rebase", "merge", "pull", "cherry-pick", "revert", "am"})
+
+
+def _tracked_tree_clean(cwd: str | None) -> bool:
+    """True only when ``git status`` ran and shows no staged or unstaged change to a
+    tracked file. Any failure counts as not clean, so the guard falls back to deny (#55).
+    """
+    if not cwd:
+        return False
+    try:
+        out = subprocess.run(
+            ["git", "-C", cwd, "status", "--porcelain", "--untracked-files=no"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.returncode == 0 and not out.stdout.strip()
+
+
+def _tip_move_is_safe(me: Actor, argv: list[str]) -> bool:
+    """A reset/rebase/merge/pull/cherry-pick/revert/am with nothing uncommitted to lose.
+
+    Presence alone is not a conflict (#55): with a clean tracked tree the move rewrites
+    commits only, and no peer has files at stake. Commit authorship cannot tell the
+    caller's commits from a peer's here, since every agent commits as the same git user,
+    so a clean tree is the one test the guard can make.
+    """
+    sub, _ = _git_subcommand(argv)
+    return sub in _TIP_MOVERS and _tracked_tree_clean(me.cwd)
+
+
 def _deny_push(conn: sqlite3.Connection, me: Actor, command: str) -> str | None:
     if not _is_push(command):
         return None
@@ -608,7 +645,14 @@ def _deny_shared_checkout(conn: sqlite3.Connection, me: Actor, command: str) -> 
 
     # trunk-off: a commit of your own explicit paths on the shared branch is the
     # intended flow; deny only the ops that reach the other agents' work.
-    bad = next((lbl for (argv, lbl) in mutators if not _own_paths_only(argv)), None)
+    bad = next(
+        (
+            lbl
+            for (argv, lbl) in mutators
+            if not _own_paths_only(argv) and not _tip_move_is_safe(me, argv)
+        ),
+        None,
+    )
     if bad is None:
         return None
     return (

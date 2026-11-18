@@ -1076,10 +1076,14 @@ def join_room_all(conn: sqlite3.Connection) -> int:
     return len(rows)
 
 
-def touch(conn: sqlite3.Connection, session_id: str) -> None:
+def touch(conn: sqlite3.Connection, session_id: str, cwd: str | None = None) -> None:
+    """Mark the session live. ``cwd``, when the hook has it, refreshes the stored folder, so
+    a session that ``cd``-ed out of a checkout stops counting as sharing it (#54).
+    """
     conn.execute(
-        "UPDATE sessions SET last_seen_at=?, status='active' WHERE session_id=?",
-        (_now(), session_id),
+        "UPDATE sessions SET last_seen_at=?, status='active', cwd=COALESCE(?,cwd) "
+        "WHERE session_id=?",
+        (_now(), cwd, session_id),
     )
     conn.commit()
 

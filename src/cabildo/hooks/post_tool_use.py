@@ -52,7 +52,7 @@ def main() -> None:
 
     conn = store.connect()
     try:
-        store.touch(conn, session_id)
+        store.touch(conn, session_id, cwd=cwd)
         text = notify._join(
             notify.midturn_urgent_text(conn, session_id),
             notify.condition_text(conn, session_id),

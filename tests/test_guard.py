@@ -594,6 +594,64 @@ def test_mutating_git_allowed_when_alone(conn, command):
     assert _bash(conn, "a", command) is None, command
 
 
+def _shared_repo(conn, tmp_path):
+    """Two sessions standing in one real repo with one commit."""
+    repo = _git_repo(tmp_path / "repo")
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+    (repo / "f.txt").write_text("one\n")
+    subprocess.run([*git, "add", "f.txt"], check=True)
+    subprocess.run([*git, "commit", "-qm", "one"], check=True)
+    for sid, handle in (("a", "alice"), ("b", "bob")):
+        make_session(conn, sid, handle=handle, project=str(repo), project_name="repo")
+    return repo
+
+
+@pytest.mark.parametrize(
+    "command", ["git reset --soft HEAD~1", "git rebase main", "git merge main", "git pull"]
+)
+def test_tip_move_is_allowed_when_no_tracked_file_has_uncommitted_changes(conn, tmp_path, command):
+    # #55: a peer's presence is not a conflict. With a clean tracked tree nobody has files at stake.
+    _shared_repo(conn, tmp_path)
+    assert _bash(conn, "a", command) is None
+
+
+def test_tip_move_is_denied_when_a_tracked_file_is_modified(conn, tmp_path):
+    repo = _shared_repo(conn, tmp_path)
+    (repo / "f.txt").write_text("a peer is editing this\n")
+    assert _bash(conn, "a", "git reset --soft HEAD~1") is not None
+
+
+def test_tip_move_ignores_untracked_files(conn, tmp_path):
+    repo = _shared_repo(conn, tmp_path)
+    (repo / "scratch.txt").write_text("x\n")
+    assert _bash(conn, "a", "git rebase main") is None
+
+
+@pytest.mark.parametrize(
+    "command", ["git checkout -b x", "git switch main", "git branch -f main HEAD"]
+)
+def test_branch_switch_stays_denied_on_a_clean_tree(conn, tmp_path, command):
+    # It changes the branch a peer's next commit lands on, whatever the tree holds.
+    _shared_repo(conn, tmp_path)
+    assert _bash(conn, "a", command) is not None
+
+
+def test_tip_move_is_denied_when_status_cannot_be_read(conn):
+    # /repo/alpha does not exist: the check fails, so the guard falls back to deny.
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha")
+    assert _bash(conn, "a", "git reset --soft HEAD~1") is not None
+
+
+def test_a_peer_that_moved_out_stops_sharing_once_its_hook_reports_the_new_cwd(conn, tmp_path):
+    # #54: the stored cwd is refreshed by the tool hooks, so a stale row cannot block forever.
+    repo = _shared_repo(conn, tmp_path)
+    (repo / "f.txt").write_text("dirty\n")  # so the tip move needs the peer to be gone
+    assert _bash(conn, "a", "git rebase main") is not None
+    store.touch(conn, "b", cwd=str(tmp_path))
+    assert _bash(conn, "a", "git rebase main") is None
+
+
 @pytest.mark.parametrize("command", SHARED_READONLY)
 def test_readonly_git_allowed_even_with_a_peer(conn, command):
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")

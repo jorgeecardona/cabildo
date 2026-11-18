@@ -28,6 +28,7 @@ def main() -> None:
     tool_input = data.get("tool_input") or {}
     conn = store.connect()
     try:
+        store.touch(conn, session_id, cwd=data.get("cwd"))
         reason = guard.deny_reason(conn, session_id, tool_name, tool_input)
     finally:
         conn.close()
