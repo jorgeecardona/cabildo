@@ -4,6 +4,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- A push no longer fails because the tree holds uncommitted tracked changes, such as another
+  agent's unfinished work in a shared checkout. The daemon makes its own checkout of your
+  committed HEAD (kept between pushes, so a venv stays), rebases, runs the gate and pushes there,
+  and leaves your tree alone. The result says `isolated: true`. Your branch still holds your
+  commits under their pre-rebase ids; update it with `git pull --rebase --autostash` (#50).
 - The daemon refuses a push when the same session already landed 10 pushes on the same target in
   the last 30 minutes, and tells the session why. This stops a `/loop` that pushes on every pass.
   Change it with `[push] max_per_window` and `window_minutes`; `max_per_window = 0` turns it off

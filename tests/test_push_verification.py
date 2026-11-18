@@ -83,6 +83,17 @@ def repo(tmp_path):
     return origin, work, sh(["git", "rev-parse", "HEAD"], work)
 
 
+def on_remote_file(origin, path, branch="main") -> bool:
+    """Is ``path`` in the tip tree of ``branch`` on the remote?"""
+    return (
+        subprocess.run(
+            ["git", "--git-dir", str(origin), "cat-file", "-e", f"refs/heads/{branch}:{path}"],
+            capture_output=True,
+        ).returncode
+        == 0
+    )
+
+
 def race_on_receive(origin):
     """Make origin append a commit the moment it accepts a push — i.e. another
     agent (or Jorge's VS Code) pushing between our push and our verify.
@@ -269,42 +280,65 @@ def test_untracked_files_do_not_block_a_push(repo):
     assert "untracked" in status["out"], "the ignored files should be visible"
 
 
-def test_modified_tracked_file_still_blocks(repo):
-    _origin, work, _sha = repo
+def test_modified_tracked_file_is_left_alone_and_the_push_runs_in_its_own_checkout(repo, home):
+    """#50: a peer's unfinished work in the shared tree neither blocks the push nor reaches
+    the gate. The daemon gates the committed HEAD in a checkout of its own.
+    """
+    origin, work, sha = repo
     (work / "f.txt").write_text("half-written\n")
+    gate = work / ".cabildo" / "gate.sh"
+    gate.parent.mkdir()
+    # the gate fails if the half-written file is on disk where it runs
+    gate.write_text("#!/bin/bash\n! grep -q half-written f.txt\n")
+    gate.chmod(0o755)
+    sh(["git", "add", ".cabildo/gate.sh"], work)
+    sh(["git", "commit", "-m", "gate"], work)
+    sha = sh(["git", "rev-parse", "HEAD"], work)
+    (work / "f.txt").write_text("half-written\n")
+
     res = push(work)
-    assert res["ok"] is False and not res.get("pushed")
-    assert "tracked" in res["reason"]
-    assert "f.txt" in res["reason"]
+    assert res["ok"] and res["pushed"] is True, res.get("reason")
+    assert res["isolated"] is True
+    assert on_remote(origin, sha)
+    assert (work / "f.txt").read_text() == "half-written\n", "the requester's tree is untouched"
+    assert "git pull --rebase" in res["note"]
+    iso = next(s for s in res["steps"] if s["step"] == "isolate")
+    assert "left alone" in iso["out"]
+    assert "f.txt" in iso["out"]
 
 
-def test_staged_but_uncommitted_change_still_blocks(repo):
-    _origin, work, _sha = repo
+def test_staged_but_uncommitted_change_is_also_left_alone(repo, home):
+    origin, work, sha = repo
     (work / "new.txt").write_text("staged\n")
     sh(["git", "add", "new.txt"], work)
     res = push(work)
-    assert res["ok"] is False and "new.txt" in res["reason"]
+    assert res["ok"] and res["pushed"] is True
+    assert on_remote(origin, sha)
+    assert not on_remote_file(origin, "new.txt"), "uncommitted work must not be pushed"
+    assert sh(["git", "status", "--porcelain"], work).startswith("A  new.txt")
 
 
-def test_claude_own_settings_gets_a_pointed_hint(repo):
-    """Claude Code rewrites .claude/settings.json when you accept a permission.
-    An agent told only 'dirty' will not think to look there — it didn't do it.
-    """
+def test_the_isolated_checkout_is_reused_by_the_next_push(repo, home):
+    origin, work, sha = repo
+    (work / "f.txt").write_text("wip\n")
+    first = push(work)
+    assert first["pushed"] is True
+    (work / "second.txt").write_text("more\n")
+    sh(["git", "add", "second.txt"], work)
+    sh(["git", "commit", "-m", "second"], work)
+    sha2 = sh(["git", "rev-parse", "HEAD"], work)
+    second = push(work)
+    assert second["pushed"] is True
+    assert on_remote(origin, sha2)
+    assert len(list((home / "gate-worktrees").iterdir())) == 1
+
+
+def test_a_clean_tree_is_not_isolated(repo):
     _origin, work, _sha = repo
-    (work / ".claude").mkdir()
-    (work / ".claude" / "settings.json").write_text('{"permissions": {}}\n')
-    sh(["git", "add", ".claude/settings.json"], work)
-    sh(["git", "commit", "-m", "settings"], work)
-    (work / ".claude" / "settings.json").write_text('{"permissions": {"allow": []}}\n')
-
     res = push(work)
-    assert res["ok"] is False
-    assert "Claude Code's own settings file" in res["reason"]
-
-    # ...but not when real work is dirty too: then the hint would be a lie.
-    (work / "f.txt").write_text("also mine\n")
-    res = push(work)
-    assert "Claude Code's own settings file" not in res["reason"]
+    assert res["pushed"] is True
+    assert res["isolated"] is False
+    assert res["note"] is None
 
 
 # --------------------------------------------------------------------------- #

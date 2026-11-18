@@ -156,38 +156,6 @@ def _affected_env(root: str, base_ref: str) -> dict[str, str]:
     }
 
 
-# Files Claude Code rewrites by itself — accepting a permission prompt edits
-# settings.json mid-session. When they are the *only* thing standing between an
-# agent and a push, the agent didn't do it and won't think to look there.
-_CLAUDE_OWN = (".claude/settings.json", ".claude/settings.local.json")
-
-
-def _porcelain_path(line: str) -> str:
-    """The path out of one `git status --porcelain` line.
-
-    Not a fixed slice: the XY status field is two columns, but the leading space
-    of ' M file' is gone by the time output reaches us (git()'s .strip()), so a
-    line is 'M file' or 'MM file' depending on the state. Split off the first
-    field instead, and take the destination of a rename.
-    """
-    body = line.strip()
-    body = body.split(maxsplit=1)[1] if " " in body else body
-    if " -> " in body:  # 'R  old -> new'
-        body = body.split(" -> ", 1)[1]
-    return body.strip().strip('"')
-
-
-def _claude_settings_hint(dirty_lines: list[str]) -> str:
-    paths = [_porcelain_path(ln) for ln in dirty_lines]
-    if paths and all(p in _CLAUDE_OWN for p in paths):
-        return (
-            "\n\nNote: that is Claude Code's own settings file, which it "
-            "rewrites when you accept a permission — probably not your work. "
-            "Commit it or `git checkout --` it, then re-request."
-        )
-    return ""
-
-
 # --------------------------------------------------------------------------- #
 # push
 # --------------------------------------------------------------------------- #
@@ -272,27 +240,40 @@ def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     rc, branch = git(["rev-parse", "--abbrev-ref", "HEAD"], root)
     branch = branch.strip()
 
-    # 1. Refuse a dirty tree. Pushing half-written work is exactly the failure
-    #    mode this whole system exists to prevent — but only *tracked* changes
-    #    can end up in a commit, and therefore in the push. An untracked scratch
-    #    file blocks nothing and blocking on it turns a correct refusal into
-    #    noise: the requester reads "dirty", cannot see why it matters, and
-    #    starts deleting things to get past the gate.
+    # 1. Uncommitted tracked changes. Only commits are pushed, and only *tracked* changes
+    #    could end up in a commit; an untracked scratch file blocks nothing. In a shared
+    #    checkout another agent's unfinished work is almost always there, and neither
+    #    refusing the push nor gating it with that work on disk is right (#50). So the
+    #    rebase, the gate and the push run in a checkout the daemon owns, holding the
+    #    committed HEAD and nothing else. The requester's tree is not touched.
     rc, out = git(["status", "--porcelain"], root)
     if rc != 0:
         return _fail("could not read git status", steps)
     tracked = [ln for ln in out.splitlines() if not ln.startswith("??")]
     untracked = [ln for ln in out.splitlines() if ln.startswith("??")]
+    origin_root = root
+    isolated = False
     if tracked:
-        return _fail(
-            "working tree has uncommitted tracked changes — commit or stash "
-            "first. The daemon pushes commits, it does not decide what to "
-            f"commit:\n{chr(10).join(tracked)[:2000]}" + _claude_settings_hint(tracked),
-            steps,
+        rc, head = git(["rev-parse", "HEAD"], root)
+        iso, why = _isolated_checkout(root, head.strip()) if rc == 0 else (None, head)
+        if iso is None:
+            return _fail(
+                f"could not make a checkout of the committed HEAD to gate in:\n{why}", steps
+            )
+        root, isolated = iso, True
+        step(
+            "isolate",
+            0,
+            f"{len(tracked)} uncommitted tracked change(s) in {origin_root} left alone; "
+            f"rebase, gate and push run on {head.strip()[:12]} in {iso}\n"
+            + "\n".join(tracked)[:1500],
         )
-    step(
-        "status", 0, f"clean ({len(untracked)} untracked file(s) ignored)" if untracked else "clean"
-    )
+    else:
+        step(
+            "status",
+            0,
+            f"clean ({len(untracked)} untracked file(s) ignored)" if untracked else "clean",
+        )
 
     # 2. Fetch.
     if not step("fetch", *git(["fetch", remote, target], root)):
@@ -503,13 +484,15 @@ def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     #    push (issue #20). Non-destructive by default and NEVER fails the push: a
     #    push that reached the remote has already succeeded, and a checkout we
     #    can't fast-forward is a warning, not a failure.
-    local_sync = _local_sync(root, remote, target, branch, config.push_local_sync(cwd), steps, ctx)
+    local_sync = _local_sync(
+        origin_root, remote, target, branch, config.push_local_sync(cwd), steps, ctx
+    )
 
     # 8. Remove the throwaway worktree now that its work is on the remote, so
     #    worktrees do not accumulate (issue #24). Opt-in and strictly guarded;
     #    never fails the push (it already succeeded).
     worktree_cleanup = _remove_merged_worktree(
-        root, branch, remote, target, config.push_cleanup_lanes(cwd), steps, ctx
+        origin_root, branch, remote, target, config.push_cleanup_lanes(cwd), steps, ctx
     )
 
     return {
@@ -524,6 +507,14 @@ def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         "pre_push": pre_push,
         "verified": f"{remote}/{target} contains {sha[:12]} per ls-remote ({detail})",
         "local_sync": local_sync,
+        "isolated": isolated,
+        "note": (
+            f"your checkout {origin_root} was not touched. Its branch still holds your commits "
+            "under the ids they had before the rebase: update it with `git pull --rebase "
+            "--autostash` when you can."
+            if isolated
+            else None
+        ),
         "worktree_cleanup": worktree_cleanup,
         "steps": steps,
     }
@@ -561,6 +552,33 @@ def _push_rate_refusal(session: Any, target: str, cwd: str) -> str | None:
         "this. Batch your commits and push once, or raise [push].max_per_window in "
         ".cabildo/config.toml."
     )
+
+
+def _isolated_checkout(root: str, sha: str) -> tuple[str | None, str]:
+    """A checkout the daemon owns, detached at ``sha``, as ``(path, error)``.
+
+    It is a worktree of ``root`` kept between pushes, so its ignored files (a venv,
+    node_modules) stay warm. Resetting it is safe: nobody else works there. Untracked files are
+    cleaned but ignored ones are not.
+    """
+    import hashlib
+
+    from . import store
+
+    key = hashlib.sha1(root.encode(), usedforsecurity=False).hexdigest()[:12]
+    path = store.home() / "gate-worktrees" / f"{Path(root).name}-{key}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if (path / ".git").exists():
+        rc, out = git(["checkout", "--detach", "--force", sha], str(path))
+        if rc == 0:
+            rc, out = git(["clean", "-fd"], str(path))
+        if rc == 0:
+            return str(path), ""
+        git(["worktree", "remove", "--force", str(path)], root)
+        shutil.rmtree(path, ignore_errors=True)
+    git(["worktree", "prune"], root)
+    rc, out = git(["worktree", "add", "--detach", "--force", str(path), sha], root)
+    return (str(path), "") if rc == 0 else (None, out)
 
 
 def _pre_push_state(root: str, *, verify: bool) -> str:
