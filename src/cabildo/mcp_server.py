@@ -486,11 +486,34 @@ def list_agents(all_projects: bool = False) -> list[dict[str, Any]]:
 # Topics
 # --------------------------------------------------------------------------- #
 @mcp.tool()
-def list_topics() -> list[dict[str, Any]]:
-    """List all chat channels/topics with subscriber and message counts."""
+def list_topics(
+    prefix: str | None = None,
+    project: str | None = None,
+    include_unused: bool = False,
+    min_messages: int = 0,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """List chat channels/topics with subscriber and message counts, newest activity first.
+
+    By default only topics that have a message or that you subscribe to, 50 at a time: most
+    `proj:` channels are created and never used. Set `include_unused=True` for all of them.
+    `prefix` (for example `proj:` or `ws:`), `project` and `min_messages` narrow the list. Page
+    with `offset` until fewer than `limit` come back.
+    """
     with store.connect() as conn:
-        _me(conn)
-        return store.list_topics(conn)
+        sid = _me(conn)
+        return store.list_topics(
+            conn,
+            session=sid,
+            prefix=prefix,
+            project=project,
+            include_unused=include_unused,
+            min_messages=min_messages,
+            recent_first=True,
+            limit=limit,
+            offset=offset,
+        )
 
 
 @mcp.tool()

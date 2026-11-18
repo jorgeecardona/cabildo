@@ -4,6 +4,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- `list_topics` shows only topics that have a message or that you subscribe to, newest first, 50
+  at a time. New arguments: `prefix`, `project`, `include_unused`, `min_messages`, `limit`,
+  `offset`. Before, it returned all topics and could exceed the MCP result limit (#47).
 - `cabildo browser login` turns on Chrome's "Continue where you left off" in the profile
   before it opens the window, so logins stored as session cookies (the Stripe dashboard) are
   still there when the cookies are read (#51). Not yet checked against a real Stripe login.

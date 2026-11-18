@@ -296,3 +296,25 @@ def test_agents_with_role_can_exclude_self(conn):
     store.set_role(conn, "b", "reviewer")
     found = store.agents_with_role(conn, "reviewer", project="/repo/alpha", exclude="a")
     assert {r["session_id"] for r in found} == {"b"}
+
+
+def test_list_topics_hides_unused_topics_and_pages(conn):
+    # #47: a channel nobody posted in or joined is noise.
+    store.register_session(conn, "a", cwd="/r", project="/r", project_name="r", claude_pid=1)
+    for name in ("proj:unused-1", "proj:unused-2", "busy", "quiet"):
+        store.ensure_topic(conn, name)
+    store.subscribe(conn, "a", "quiet")
+    store.post_message(conn, from_session="a", from_handle=None, body="hi", topic="busy")
+    names = [t["name"] for t in store.list_topics(conn, session="a", include_unused=False)]
+    assert "proj:unused-1" not in names
+    assert {"busy", "quiet"} <= set(names)
+    everything = {t["name"] for t in store.list_topics(conn)}
+    assert {"proj:unused-1", "proj:unused-2"} <= everything
+    recent = store.list_topics(conn, session="a", include_unused=False, recent_first=True)
+    assert recent[0]["name"] == "busy"
+    page = store.list_topics(conn, recent_first=True, limit=2)
+    rest = store.list_topics(conn, recent_first=True, limit=2, offset=2)
+    assert len(page) == 2
+    assert not {t["name"] for t in page} & {t["name"] for t in rest}
+    assert [t["name"] for t in store.list_topics(conn, prefix="proj:unused-_")] == []
+    assert len(store.list_topics(conn, prefix="proj:unused-")) == 2

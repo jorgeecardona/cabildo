@@ -2017,14 +2017,58 @@ def _msg_dict(r: sqlite3.Row) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Topics
 # --------------------------------------------------------------------------- #
-def list_topics(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    rows = conn.execute(
+def list_topics(
+    conn: sqlite3.Connection,
+    *,
+    session: str | None = None,
+    prefix: str | None = None,
+    project: str | None = None,
+    include_unused: bool = True,
+    min_messages: int = 0,
+    recent_first: bool = False,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """Topics with subscriber and message counts, by name.
+
+    With no arguments, every topic. ``include_unused=False`` keeps the topics that have a message
+    or that ``session`` subscribes to, which drops the per-project channels nobody ever posted
+    in (#47). ``recent_first`` orders by the newest message instead of by name.
+    """
+    where: list[str] = []
+    args: list[Any] = []
+    if prefix:
+        where.append("t.name LIKE ? ESCAPE '\\'")
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        args.append(escaped + "%")
+    if project:
+        where.append("t.project=?")
+        args.append(project)
+    if min_messages > 0:
+        where.append("(SELECT COUNT(*) FROM messages m WHERE m.topic=t.name) >= ?")
+        args.append(min_messages)
+    if not include_unused:
+        mine = "EXISTS(SELECT 1 FROM subscriptions s WHERE s.topic=t.name AND s.session_id=?)"
+        where.append(f"(EXISTS(SELECT 1 FROM messages m WHERE m.topic=t.name) OR {mine})")
+        args.append(session or "")
+    order = (
+        "(SELECT MAX(m.id) FROM messages m WHERE m.topic=t.name) IS NULL, "
+        "(SELECT MAX(m.id) FROM messages m WHERE m.topic=t.name) DESC, t.name"
+        if recent_first
+        else "t.name"
+    )
+    sql = (
         "SELECT t.name, t.project, t.gated, t.scope, t.folder, "
         "(SELECT COUNT(*) FROM subscriptions s WHERE s.topic=t.name) AS subscribers, "
-        "(SELECT COUNT(*) FROM messages m WHERE m.topic=t.name) AS messages "
-        "FROM topics t ORDER BY t.name"
-    ).fetchall()
-    out = [dict(r) for r in rows]
+        "(SELECT COUNT(*) FROM messages m WHERE m.topic=t.name) AS messages FROM topics t"
+    )
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += f" ORDER BY {order}"
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        args += [max(1, limit), max(0, offset)]
+    out = [dict(r) for r in conn.execute(sql, args).fetchall()]
     for r in out:
         r["gated"] = bool(r["gated"])
     return out
