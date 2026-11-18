@@ -760,16 +760,20 @@ export const register: Register = (on) => {
     }
   }).catch(($, e, next) => (next.called ? next(e) : next(e)))
 
-  // CronDelete: a cab-N id is ours; any other id is Claude Code's.
+  // CronDelete: a cab-N id is ours; any other id is Claude Code's. A resumed session
+  // can hold a Claude Code copy of a cab-N job under the same id (it restores the
+  // job from the transcript) and keeps firing it, so a cab-N delete also asks
+  // Claude Code, and succeeds if either side removed the job (#53).
   on('tool.call', { tool: 'CronDelete' }, async ($, e, next) => {
     if (!isCabildoId(e.id)) return next(e)
     const sid = await ensureSession($)
-    try {
-      await cab($, ['cron', 'rm', e.id, ...(sid ? [`--session=${sid}`] : []), '--json'])
-      return { result: { id: e.id } }
-    } catch {
-      return { deny: `No cabildo cron job with id ${e.id} in this session.` }
-    }
+    const ours = await cab($, ['cron', 'rm', e.id, ...(sid ? [`--session=${sid}`] : []), '--json'])
+      .then(() => true)
+      .catch(() => false)
+    const native = await next(e).catch(() => null)
+    const nativeRemoved = native !== null && native.deny === undefined && native.isError !== true
+    if (ours || nativeRemoved) return { result: { id: e.id } }
+    return { deny: `No cabildo cron job with id ${e.id} in this session.` }
   })
 
   // CronList: Claude Code's jobs (the fallbacks) plus this session's cabildo jobs.
@@ -781,7 +785,9 @@ export const register: Register = (on) => {
     const ours = (await cab($, ['cron', 'list', `--session=${sid}`, '--json']).catch(
       () => null,
     )) as { jobs: CronJob[] } | null
-    const extra = (ours?.jobs ?? []).map((j) => ({
+    // A resumed session lists a cab-N job twice, once from each side: show it once.
+    const seen = new Set((native.result.jobs as { id: string }[]).map((j) => j.id))
+    const extra = (ours?.jobs ?? []).filter((j) => !seen.has(j.id)).map((j) => ({
       id: j.id,
       cron: j.cron ?? '',
       humanSchedule: j.humanSchedule,

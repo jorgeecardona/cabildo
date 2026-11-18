@@ -13,7 +13,7 @@ type World = {
   due: unknown[]
 }
 
-function world(on: On, opts: { cabFails?: boolean } = {}): World {
+function world(on: On, opts: { cabFails?: boolean; nativeCopy?: boolean } = {}): World {
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.env(on, { HOME: '/home/t' })
   const w: World = { clock, cabRuns: [], nativeCalls: [], submitted: [], commands: [], due: [] }
@@ -81,9 +81,10 @@ function world(on: On, opts: { cabFails?: boolean } = {}): World {
       return { result: { id: 'abcd1234', humanSchedule: 'native', recurring: true } }
     }
     if (e.tool === 'CronList') {
-      return {
-        result: { jobs: [{ id: 'abcd1234', cron: '0 * * * *', humanSchedule: 'n', prompt: 'x' }] },
-      }
+      const jobs = [{ id: 'abcd1234', cron: '0 * * * *', humanSchedule: 'n', prompt: 'x' }]
+      // A resumed session: Claude Code restored the cabildo job under the same id.
+      if (opts.nativeCopy) jobs.push({ id: 'cab-1', cron: '*/5 * * * *', humanSchedule: 'n', prompt: 'x' })
+      return { result: { jobs } }
     }
     if (e.tool === 'ScheduleWakeup') {
       return {
@@ -144,9 +145,26 @@ test('CronDelete sends cab- ids to cabildo and other ids to Claude Code', async 
   await start($)
   await $.tool.call({ tool: 'CronDelete', id: 'cab-1' })
   expect(w.cabRuns[0]?.slice(0, 3)).toEqual(['cron', 'rm', 'cab-1'])
-  expect(w.nativeCalls).toEqual([])
+  expect(w.nativeCalls).toEqual(['CronDelete']) // a possible resumed copy, same id (#53)
+  w.nativeCalls.length = 0
   await $.tool.call({ tool: 'CronDelete', id: 'abcd1234' })
   expect(w.nativeCalls).toEqual(['CronDelete'])
+  expect(w.cabRuns.length).toBe(1)
+})
+
+test('CronDelete of a cab- id also removes the copy Claude Code restored on resume (#53)', async ($, on) => {
+  const w = world(on, { nativeCopy: true })
+  await start($)
+  const r = JSON.stringify(await $.tool.call({ tool: 'CronDelete', id: 'cab-1' }))
+  expect(r).toContain('cab-1')
+  expect(w.nativeCalls).toEqual(['CronDelete'])
+})
+
+test('CronList shows a restored cab- job once (#53)', async ($, on) => {
+  world(on, { nativeCopy: true })
+  await start($)
+  const r = JSON.stringify(await $.tool.call({ tool: 'CronList' }))
+  expect(r.split('"cab-1"').length - 1).toBe(1)
 })
 
 test('CronList shows Claude Code jobs and cabildo jobs together', async ($, on) => {

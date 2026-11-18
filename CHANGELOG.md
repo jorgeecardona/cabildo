@@ -4,6 +4,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- `CronDelete` of a `cab-N` job also deletes the copy Claude Code restores when a session is
+  resumed, so its ticks stop. `CronList` shows such a job once (#53). Reinstall the cabildo-push
+  plugin to get this.
 - An approved project `send` grant now lets the session that asked post, also after it moves to
   another project, and also when it named the project by its folder path. The refusal names the
   sender's own project (#52).
