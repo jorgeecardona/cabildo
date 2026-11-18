@@ -310,7 +310,7 @@ async def save_logins(session: Session, domains: Sequence[str]) -> str:
         return "No storage-state file is set for this server: nothing to save to."
     if session._context is None:
         return "This browser has not been used yet: there is no login to save."
-    fresh = dict(await session._context.storage_state())
+    fresh: dict[str, Any] = dict(await session._context.storage_state())
     with _locked(path):
         try:
             current = json.loads(path.read_text()) if path.is_file() else {}
