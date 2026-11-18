@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- New MCP tools `record_minutes` and `read_minutes`: leave the written record of a session (a
+  title and a markdown body, with optional cited decisions and tags) and read it back from any
+  session of the project. Minutes are never edited: `revises` leaves a new revision and the first
+  stays. `project_level=True` writes minutes that belong to no single session (#31).
 - The browser server now says, in its first page result, when the saved login file is missing,
   empty or older than 30 days, and names the fix (`cabildo browser login`). New tool
   `browser_save_logins(domains)` merges the logins an agent browser holds for those domains into

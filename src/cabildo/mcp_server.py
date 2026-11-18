@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -336,6 +337,83 @@ def record_decision(
             project_name=_project_name(conn, sid),
         )
         return {"ok": True, "id": fid, "kind": kind, "title": title}
+
+
+_MINUTES_PREVIEW = 200
+
+
+@mcp.tool()
+def record_minutes(
+    title: str,
+    body: str,
+    session: str | None = None,
+    project_level: bool = False,
+    decision_ids: list[int] | None = None,
+    tags: str | None = None,
+    revises: str | None = None,
+) -> dict[str, Any]:
+    """Leave the minutes of a session: the written record of what it worked on, what was
+    decided and why, and what is still open. `body` is markdown. They stay after the session
+    ends and any session of this project can read them with `read_minutes`.
+
+    By default the minutes are about your own session; pass `session` to write them for
+    another one, or `project_level=True` for minutes that belong to no single session.
+    `decision_ids` cites decisions from `record_decision`. Minutes are never edited: pass
+    `revises` (the guid of earlier minutes) to leave a new revision, and the first one stays.
+    """
+    with store.connect() as conn:
+        sid = _me(conn)
+        author = "human" if sid == store.HUMAN_SESSION else _handle(conn, sid) or sid
+        try:
+            row = store.add_minutes(
+                conn,
+                title=title,
+                body=body,
+                author=author,
+                session_id=None if project_level else (session or sid),
+                project=_project(conn, sid),
+                project_name=_project_name(conn, sid),
+                decision_ids=",".join(str(i) for i in decision_ids) if decision_ids else None,
+                tags=tags,
+                revises=revises,
+            )
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "id": row["id"], "guid": row["guid"], "rev": row["rev"]}
+
+
+@mcp.tool()
+def read_minutes(
+    ref: str | None = None,
+    rev: int | None = None,
+    session: str | None = None,
+    since_hours: float | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Read session minutes left with `record_minutes`.
+
+    With `ref` (an id or a guid) it returns that one record in full, newest revision unless
+    `rev` is set, and lists every revision number. Without it, the newest minutes of this
+    project, newest first, with the body cut to a short preview; narrow by `session` or
+    `since_hours`.
+    """
+    with store.connect() as conn:
+        sid = _me(conn)
+        if ref:
+            one = store.get_minutes(conn, ref, rev)
+            return [one] if one else []
+        since = time.time() - since_hours * 3600 if since_hours else None
+        rows = store.list_minutes(
+            conn,
+            project_name=_project_name(conn, sid),
+            session_id=session,
+            since=since,
+            limit=limit,
+        )
+        for r in rows:
+            text = str(r["body"])
+            r["body"] = text if len(text) <= _MINUTES_PREVIEW else text[:_MINUTES_PREVIEW] + "…"
+        return rows
 
 
 @mcp.tool()

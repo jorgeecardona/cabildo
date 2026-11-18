@@ -417,6 +417,27 @@ CREATE TABLE IF NOT EXISTS decisions (
 );
 CREATE INDEX IF NOT EXISTS idx_decisions_project ON decisions(project_name, created_at);
 
+-- Session minutes (issue #31): the written record of a session, left at its end by the
+-- session or by the human. Append-only: an edit is a new row with the same guid and rev+1,
+-- so the original stays. session_id NULL means minutes of the project, not of one session.
+CREATE TABLE IF NOT EXISTS session_minutes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    guid          TEXT NOT NULL,
+    rev           INTEGER NOT NULL DEFAULT 1,
+    created_at    REAL NOT NULL,
+    session_id    TEXT,
+    author        TEXT NOT NULL,                     -- the writing agent's handle, or 'human'
+    project       TEXT,
+    project_name  TEXT,
+    title         TEXT NOT NULL,
+    body          TEXT NOT NULL,
+    decision_ids  TEXT,                              -- comma-separated ids of decisions it cites
+    tags          TEXT,
+    UNIQUE(guid, rev)
+);
+CREATE INDEX IF NOT EXISTS idx_session_minutes_project
+    ON session_minutes(project_name, created_at);
+
 -- Session notes (issue #34): loose ends scoped to the SESSION that raised them,
 -- not the whole project. Jorge opens many topics in one session and some get
 -- lost; an agent adds a note when a topic starts, and `/wrap-up` lists this
@@ -1411,6 +1432,103 @@ def list_decisions(
     q += " ORDER BY id DESC LIMIT ?"
     args.append(int(limit))
     return [dict(r) for r in conn.execute(q, args)]
+
+
+def add_minutes(
+    conn: sqlite3.Connection,
+    *,
+    title: str,
+    body: str,
+    author: str,
+    session_id: str | None = None,
+    project: str | None = None,
+    project_name: str | None = None,
+    decision_ids: str | None = None,
+    tags: str | None = None,
+    revises: str | None = None,
+) -> dict[str, Any]:
+    """Leave the minutes of a session and return the stored row.
+
+    ``revises`` is the guid of earlier minutes: the new row keeps that guid with the next
+    ``rev`` and, unless given, its session and project. The earlier revisions stay. Raises
+    ``ValueError`` when no minutes have that guid.
+    """
+    guid = revises or uuid.uuid4().hex
+    rev = 1
+    if revises:
+        prev = conn.execute(
+            "SELECT * FROM session_minutes WHERE guid=? ORDER BY rev DESC LIMIT 1", (revises,)
+        ).fetchone()
+        if prev is None:
+            msg = f"no minutes with guid {revises}"
+            raise ValueError(msg)
+        rev = int(prev["rev"]) + 1
+        session_id = session_id or prev["session_id"]
+        project = project or prev["project"]
+        project_name = project_name or prev["project_name"]
+    cur = conn.execute(
+        "INSERT INTO session_minutes (guid, rev, created_at, session_id, author, project, "
+        "project_name, title, body, decision_ids, tags) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        [guid, rev, _now(), session_id, author, project, project_name, title, body]
+        + [decision_ids, tags],
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM session_minutes WHERE id=?", (cur.lastrowid,)).fetchone()
+    return dict(row)
+
+
+def list_minutes(
+    conn: sqlite3.Connection,
+    *,
+    project_name: str | None = None,
+    session_id: str | None = None,
+    since: float | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """The newest revision of each minutes record, newest first."""
+    q = "SELECT * FROM session_minutes WHERE id IN (SELECT MAX(id) FROM session_minutes GROUP BY guid)"
+    args: list[Any] = []
+    if project_name:
+        q += " AND project_name=?"
+        args.append(project_name)
+    if session_id:
+        q += " AND session_id=?"
+        args.append(session_id)
+    if since is not None:
+        q += " AND created_at>=?"
+        args.append(since)
+    q += " ORDER BY id DESC LIMIT ?"
+    args.append(max(1, int(limit)))
+    return [dict(r) for r in conn.execute(q, args)]
+
+
+def get_minutes(
+    conn: sqlite3.Connection, ref: str, rev: int | None = None
+) -> dict[str, Any] | None:
+    """Minutes by row id or guid. A guid gives its newest revision unless ``rev`` is set.
+
+    The result carries ``revisions``: every rev number that exists for that guid.
+    """
+    row = None
+    if ref.isdigit():
+        row = conn.execute("SELECT * FROM session_minutes WHERE id=?", (int(ref),)).fetchone()
+    if row is None:
+        q = "SELECT * FROM session_minutes WHERE guid=?"
+        args: list[Any] = [ref]
+        if rev is not None:
+            q += " AND rev=?"
+            args.append(rev)
+        row = conn.execute(q + " ORDER BY rev DESC LIMIT 1", args).fetchone()
+    if row is None:
+        return None
+    out = dict(row)
+    out["revisions"] = [
+        int(r["rev"])
+        for r in conn.execute(
+            "SELECT rev FROM session_minutes WHERE guid=? ORDER BY rev", (out["guid"],)
+        )
+    ]
+    return out
 
 
 # Session notes (issue #34). The vocabularies live here so the store, the MCP
