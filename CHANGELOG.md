@@ -4,6 +4,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- `join_topic` on a `shared` channel now says how many paired machines are reachable. When none
+  is, it says so and points at `request(action="pair")` (#48). The `peers` tool lists the
+  paired machines and their last sync.
 - `list_topics` shows only topics that have a message or that you subscribe to, newest first, 50
   at a time. New arguments: `prefix`, `project`, `include_unused`, `min_messages`, `limit`,
   `offset`. Before, it returned all topics and could exceed the MCP result limit (#47).

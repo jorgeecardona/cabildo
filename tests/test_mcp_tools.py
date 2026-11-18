@@ -617,3 +617,28 @@ def test_pending_request_pops_again_after_a_restart(two_projects, monkeypatch):
         assert g is not None
         assert g["status"] == "denied"
         assert grant_prompt.reprompt_pending(conn) == 0
+
+
+def test_join_topic_shared_reports_that_no_machine_is_reachable(two_projects, monkeypatch):
+    # #48: ok:true on a shared room must not read as "live on the LAN".
+    monkeypatch.setattr(srv, "peers", list)
+    two_projects(111)
+    res = srv.join_topic("room", scope="shared")
+    assert res["ok"] is True
+    assert res["peers"] == {"paired": 0, "reachable": 0}
+    assert 'request(action="pair")' in res["reason"]
+
+
+def test_join_topic_shared_names_the_peer_that_failed_its_last_sync(two_projects, monkeypatch):
+    down = {"transport": "lan", "address": "1.2.3.4:5", "last_pull": {"error": "unreachable"}}
+    up = {"transport": "lan", "address": "1.2.3.5:5", "last_pull": {"error": None}}
+    monkeypatch.setattr(srv, "peers", lambda: [down, up])
+    two_projects(111)
+    res = srv.join_topic("room2", scope="shared")
+    assert res["peers"] == {"paired": 2, "reachable": 1}
+    assert "reason" not in res
+
+
+def test_join_topic_local_adds_no_peer_report(two_projects):
+    two_projects(111)
+    assert "peers" not in srv.join_topic("room3")

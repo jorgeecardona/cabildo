@@ -557,12 +557,37 @@ def join_topic(topic: str, scope: str = "local") -> dict[str, Any]:
         store.subscribe(conn, sid, topic)
         conn.commit()
         ch = store.channel(conn, topic)
-        return {
+        result: dict[str, Any] = {
             "ok": True,
             "topic": topic,
             "scope": ch.scope if ch else scope,
             "subscriptions": store.subscriptions_of(conn, sid),
         }
+        if result["scope"] == "shared":
+            result.update(_shared_reach())
+        return result
+
+
+def _shared_reach() -> dict[str, Any]:
+    """How many paired machines a shared channel reaches right now (#48): the count, and a
+    `reason` naming the way to pair when none answers. Never raises; a failure reads as no data.
+    """
+    try:
+        rows = peers()
+    except Exception:
+        return {}
+    down = [r for r in rows if not r["last_pull"] or r["last_pull"].get("error")]
+    reach: dict[str, Any] = {"peers": {"paired": len(rows), "reachable": len(rows) - len(down)}}
+    if len(rows) - len(down) == 0:
+        why = "no machine is paired" if not rows else "no paired machine answered the last sync"
+        reach["reason"] = (
+            f"{why}, so posts here stay on this machine. "
+            'Pair one with request(action="pair"), then {"pin": "..."} on the other machine.'
+        )
+        reach["unreachable"] = [
+            {"address": r["address"], "error": (r["last_pull"] or {}).get("error")} for r in down
+        ]
+    return reach
 
 
 @mcp.tool()
