@@ -134,3 +134,27 @@ def test_write_state_leaves_no_temporary_file_and_replaces_atomically(tmp_path: 
     login.write_state(target, {"cookies": [], "origins": []})
     assert sorted(p.name for p in tmp_path.iterdir()) == ["state.json"]
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_keep_session_cookies_creates_the_setting(tmp_path: Path) -> None:
+    assert login.keep_session_cookies(tmp_path) is True
+    prefs = json.loads((tmp_path / "Default" / "Preferences").read_text())
+    assert prefs["session"]["restore_on_startup"] == 1
+
+
+def test_keep_session_cookies_keeps_the_other_preferences(tmp_path: Path) -> None:
+    path = tmp_path / "Default" / "Preferences"
+    path.parent.mkdir()
+    path.write_text(json.dumps({"homepage": "x", "session": {"startup_urls": ["a"]}}))
+    assert login.keep_session_cookies(tmp_path) is True
+    prefs = json.loads(path.read_text())
+    assert prefs["homepage"] == "x"
+    assert prefs["session"] == {"startup_urls": ["a"], "restore_on_startup": 1}
+
+
+def test_keep_session_cookies_leaves_an_unreadable_file_alone(tmp_path: Path) -> None:
+    path = tmp_path / "Default" / "Preferences"
+    path.parent.mkdir()
+    path.write_text("{not json")
+    assert login.keep_session_cookies(tmp_path) is False
+    assert path.read_text() == "{not json"

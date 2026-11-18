@@ -4,6 +4,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- `cabildo browser login` turns on Chrome's "Continue where you left off" in the profile
+  before it opens the window, so logins stored as session cookies (the Stripe dashboard) are
+  still there when the cookies are read (#51). Not yet checked against a real Stripe login.
 - `CronDelete` of a `cab-N` job also deletes the copy Claude Code restores when a session is
   resumed, so its ticks stop. `CronList` shows such a job once (#53). Reinstall the cabildo-push
   plugin to get this.

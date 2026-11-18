@@ -102,6 +102,31 @@ def plain_command(binary: str, profile: Path) -> list[str]:
     ]
 
 
+def keep_session_cookies(profile: Path) -> bool:
+    """Set Chrome's "Continue where you left off" in ``profile`` and return True when it is set.
+
+    Chrome deletes cookies that have no expiry when it closes, unless that setting is on. A
+    dashboard login (Stripe, for one) is such a cookie, so without it the cookies are gone before
+    Playwright reads the profile (#51). A preferences file that cannot be read or parsed is left
+    alone and the result is False.
+    """
+    path = profile / "Default" / "Preferences"
+    try:
+        prefs = json.loads(path.read_text()) if path.exists() else {}
+    except (OSError, ValueError):
+        return False
+    if not isinstance(prefs, dict):
+        return False
+    session = prefs.get("session")
+    prefs["session"] = {**(session if isinstance(session, dict) else {}), "restore_on_startup": 1}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(prefs, separators=(",", ":")))
+    except OSError:
+        return False
+    return True
+
+
 def write_state(path: Path, state: dict[str, Any]) -> Saved:
     """Write ``state`` to ``path`` with mode 600, from the first byte.
 
@@ -146,6 +171,7 @@ def run(
     if binary is None:
         say(f"no executable found for channel {channel!r}: not opening the profile")
         return None
+    keep_session_cookies(profile)
     say("Opening the profile in plain Chrome. Log into what you need, then CLOSE THE WINDOW.")
     subprocess.run(plain_command(binary, profile), check=False)
     say("Reading the logins from the profile (a window opens and closes).")
