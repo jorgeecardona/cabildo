@@ -22,6 +22,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 GIT_TIMEOUT = 120
@@ -401,6 +402,7 @@ def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
     # reason: git's plain 120s guillotines a slow network / large push.
     push_timeout = int(config.push_timeout(cwd))
     push_cmd = ["push", remote, f"HEAD:{target}"]
+    pre_push = _pre_push_state(root, verify=config.push_verify(cwd))
     if not config.push_verify(cwd):
         push_cmd.insert(1, "--no-verify")
     # When the repo keeps its pre-push hook ([push].verify = true), that hook may
@@ -514,11 +516,27 @@ def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         "remote_url": git(["remote", "get-url", remote], root)[1],
         "target": f"{remote}/{target}",
         "gate": gate_state,
+        "pre_push": pre_push,
         "verified": f"{remote}/{target} contains {sha[:12]} per ls-remote ({detail})",
         "local_sync": local_sync,
         "worktree_cleanup": worktree_cleanup,
         "steps": steps,
     }
+
+
+def _pre_push_state(root: str, *, verify: bool) -> str:
+    """What happened to the repo's pre-push hook: ``ran``, ``skipped`` (a hook exists but the
+    push used ``--no-verify``) or ``none`` (the repo has no such hook). The gate passing says
+    nothing about a hook that holds checks the gate does not (#32).
+    """
+    if verify:
+        return "ran"
+    rc, out = git(["rev-parse", "--git-path", "hooks/pre-push"], root)
+    if rc != 0:
+        return "none"
+    hook = Path(out.strip())
+    hook = hook if hook.is_absolute() else Path(root) / hook
+    return "skipped" if hook.is_file() else "none"
 
 
 def _local_sync(

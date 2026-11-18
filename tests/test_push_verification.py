@@ -436,3 +436,28 @@ def test_manual_push_mode_rejects_the_push(repo):
         push(work)
     assert "manual" in str(excinfo.value)
     assert not on_remote(origin, sha), "nothing must have been pushed"
+
+
+def test_result_says_the_pre_push_hook_was_skipped_when_the_repo_has_one(repo, home):
+    """#32: `gate: passed` must not read as "everything the repo checks ran"."""
+    origin, work, sha = repo
+    _add_prepush(work)  # a hook that would fail, which --no-verify skips
+    res = push(work)
+    assert res["pushed"] is True
+    assert res["pre_push"] == "skipped"
+
+
+def test_result_says_none_when_the_repo_has_no_pre_push_hook(repo, home):
+    origin, work, sha = repo
+    res = push(work)
+    assert res["pushed"] is True
+    assert res["pre_push"] == "none"
+
+
+def test_result_says_ran_when_verify_is_on(repo, home):
+    origin, work, sha = repo
+    (work / ".cabildo").mkdir(exist_ok=True)
+    (work / ".cabildo" / "config.toml").write_text("[push]\nverify = true\n")
+    res = push(work)
+    assert res["pushed"] is True
+    assert res["pre_push"] == "ran"

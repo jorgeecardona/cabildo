@@ -139,6 +139,11 @@ def _report(conn, intent: dict, status: str, result: dict) -> None:
         body.append(
             f"pushed {result.get('head')} on {result.get('target')} (gate: {result.get('gate')})"
         )
+    if result.get("pushed") and result.get("pre_push") == "skipped":
+        body.append(
+            "⚠ the repo's pre-push hook did NOT run (the push used --no-verify). Anything only "
+            "that hook checks was not checked by this push; set [push].verify = true to run it."
+        )
     if result.get("pushed") and result.get("gate") == "ABSENT":
         # Only for a real push: on a dry run nothing was pushed, so "pushed on
         # your word alone" would be doubly wrong (issue #15).

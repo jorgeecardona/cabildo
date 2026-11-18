@@ -4,6 +4,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- A push result now says what happened to the repo's pre-push hook: `pre_push` is `ran`,
+  `skipped` or `none`, and the daemon's message warns when the hook was skipped, so `gate:
+  passed` is not read as "everything ran" (#32).
 - New MCP tools `record_minutes` and `read_minutes`: leave the written record of a session (a
   title and a markdown body, with optional cited decisions and tags) and read it back from any
   session of the project. Minutes are never edited: `revises` leaves a new revision and the first
