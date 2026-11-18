@@ -22,7 +22,7 @@ from pathlib import Path
 from cabildo.envfile import REF_PREFIX
 
 OP = "op"
-_TIMEOUT_S = 15.0
+_TIMEOUT_S = 60.0  # a human may need to unlock 1Password or approve a prompt
 _STDERR_LIMIT = 300
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]

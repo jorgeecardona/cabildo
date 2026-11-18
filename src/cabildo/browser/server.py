@@ -406,16 +406,18 @@ def build(session: Session) -> FastMCP:
     @mcp.tool()
     async def browser_login(
         site: str,
-        username_target: str,
-        password_target: str,
+        username_target: str | None = None,
+        password_target: str | None = None,
         otp_target: str | None = None,
         submit: bool = False,
     ) -> str:
         """Fill a login form from 1Password. The secret never comes back to you.
 
         ``site`` is a name from the human's ``[browser.login.<site>]`` config. The fields are
-        snapshot refs. The page must be on the site's origin, or nothing is read or filled.
-        Set ``submit`` to press Enter in the last field.
+        snapshot refs, and each one is optional: give only the fields on the page. A site that
+        asks for the one-time code on a second page needs a second call with only
+        ``otp_target``. The page must be on the site's origin, or nothing is read or filled.
+        Set ``submit`` to press Enter in the last field filled.
         """
         return await login(session, site, username_target, password_target, otp_target, submit)
 
@@ -612,12 +614,14 @@ async def _check_field(
 async def login(
     session: Session,
     site: str,
-    username_target: str,
-    password_target: str,
+    username_target: str | None,
+    password_target: str | None,
     otp_target: str | None,
     submit: bool,
 ) -> str:
-    """Fill the login form for ``site``. Returns the page state, or ``refused: ...``.
+    """Fill the fields of the login form for ``site``. Returns the page state, or ``refused: ...``.
+
+    Each target is optional, so a login that spans two pages is two calls. At least one is needed.
 
     The origin of the page and of each field is checked before ``op`` is called, and again just
     before each fill. The password and the code are concealed from every tool result until the
@@ -629,14 +633,17 @@ async def login(
         return f"refused: no login for {site!r}. Configured sites: {known}"
     if otp_target and not cred.otp:
         return f"refused: {site} has no otp reference"
-    page = await session.page()
     # (target, reference, is_password, is_otp), in the order the fields are filled
-    plan = [
-        (username_target, cred.username, False, False),
-        (password_target, cred.password, True, False),
-    ]
+    plan: list[tuple[str, str, bool, bool]] = []
+    if username_target:
+        plan.append((username_target, cred.username, False, False))
+    if password_target:
+        plan.append((password_target, cred.password, True, False))
     if otp_target and cred.otp:
         plan.append((otp_target, cred.otp, False, True))
+    if not plan:
+        return "refused: give at least one of username_target, password_target, otp_target"
+    page = await session.page()
     try:
         credentials.check_origin(cred, page.url)
         for target, _ref, is_password, is_otp in plan:

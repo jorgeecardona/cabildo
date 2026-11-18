@@ -247,3 +247,42 @@ def test_redact_replaces_the_longest_secret_first() -> None:
 def test_the_server_offers_browser_login(tmp_path: Path) -> None:
     _session, mcp = make(tmp_path)
     assert "browser_login" in {t.name for t in run(mcp.list_tools())}
+
+
+def test_a_second_page_call_fills_only_the_code(tmp_path: Path) -> None:
+    reads: list[str] = []
+    session, mcp = make(tmp_path, reads)
+    text = call(mcp, "browser_login", {"site": "github", "otp_target": "e3", "submit": True})
+    assert text.startswith("filled github")
+    assert reads == [ENTRY["otp"]]
+    assert session.fake.log == [
+        ("fill", "aria-ref=e3", "493021"),
+        ("press", "aria-ref=e3", "Enter"),
+    ]
+    assert "493021" not in text
+
+
+def test_a_password_only_page_fills_only_the_password(tmp_path: Path) -> None:
+    reads: list[str] = []
+    session, mcp = make(tmp_path, reads)
+    call(mcp, "browser_login", {"site": "github", "password_target": "e2"})
+    assert reads == [ENTRY["password"]]
+    assert session.fake.log == [("fill", "aria-ref=e2", "hunter2-secret")]
+
+
+def test_no_target_at_all_reads_nothing(tmp_path: Path) -> None:
+    reads: list[str] = []
+    session, mcp = make(tmp_path, reads)
+    text = call(mcp, "browser_login", {"site": "github"})
+    assert text.startswith("refused: give at least one")
+    assert reads == []
+    assert session.fake.log == []
+
+
+def test_the_code_alone_is_still_origin_checked(tmp_path: Path) -> None:
+    reads: list[str] = []
+    session, mcp = make(tmp_path, reads)
+    session.fake.url = "https://evil.com/2fa"
+    text = call(mcp, "browser_login", {"site": "github", "otp_target": "e3"})
+    assert text.startswith("refused:")
+    assert reads == []

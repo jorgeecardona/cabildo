@@ -86,6 +86,11 @@ otp      = "op://Cabildo/GitHub/one-time password?attribute=otp"
 The agent calls `browser_login(site, username_target, password_target)`. The targets are refs
 from `browser_snapshot`. Set `submit` to press Enter in the last field.
 
+Every target is optional. A site that asks for the one-time code on a second page needs a second
+call with only the code: `browser_login(site, otp_target=...)`. A site that asks for the password
+on its own page needs a call with only `password_target`. Each call is checked as in the rules
+below.
+
 Rules the server enforces:
 
 - The page must be on the site's `origin` exactly: same scheme, host and port. Otherwise nothing

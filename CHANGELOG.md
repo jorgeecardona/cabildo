@@ -6,7 +6,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 - `browser_login` fills a login form from 1Password. List sites in `[browser.login.<site>]` in
   `~/.cabildo/config.toml`. The agent never sees the password, and the page must be on the
-  site's origin.
+  site's origin. Each field target is optional, so a login that spans two pages (password, then
+  one-time code) is two calls.
 - `cabildo code` opens a chat with a small coding agent for a local model; `cabildo code "task"`
   runs one task and exits. Text streams as it is written, each tool call is shown, Ctrl-C stops
   the turn, `/clear` forgets the conversation, Ctrl-D leaves. It talks to any
