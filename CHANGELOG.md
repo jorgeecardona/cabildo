@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- The daemon refuses a push when the same session already landed 10 pushes on the same target in
+  the last 30 minutes, and tells the session why. This stops a `/loop` that pushes on every pass.
+  Change it with `[push] max_per_window` and `window_minutes`; `max_per_window = 0` turns it off
+  (#39).
 - A push result now says what happened to the repo's pre-push hook: `pre_push` is `ran`,
   `skipped` or `none`, and the daemon's message warns when the hook was skipped, so `gate:
   passed` is not read as "everything ran" (#32).

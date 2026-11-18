@@ -206,6 +206,21 @@ def push_verify(cwd: str | None = None, project_name: str | None = None) -> bool
     return val is True or str(val).strip().lower() in ("1", "true", "yes", "on")
 
 
+def push_rate(cwd: str | None = None, project_name: str | None = None) -> tuple[int, float]:
+    """``[push].max_per_window`` pushes one session may land on one target within
+    ``[push].window_minutes`` (defaults 10 and 30), as ``(count, seconds)``. A count of 0 turns
+    the limit off. It stops a ``/loop`` that queues a push every iteration (#39).
+    """
+
+    def number(key: str, default: float) -> float:
+        try:
+            return float(get(cwd, "push", key, project_name=project_name, default=default))
+        except (TypeError, ValueError):
+            return default
+
+    return int(number("max_per_window", 10)), max(1.0, number("window_minutes", 30.0)) * 60.0
+
+
 def push_timeout(cwd: str | None = None, project_name: str | None = None) -> float:
     """``[push].timeout_s``: seconds the push push may take before the daemon
     gives up. Default 300 -- git's plain 120 guillotines a slow network or a

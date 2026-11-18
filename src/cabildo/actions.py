@@ -13,6 +13,7 @@ programmer error; the daemon catches and records that too.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
@@ -251,6 +252,10 @@ def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
             or not val.replace("-", "").replace("_", "").replace("/", "").isalnum()
         ):
             raise Reject(f"params.{name} must be a plain ref name, got {val!r}")
+
+    refusal = _push_rate_refusal(params.get("_from_session"), target, cwd)
+    if refusal:
+        raise Reject(refusal)
 
     steps: list[dict[str, Any]] = []
 
@@ -522,6 +527,40 @@ def push(params: dict[str, Any], ctx: Ctx) -> dict[str, Any]:
         "worktree_cleanup": worktree_cleanup,
         "steps": steps,
     }
+
+
+def _push_rate_refusal(session: Any, target: str, cwd: str) -> str | None:
+    """A reason to refuse when ``session`` already landed too many pushes on ``target`` lately.
+
+    Every push of a runaway loop is valid by itself, so only the count shows it (#39). Counts
+    the session's finished pushes in ``intents``; a request with no session is never limited.
+    """
+    from . import config, store  # local: actions.py stays importable headless
+
+    limit, window = config.push_rate(cwd)
+    if not limit or not isinstance(session, str) or not session:
+        return None
+    with store.connect() as conn:
+        rows = conn.execute(
+            "SELECT params FROM intents WHERE action='push' AND status='done' "
+            "AND from_session=? AND finished_at>=?",
+            (session, time.time() - window),
+        ).fetchall()
+    landed = 0
+    for row in rows:
+        try:
+            if json.loads(row["params"]).get("target", "main") == target:
+                landed += 1
+        except ValueError:
+            continue
+    if landed < limit:
+        return None
+    return (
+        f"rate limit: this session already landed {landed} pushes on {target} in the last "
+        f"{window / 60:g} minutes (limit {limit}). A loop that pushes on every pass looks like "
+        "this. Batch your commits and push once, or raise [push].max_per_window in "
+        ".cabildo/config.toml."
+    )
 
 
 def _pre_push_state(root: str, *, verify: bool) -> str:
