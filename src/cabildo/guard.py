@@ -462,14 +462,18 @@ def _held_by_me(conn: sqlite3.Connection, resource: str, session_id: str) -> boo
     )
 
 
-def _sharers(conn: sqlite3.Connection, me: Actor) -> list[sqlite3.Row]:
+def _sharers(conn: sqlite3.Connection, me: Actor, cwd: str | None = None) -> list[sqlite3.Row]:
     """The live peers standing in the *same* working tree as ``me``. cwd is what
     says which checkout; project can't (it collapses worktrees). An actor without
     a cwd tells us nothing, so it is not treated as sharing anyone's tree.
+
+    ``cwd`` names the folder the command acts on when that is not the session's own (a
+    ``cd <dir> &&`` or ``git -C <dir>``), so a commit in a worktree is judged by that worktree
+    (#29).
     """
     if not me.cwd:
         return []
-    mine = tree_root(me.cwd)
+    mine = tree_root(cwd or me.cwd)
     return [
         p
         for p in store.active_sessions(conn, project=me.project, exclude=me.session_id)
@@ -502,7 +506,7 @@ def _tracked_tree_clean(cwd: str | None) -> bool:
     return out.returncode == 0 and not out.stdout.strip()
 
 
-def _tip_move_is_safe(me: Actor, argv: list[str]) -> bool:
+def _tip_move_is_safe(tree: str | None, argv: list[str]) -> bool:
     """A reset/rebase/merge/pull/cherry-pick/revert/am with nothing uncommitted to lose.
 
     Presence alone is not a conflict (#55): with a clean tracked tree the move rewrites
@@ -511,7 +515,7 @@ def _tip_move_is_safe(me: Actor, argv: list[str]) -> bool:
     so a clean tree is the one test the guard can make.
     """
     sub, _ = _git_subcommand(argv)
-    return sub in _TIP_MOVERS and _tracked_tree_clean(me.cwd)
+    return sub in _TIP_MOVERS and _tracked_tree_clean(tree)
 
 
 def _deny_push(conn: sqlite3.Connection, me: Actor, command: str) -> str | None:
@@ -625,15 +629,22 @@ def _deny_shared_checkout(conn: sqlite3.Connection, me: Actor, command: str) -> 
         ``rebase``/``merge``/``branch -f`` …).
     """
     mutators = [(argv, lbl) for argv in _argvs(command) if (lbl := _mutates_shared_checkout(argv))]
-    if not mutators:
+    if not mutators or not me.cwd:
         return None
-    sharers = _sharers(conn, me)
-    if not sharers:
+    # Each op is judged by the tree it acts on (-C / cd), not only by the session's own folder.
+    hits: list[tuple[list[str], str, str, list[sqlite3.Row]]] = []
+    for argv, lbl in mutators:
+        tree = _commit_dir(argv, command, me.cwd)
+        sharers = _sharers(conn, me, tree)
+        if sharers:
+            hits.append((argv, lbl, tree, sharers))
+    if not hits:
         return None
+    sharers = hits[0][3]
     who = ", ".join(store.display_name(p) for p in sharers[:5])
 
-    if bool(me.cwd) and config.trunk_mode(me.cwd, me.project_name) == "guard":
-        label = mutators[0][1]
+    if config.trunk_mode(me.cwd, me.project_name) == "guard":
+        label = hits[0][1]
         return (
             f"cabildo: `{label}` writes the index, working tree, or HEAD that you share with "
             f"{len(sharers)} other agent(s) ({who}) in this one checkout — it can stage their "
@@ -647,16 +658,18 @@ def _deny_shared_checkout(conn: sqlite3.Connection, me: Actor, command: str) -> 
     # intended flow; deny only the ops that reach the other agents' work.
     bad = next(
         (
-            lbl
-            for (argv, lbl) in mutators
-            if not _own_paths_only(argv) and not _tip_move_is_safe(me, argv)
+            (lbl, shared)
+            for (argv, lbl, tree, shared) in hits
+            if not _own_paths_only(argv) and not _tip_move_is_safe(tree, argv)
         ),
         None,
     )
     if bad is None:
         return None
+    label, sharers = bad
+    who = ", ".join(store.display_name(p) for p in sharers[:5])
     return (
-        f"cabildo: `{bad}` reaches the index, working tree, or HEAD that you share with "
+        f"cabildo: `{label}` reaches the index, working tree, or HEAD that you share with "
         f"{len(sharers)} other agent(s) ({who}) in this one checkout — it stages or discards "
         f"everyone's files, or moves the branch under them. With trunk mode off the flow here "
         f"is to commit only your own files on this branch: stage explicit paths "

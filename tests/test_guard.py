@@ -652,6 +652,30 @@ def test_a_peer_that_moved_out_stops_sharing_once_its_hook_reports_the_new_cwd(c
     assert _bash(conn, "a", "git rebase main") is None
 
 
+def _main_and_worktree(conn, tmp_path):
+    """Two sessions in one checkout, plus a linked worktree of it that nobody else stands in."""
+    main = tmp_path / "repo"
+    (main / ".git").mkdir(parents=True)
+    wt = tmp_path / "wt-alice"
+    wt.mkdir()
+    (wt / ".git").write_text(f"gitdir: {main}/.git/worktrees/alice\n")
+    for sid, handle in (("a", "alice"), ("b", "bob")):
+        store.register_session(
+            conn, sid, cwd=str(main), project=str(main), project_name="alpha", claude_pid=1000
+        )
+        store.set_handle(conn, sid, handle)
+    return main, wt
+
+
+def test_a_git_op_is_judged_by_the_tree_it_acts_on_not_the_session_folder(conn, tmp_path):
+    # #29: the session started in the shared checkout and runs git in its own worktree.
+    main, wt = _main_and_worktree(conn, tmp_path)
+    assert _bash(conn, "a", f"git -C {wt} add -A") is None
+    assert _bash(conn, "a", f"cd {wt} && git add -A") is None
+    assert _bash(conn, "a", f"git -C {main} add -A") is not None  # the shared tree: still denied
+    assert _bash(conn, "a", "git add -A") is not None
+
+
 @pytest.mark.parametrize("command", SHARED_READONLY)
 def test_readonly_git_allowed_even_with_a_peer(conn, command):
     make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")

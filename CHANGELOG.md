@@ -4,6 +4,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- The shared-checkout guard judges a git command by the folder it acts on (`cd <dir> &&`,
+  `git -C <dir>`), not only by the folder the session started in. A commit in your own worktree is
+  no longer denied because peers share the main checkout (#29).
 - A push no longer fails because the tree holds uncommitted tracked changes, such as another
   agent's unfinished work in a shared checkout. The daemon makes its own checkout of your
   committed HEAD (kept between pushes, so a venv stays), rebases, runs the gate and pushes there,
