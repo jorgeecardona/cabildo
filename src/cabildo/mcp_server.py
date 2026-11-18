@@ -192,7 +192,11 @@ def _proj_topic_name(conn, topic: str | None) -> str | None:
 
 
 def _may_reach_project(
-    conn, my_project: str | None, target_project: str | None, capability: str
+    conn,
+    my_project: str | None,
+    target_project: str | None,
+    capability: str,
+    session: str | None = None,
 ) -> bool:
     """Whether a session in `my_project` may reach `target_project` with
     `capability` ('listen'|'send'). True for your own project, a legacy symmetric
@@ -210,7 +214,7 @@ def _may_reach_project(
             return True
     except Exception:
         pass
-    return store.has_grant(conn, mine, "project", tgt, capability)
+    return store.has_grant(conn, mine, "project", tgt, capability, session)
 
 
 # --------------------------------------------------------------------------- #
@@ -505,11 +509,12 @@ def join_topic(topic: str, scope: str = "local") -> dict[str, Any]:
         sid = _me(conn)
         my_project = _project_name(conn, sid)
         pj = _proj_topic_name(conn, topic)
-        if pj is not None and not _may_reach_project(conn, my_project, pj, "listen"):
+        if pj is not None and not _may_reach_project(conn, my_project, pj, "listen", sid):
             return {
                 "ok": False,
                 "error": f"#{topic} is project '{pj}'s private channel, not reachable "
-                "from yours — use `request_access` to ask for a grant",
+                f"from yours ('{(my_project or '').strip().lower()}') — use `request_access` "
+                "to ask for a grant",
             }
         # A gated (private) topic needs a 'listen' grant to join (issue #26).
         if pj is None and store.topic_is_gated(conn, topic) and (my_project or "").strip():
@@ -608,6 +613,8 @@ def request_access(
     if capability not in store.GRANT_CAPS:
         return {"ok": False, "error": f"capability must be one of {store.GRANT_CAPS}"}
     resource = resource.lstrip("#").strip()
+    if kind == "project":
+        resource = store._norm_grant_resource(kind, resource)  # a path names its folder (#52)
     with store.connect() as conn:
         sid = _me(conn)
         me_handle = _handle(conn, sid)
@@ -722,13 +729,20 @@ def grants(status: str | None = None, mine: bool = True) -> list[dict[str, Any]]
         sid = _me(conn)
         my_project = (_project_name(conn, sid) or "").strip().lower()
         if mine:
-            rows = store.list_grants(conn, grantee=my_project or None, status=status)
+            # Asked by my project, or by me before I moved to another project (#52).
+            by_id: dict[int, dict[str, Any]] = {}
+            for r in (
+                *store.list_grants(conn, grantee=my_project or None, status=status),
+                *store.list_grants(conn, requested_by=sid, status=status),
+            ):
+                by_id[r["id"]] = r
+            rows = sorted(by_id.values(), key=lambda r: -r["id"])
         else:
             # Requests whose target is my project (a project resource aimed at me).
             rows = [
                 r
                 for r in store.list_grants(conn, resource_kind="project", status=status)
-                if r["resource"] == my_project
+                if store._norm_grant_resource("project", r["resource"]) == my_project
             ]
         return rows
 
@@ -830,21 +844,23 @@ def send(
             # Two members of the same chatroom have both opted in to talk.
             roommates = store.share_a_room(conn, sid, to_session)
             if not (remote or roommates) and not _may_reach_project(
-                conn, my_project, tname, "send"
+                conn, my_project, tname, "send", sid
             ):
                 return {
                     "ok": False,
                     "error": f"'{to}' is on project '{tname.strip().lower()}', not "
-                    "reachable from yours — use `request_access` to ask for a grant",
+                    f"reachable from yours ('{(my_project or '').strip().lower()}') — use `request_access` "
+                    "to ask for a grant",
                 }
         else:
             pj = _proj_topic_name(conn, topic)
             if pj is not None:
-                if not _may_reach_project(conn, my_project, pj, "send"):
+                if not _may_reach_project(conn, my_project, pj, "send", sid):
                     return {
                         "ok": False,
                         "error": f"#{topic} is project '{pj}'s channel, not reachable "
-                        "from yours — use `request_access` to ask for a grant",
+                        f"from yours ('{(my_project or '').strip().lower()}') — use `request_access` "
+                        "to ask for a grant",
                     }
             elif topic and store.topic_is_gated(conn, topic) and (my_project or "").strip():
                 mine = (my_project or "").strip().lower()
@@ -911,7 +927,7 @@ def send_to_role(
         recipients: list[dict[str, Any]] = []
         for r in store.agents_with_role(conn, role, exclude=sid):
             tname = (r["project_name"] or "").strip().lower()
-            if not _may_reach_project(conn, my_project, tname, "send"):
+            if not _may_reach_project(conn, my_project, tname, "send", sid):
                 continue
             mid = store.post_message(
                 conn,

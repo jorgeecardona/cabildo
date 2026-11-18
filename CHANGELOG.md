@@ -4,6 +4,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- An approved project `send` grant now lets the session that asked post, also after it moves to
+  another project, and also when it named the project by its folder path. The refusal names the
+  sender's own project (#52).
 - The shared-checkout guard no longer denies `reset`, `rebase`, `merge`, `pull`, `cherry-pick`,
   `revert` and `am` just because another session is present. It denies them only when a tracked
   file has uncommitted changes (#55).

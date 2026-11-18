@@ -377,6 +377,27 @@ def test_cross_project_dm_blocked_until_granted(two_projects):
     assert srv.send("hi paas", to="ben")["ok"] is True
 
 
+def test_a_grant_asked_with_a_path_works_after_the_agent_changes_project(two_projects, conn):
+    # #52: the resource was a path and the agent later stood in another project.
+    two_projects(111)  # crm asks, naming paas by its folder
+    req = srv.request_access("/repo/paas", capability="send", kind="project")
+    assert req["ok"] is True
+    two_projects(999)
+    assert srv.grant(req["grant_id"])["ok"] is True
+    store.register_session(
+        conn, "A", cwd="/repo/oss", project="/repo/oss", project_name="oss", claude_pid=111
+    )
+    two_projects(111)
+    assert srv.send("hi paas", to="ben")["ok"] is True
+    assert [g["id"] for g in srv.grants()] == [req["grant_id"]]
+
+
+def test_the_refusal_names_the_senders_own_project(two_projects):
+    two_projects(111)
+    res = srv.send("hi paas", to="ben")
+    assert "'crm'" in res["error"]
+
+
 def test_project_approver_lets_an_agent_decide(two_projects, home):
     (home / "config.toml").write_text('[project.paas]\ngrants = { approver = "project" }\n')
     two_projects(111)  # crm asks

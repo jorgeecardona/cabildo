@@ -2064,6 +2064,8 @@ def _norm_grant_resource(kind: str, resource: str) -> str:
     opaque and kept verbatim.
     """
     r = (resource or "").strip()
+    if kind == "project" and "/" in r:
+        r = os.path.basename(r.rstrip("/"))  # a path names its project by the folder (#52)
     return r.lower() if kind in ("project", "topic") else r
 
 
@@ -2139,21 +2141,39 @@ def decide_grant(
 
 
 def has_grant(
-    conn: sqlite3.Connection, grantee: str, resource_kind: str, resource: str, capability: str
+    conn: sqlite3.Connection,
+    grantee: str,
+    resource_kind: str,
+    resource: str,
+    capability: str,
+    session: str | None = None,
 ) -> bool:
-    """True iff a GRANTED row lets `grantee` reach `resource` with `capability`."""
+    """True iff a GRANTED row lets `grantee` reach `resource` with `capability`.
+
+    A row also counts when ``session`` is the session that asked for it: the grant was
+    approved for that agent, and it keeps working after the agent moves to another project
+    (#52). A resource stored as a path matches by its folder name.
+    """
     grantee = (grantee or "").strip().lower()
     resource = _norm_grant_resource(resource_kind, resource)
-    row = conn.execute(
-        "SELECT 1 FROM grants WHERE grantee=? AND resource_kind=? AND resource=? "
+    rows = conn.execute(
+        "SELECT grantee, resource, requested_by FROM grants WHERE resource_kind=? "
         "AND capability=? AND status='granted'",
-        (grantee, resource_kind, resource, capability),
-    ).fetchone()
-    return row is not None
+        (resource_kind, capability),
+    ).fetchall()
+    return any(
+        _norm_grant_resource(resource_kind, r["resource"]) == resource
+        and (r["grantee"] == grantee or (session is not None and r["requested_by"] == session))
+        for r in rows
+    )
 
 
 def _reach_ok(
-    conn: sqlite3.Connection, mine: str | None, target: str | None, capability: str
+    conn: sqlite3.Connection,
+    mine: str | None,
+    target: str | None,
+    capability: str,
+    session: str | None = None,
 ) -> bool:
     """Whether a session in project `mine` may reach project `target` with
     `capability` ('listen'|'send'): your own project, a linked peer, or a
@@ -2170,7 +2190,7 @@ def _reach_ok(
             return True
     except Exception:
         pass
-    return has_grant(conn, m, "project", t, capability)
+    return has_grant(conn, m, "project", t, capability, session)
 
 
 def _proj_topic(topic: str | None) -> str | None:
@@ -2213,18 +2233,20 @@ def consent_error(
             return None
         if share_a_room(conn, sid, to_session):
             return None
-        if not _reach_ok(conn, mine, tname, "send"):
+        if not _reach_ok(conn, mine, tname, "send", sid):
             return (
                 f"'{to_session}' is on project '{tname.strip().lower()}', not reachable "
-                f"from yours — request_access for a grant, or link the projects"
+                f"from yours ('{(mine or '').strip().lower()}') — request_access for a grant, "
+                f"or link the projects"
             )
         return None
     pj = _proj_topic(topic)
     if pj is not None:
-        if not _reach_ok(conn, mine, pj, "send"):
+        if not _reach_ok(conn, mine, pj, "send", sid):
             return (
-                f"#{topic} is project '{pj}'s channel, not reachable from yours — "
-                f"request_access for a grant, or link the projects"
+                f"#{topic} is project '{pj}'s channel, not reachable from yours "
+                f"('{(mine or '').strip().lower()}') — request_access for a grant, "
+                f"or link the projects"
             )
         return None
     if topic and topic_is_gated(conn, topic) and (mine or "").strip():
@@ -2243,6 +2265,7 @@ def list_grants(
     resource_kind: str | None = None,
     resource: str | None = None,
     status: str | None = None,
+    requested_by: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     """Grant rows, newest first, narrowed by any of grantee/kind/resource/status."""
@@ -2254,9 +2277,12 @@ def list_grants(
     if resource_kind is not None:
         where.append("resource_kind=?")
         args.append(resource_kind)
-    if resource is not None and resource_kind is not None:
+    if resource is not None and resource_kind is not None and resource_kind != "project":
         where.append("resource=?")
         args.append(_norm_grant_resource(resource_kind, resource))
+    if requested_by is not None:
+        where.append("requested_by=?")
+        args.append(requested_by)
     if status is not None:
         where.append("status=?")
         args.append(status)
@@ -2265,7 +2291,11 @@ def list_grants(
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY id DESC LIMIT ?"
     args.append(max(1, limit))
-    return [dict(r) for r in conn.execute(sql, args).fetchall()]
+    rows = [dict(r) for r in conn.execute(sql, args).fetchall()]
+    if resource is not None and resource_kind == "project":
+        want = _norm_grant_resource("project", resource)  # a stored path matches by folder (#52)
+        rows = [r for r in rows if _norm_grant_resource("project", r["resource"]) == want]
+    return rows
 
 
 def directory(conn: sqlite3.Connection) -> list[dict[str, Any]]:
