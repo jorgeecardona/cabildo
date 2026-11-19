@@ -1672,7 +1672,7 @@ def cmd_opencode(args) -> int:
 
 
 def cmd_session_ops(args) -> int:
-    """`cabildo sessions <cmd>`: find, read, tag and trash Claude Code sessions."""
+    """`cabildo sessions <cmd>`: find, read, rename, tag and trash Claude Code sessions."""
     from . import sessions_ops
 
     root = None if args.all else os.path.abspath(args.dir)
@@ -1683,6 +1683,10 @@ def cmd_session_ops(args) -> int:
                 d = sessions_ops.describe(r)
                 tags = ",".join(r.meta.tags) or "-"
                 print(f"{str(d['id'])[:8]}  {d['date']}  {tags:20}  {d['title']}")
+            return 0
+        if args.sessions_cmd == "rename":
+            row = sessions_ops.select(root, ids=[args.id])[0]
+            print(sessions_ops.rename(row, " ".join(args.title)))
             return 0
         rows = sessions_ops.select(root, ids=args.ids, tag=args.tag)
         if args.sessions_cmd == "read":
@@ -2583,6 +2587,7 @@ def main(argv: list[str] | None = None) -> int:
     for name, help_ in (
         ("list", "sessions of this folder and its subfolders, with tags"),
         ("tag", "add or remove tags"),
+        ("rename", "give a session your own name (blank removes it)"),
         ("read", "print the user and assistant text"),
         ("trash", "move to the workspace trash (needs a session made from them)"),
     ):
@@ -2593,6 +2598,9 @@ def main(argv: list[str] | None = None) -> int:
         if name == "list":
             sp.add_argument("-q", "--query", help="match title, label, first prompt")
             sp.add_argument("-c", "--contains", help="match any user or assistant text")
+        elif name == "rename":
+            sp.add_argument("id", help="session id or 8-char prefix")
+            sp.add_argument("title", nargs="*", help="the new name; none removes it")
         else:
             sp.add_argument("ids", nargs="*", help="session ids or 8-char prefixes")
         if name == "tag":

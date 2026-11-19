@@ -479,7 +479,8 @@ KEYS = """\
    D            trash them, once a session made from them (sessions_create) has started
    n            notes for this session, separated by ; (written with no model call)
    a            list this directory / with subfolders / all directories
-   f            filter by group / tag  (g:work t:urgent; empty = all)
+   f            filter by group / tag / title  (g:work t:urgent q:trip; empty = all)
+   /            search the titles (your label and Claude's): keeps the group / tag filter
    Tab          back to Claude
    j k          move (also the arrows)
    T            CPU, wakeups and memory of each session (like top)
@@ -684,6 +685,7 @@ class SwitcherApp(App[None]):
         Binding("x", "close", "Close"),
         Binding("a", "toggle_all", "Scope"),
         Binding("f", "filter", "Filter"),
+        Binding("slash", "search", "Search"),
         Binding("tab", "focus_main", "To Claude", show=False),
         Binding("l", "edit_label", "Label"),
         Binding("g", "edit_group", "Group"),
@@ -722,7 +724,7 @@ class SwitcherApp(App[None]):
         self.rows: list[Row] = []
         self.selected: set[str] = set()  # `space`: head session ids the bulk actions act on
         self.scope: Scope = "here"  # `a` rotates it: here, subfolders, all
-        self.filter = Filter()  # `f`: the list shows only these groups / tags
+        self.filter = Filter()  # `f`: the list shows only these groups / tags / titles
         self.reading = False  # a scan for a new scope is on its way
         self.plan_usage: PlanUsage | None = None  # the subscription's limits, once fetched
         self.plan_pace: plan.PlanPace | None = None  # how fast they fill
@@ -1699,7 +1701,7 @@ class SwitcherApp(App[None]):
         self._save_state()
 
     def action_filter(self) -> None:
-        """`f`: show only some groups / tags, as `g:work t:urgent`; empty shows all."""
+        """`f`: show only some groups / tags / titles, as `g:work t:urgent q:trip`; empty shows all."""
         meta = sessions.load_meta().values()
         groups = sorted({m.group for m in meta if m.group}, key=str.lower)
         tags = sorted({t for m in meta for t in m.tags}, key=str.lower)
@@ -1723,6 +1725,22 @@ class SwitcherApp(App[None]):
                 self._save_state()
 
         self.push_screen(EditScreen("Filter:", self.filter.text(), choices, words=True), done)
+
+    def action_search(self) -> None:
+        """`/`: show only the conversations whose title has every word typed; empty clears."""
+
+        def done(value: str | None) -> None:
+            if value is None:
+                return
+            words = tuple(value.split())
+            if words != self.filter.titles:
+                self.filter = replace(self.filter, titles=words)
+                self.reading = True
+                self._modeline()
+                self.reload()
+                self._save_state()
+
+        self.push_screen(EditScreen("Search titles:", " ".join(self.filter.titles)), done)
 
     def action_leader(self) -> None:
         """The leader: a hint bar over the bottom line; the next key starts an action.
@@ -1780,7 +1798,8 @@ class SwitcherApp(App[None]):
         )
         yield SystemCommand("Top", "CPU, wakeups and memory of each session", self.action_top)
         yield SystemCommand("Scope", "This directory / subfolders / all", self.action_toggle_all)
-        yield SystemCommand("Filter", "Show only some groups / tags", self.action_filter)
+        yield SystemCommand("Filter", "Show only some groups / tags / titles", self.action_filter)
+        yield SystemCommand("Search", "Show only titles with these words", self.action_search)
         yield SystemCommand("Keys", "Show all keys", self.action_toggle_keys)
 
     def action_toggle_keys(self) -> None:

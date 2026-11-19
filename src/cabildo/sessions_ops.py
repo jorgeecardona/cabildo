@@ -151,6 +151,23 @@ def tag(selected: list[ws.Row], add: Iterable[str] = (), remove: Iterable[str] =
 
 
 # --------------------------------------------------------------------------- #
+# Names
+# --------------------------------------------------------------------------- #
+def rename(row: ws.Row, title: str) -> str:
+    """Give the conversation your own name; "" removes it, so Claude's title shows again.
+
+    Returns the title the list shows afterwards. The name is the sidecar label: the
+    transcript is not touched, so Claude's ``/resume`` keeps its own title.
+    """
+    label = " ".join(title.split())
+    with ws.meta_locked():
+        meta = ws.load_meta()
+        meta[row.meta_key] = replace(meta.get(row.meta_key, ws.Meta()), label=label)
+        ws.save_meta(meta)
+    return label or row.title
+
+
+# --------------------------------------------------------------------------- #
 # Reading a transcript
 # --------------------------------------------------------------------------- #
 def clean(text: str) -> str:

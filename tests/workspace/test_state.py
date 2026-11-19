@@ -38,7 +38,7 @@ def test_save_then_load(state_home: Path) -> None:
     saved = OpenState(
         cwd="/work/proj",
         all_dirs=True,
-        filter=Filter(groups=("work",), tags=("a", "b")),
+        filter=Filter(groups=("work",), tags=("a", "b"), titles=("trip",)),
         open=("a", "b"),
         shown="b",
     )

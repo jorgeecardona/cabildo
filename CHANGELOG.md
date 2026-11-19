@@ -4,6 +4,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- You can rename a session and search sessions by title. `cabildo sessions rename <id> <name>`
+  and the `sessions_rename` MCP tool set your own name (blank removes it; Claude's title shows
+  again). In the workspace, `/` searches the titles, and `f` takes `q:<word>` next to `g:` and
+  `t:`. Search matches your name and Claude's title, so a renamed session is still found by
+  either. `sessions_list(query=...)` and `cabildo sessions list -q` already searched titles.
 - The shared-checkout guard judges a git command by the folder it acts on (`cd <dir> &&`,
   `git -C <dir>`), not only by the folder the session started in. A commit in your own worktree is
   no longer denied because peers share the main checkout (#29).

@@ -29,6 +29,35 @@ def test_tag_then_list_by_tag(transcript: Transcript) -> None:
     assert ops.rows(PROJECT, tag="relationship")[0].meta.tags == ("relationship",)
 
 
+def test_rename_is_found_by_query_and_blank_gives_claudes_title_back(
+    transcript: Transcript,
+) -> None:
+    _two(transcript)
+    row = ops.select(PROJECT, ids=["aaaa"])[0]
+    assert ops.rename(row, "  Lisbon   flights ") == "Lisbon flights"
+    assert [r.chain[0].session_id for r in ops.rows(PROJECT, query="lisbon")] == ["aaaa1111"]
+    assert (
+        ops.rows(PROJECT, query="trip")[0].display_title == "Lisbon flights"
+    )  # Claude's title too
+    again = ops.select(PROJECT, ids=["aaaa"])[0]
+    assert ops.rename(again, "") == "Trip"
+    assert ops.rows(PROJECT, query="lisbon") == []
+
+
+def test_cli_rename_then_list_by_query(
+    transcript: Transcript, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from cabildo import cli
+
+    _two(transcript)
+    assert cli.main(["sessions", "rename", "--all", "aaaa", "Lisbon", "flights"]) == 0
+    assert capsys.readouterr().out.strip() == "Lisbon flights"
+    assert cli.main(["sessions", "list", "--all", "-q", "lisbon"]) == 0
+    out = capsys.readouterr().out
+    assert "aaaa1111"[:8] in out and "bbbb" not in out
+    assert cli.main(["sessions", "rename", "--all", "zzzz", "x"]) == 1  # unknown id
+
+
 def test_select_needs_ids_or_tag_and_rejects_unknown(transcript: Transcript) -> None:
     _two(transcript)
     with pytest.raises(ops.SessionsError):

@@ -164,8 +164,39 @@ def test_filter_text_and_parse_are_inverse() -> None:
     assert Filter.parse("G:work T:x") == Filter(groups=("work",), tags=("x",))
 
 
-@pytest.mark.parametrize("text", ["work", "x:work", "g:", "t: "])
-def test_filter_parse_refuses_words_without_g_or_t(text: str) -> None:
+def test_filter_title_words_all_match_the_title_without_case() -> None:
+    only = Filter(titles=("trip", "PARIS"))
+    assert only.active
+    assert only.matches(Meta(), "my label\nPlan the Paris trip")
+    assert not only.matches(Meta(), "plan the trip")  # one word missing
+    assert not only.matches(Meta())  # no title given
+    assert Filter(titles=("x",), groups=("work",)).matches(Meta(group="work"), "x") is True
+    assert not Filter(titles=("x",), groups=("work",)).matches(Meta(group="home"), "x")
+
+
+def test_filter_title_words_in_text_and_parse() -> None:
+    only = Filter(groups=("work",), titles=("trip", "to paris"))
+    assert only.text() == "g:work q:trip 'q:to paris'"
+    assert Filter.parse(only.text()) == only
+
+
+def test_build_rows_finds_a_conversation_by_its_label_or_claude_title(transcript) -> None:
+    transcript("a", user("one"), ai_title("Trip to Paris"))
+    transcript("b", user("two"), ai_title("Fix the bug"))
+    assert [
+        r.head.session_id for r in sessions.build_rows(PROJECT, only=Filter(titles=("paris",)))
+    ] == ["a"]
+    sessions.save_meta({"b": Meta(label="Paris visa")})
+    found = sessions.build_rows(PROJECT, only=Filter(titles=("paris",)))
+    assert sorted(r.head.session_id for r in found) == ["a", "b"]
+    # a renamed conversation is still found by Claude's own title
+    assert [
+        r.head.session_id for r in sessions.build_rows(PROJECT, only=Filter(titles=("bug",)))
+    ] == ["b"]
+
+
+@pytest.mark.parametrize("text", ["work", "x:work", "g:", "t: ", "q:"])
+def test_filter_parse_refuses_words_without_g_t_or_q(text: str) -> None:
     with pytest.raises(ValueError):
         Filter.parse(text)
 

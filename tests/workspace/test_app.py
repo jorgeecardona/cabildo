@@ -251,6 +251,33 @@ def test_tab_in_the_filter_completes_the_last_word(
     assert seen == [after_tab]
 
 
+def test_slash_searches_the_titles_and_keeps_the_group_filter(transcript, monkeypatch) -> None:
+    grouped(transcript)
+    sessions.update_meta("s1", lambda m: replace(m, label="Paris visa"))
+    seen: list = []
+
+    async def scenario(app, pilot) -> None:
+        for key in ["slash", "p", "a", "r", "enter"]:
+            await pilot.press(key)
+        await settle(app, pilot)
+        seen.append(listed(app))
+        for key in ["f", "ctrl+u", "g", "colon", "h", "o", "m", "e", "enter"]:
+            await pilot.press(key)  # `f` replaces the whole filter, titles included
+        await settle(app, pilot)
+        seen.append(listed(app))
+        for key in ["slash", "s", "2", "enter"]:
+            await pilot.press(key)
+        await settle(app, pilot)
+        seen.append(listed(app))
+        for key in ["slash", "ctrl+u", "enter"]:  # empty: the group filter stays
+            await pilot.press(key)
+        await settle(app, pilot)
+        seen.append(listed(app))
+
+    drive(monkeypatch, scenario)
+    assert seen == [["s1"], ["s2"], ["s2"], ["s2"]]
+
+
 def test_a_bad_filter_changes_nothing(transcript, monkeypatch) -> None:
     grouped(transcript)
     seen: list = []
@@ -262,7 +289,7 @@ def test_a_bad_filter_changes_nothing(transcript, monkeypatch) -> None:
         seen.extend([len(app.rows), notes(app)])
 
     drive(monkeypatch, scenario)
-    assert seen == [3, ["Filter not changed: not g:<group> or t:<tag>: w"]]
+    assert seen == [3, ["Filter not changed: not g:<group>, t:<tag> or q:<title text>: w"]]
 
 
 def test_the_filter_comes_back_and_the_command_line_replaces_it(transcript, monkeypatch) -> None:

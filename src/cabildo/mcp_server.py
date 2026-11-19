@@ -1774,6 +1774,27 @@ def sessions_tag(
 
 
 @mcp.tool()
+def sessions_rename(
+    id: str,
+    title: str,
+    all_projects: bool = False,
+) -> dict[str, Any]:
+    """Give one session your own name (id or 8-char prefix from ``sessions_list``).
+
+    An empty ``title`` removes the name, so Claude's own title shows again.
+    ``sessions_list(query=...)`` finds a session by this name.
+    """
+    from . import sessions_ops
+
+    try:
+        _sid, _root, rows = _sessions_select([id], None, all_projects)
+        shown = sessions_ops.rename(rows[0], title)
+    except sessions_ops.SessionsError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "title": shown}
+
+
+@mcp.tool()
 def sessions_create(
     prompt: str,
     made_from: list[str] | None = None,

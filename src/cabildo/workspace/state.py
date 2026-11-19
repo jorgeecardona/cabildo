@@ -23,7 +23,9 @@ class OpenState:
 
     cwd: str  # the list directory (the app's own)
     all_dirs: bool = False  # the list showed every directory (`a`)
-    filter: Filter = NO_FILTER  # the list showed only these groups / tags (`f`, -G, -t)
+    filter: Filter = (
+        NO_FILTER  # the list showed only these groups / tags / title words (`f`, -G, -t)
+    )
     open: tuple[str, ...] = ()  # session ids of the open conversations, in opening order
     shown: str | None = None  # the one in the main pane
 
@@ -65,7 +67,11 @@ def _names(raw: object) -> tuple[str, ...]:
 def _read_filter(raw: object) -> Filter:
     if not isinstance(raw, dict):
         return NO_FILTER
-    return Filter(groups=_names(raw.get("groups")), tags=_names(raw.get("tags")))
+    return Filter(
+        groups=_names(raw.get("groups")),
+        tags=_names(raw.get("tags")),
+        titles=_names(raw.get("titles")),
+    )
 
 
 def save(state: OpenState) -> None:
@@ -77,7 +83,11 @@ def save(state: OpenState) -> None:
     payload = {
         "cwd": state.cwd,
         "all_dirs": state.all_dirs,
-        "filter": {"groups": list(state.filter.groups), "tags": list(state.filter.tags)},
+        "filter": {
+            "groups": list(state.filter.groups),
+            "tags": list(state.filter.tags),
+            "titles": list(state.filter.titles),
+        },
         "open": list(state.open),
         "shown": state.shown,
     }

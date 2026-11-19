@@ -124,42 +124,54 @@ class Meta:
 
 @dataclass(frozen=True)
 class Filter:
-    """Which conversations the list shows: group is one of `groups` (when any) AND at least
-    one tag is in `tags` (when any). Names compare without case.
+    """Which conversations the list shows: group is one of `groups` (when any), at least
+    one tag is in `tags` (when any), AND every word of `titles` is in the title. Names
+    compare without case.
     """
 
     groups: tuple[str, ...] = ()
     tags: tuple[str, ...] = ()
+    titles: tuple[str, ...] = ()
 
     @property
     def active(self) -> bool:
-        return bool(self.groups or self.tags)
+        return bool(self.groups or self.tags or self.titles)
 
-    def matches(self, meta: Meta) -> bool:
+    def matches(self, meta: Meta, title: str = "") -> bool:
+        """``title`` is the text the title words are looked up in (see ``Row.titles``)."""
         if self.groups and meta.group.casefold() not in {g.casefold() for g in self.groups}:
             return False
+        if self.titles:
+            haystack = title.casefold()
+            if not all(t.casefold() in haystack for t in self.titles):
+                return False
         if self.tags:
             want = {t.casefold() for t in self.tags}
             return any(t.casefold() in want for t in meta.tags)
         return True
 
     def text(self) -> str:
-        """As typed in the `f` minibuffer: `g:work t:urgent` (quoted when a name has spaces)."""
-        words = [f"g:{g}" for g in self.groups] + [f"t:{t}" for t in self.tags]
+        """As typed in the `f` minibuffer: `g:work t:urgent q:trip` (quoted when a name has
+        spaces).
+        """
+        words = (
+            [f"g:{g}" for g in self.groups]
+            + [f"t:{t}" for t in self.tags]
+            + [f"q:{q}" for q in self.titles]
+        )
         return " ".join(shlex.quote(w) for w in words)
 
     @classmethod
     def parse(cls, text: str) -> Filter:
-        """The inverse of `text`. Raises ValueError on a word without `g:` / `t:`."""
-        groups: list[str] = []
-        tags: list[str] = []
+        """The inverse of `text`. Raises ValueError on a word without `g:`, `t:` or `q:`."""
+        found: dict[str, list[str]] = {"g": [], "t": [], "q": []}
         for word in shlex.split(text):
             kind, _, name = word.partition(":")
             kind, name = kind.lower(), name.strip()
-            if kind not in ("g", "t") or not name:
-                raise ValueError(f"not g:<group> or t:<tag>: {word}")
-            (groups if kind == "g" else tags).append(name)
-        return cls(groups=tuple(groups), tags=tuple(tags))
+            if kind not in found or not name:
+                raise ValueError(f"not g:<group>, t:<tag> or q:<title text>: {word}")
+            found[kind].append(name)
+        return cls(groups=tuple(found["g"]), tags=tuple(found["t"]), titles=tuple(found["q"]))
 
 
 NO_FILTER = Filter()  # every conversation
@@ -299,6 +311,11 @@ class Row:
     @property
     def display_title(self) -> str:
         return self.meta.label or self.title
+
+    @property
+    def titles(self) -> str:
+        """Every name the conversation answers to: your label, then Claude's title."""
+        return f"{self.meta.label}\n{self.title}"
 
     @property
     def cwd(self) -> str:
@@ -735,8 +752,9 @@ def build_rows(
     for chain in chains(scan(cwd, cancelled, subfolders)):
         key = next((s.session_id for s in chain if s.session_id in meta), chain[0].session_id)
         row_meta = meta.get(key, Meta())
-        if only.matches(row_meta):
-            rows.append(Row(chain=chain, meta=row_meta, meta_key=key))
+        row = Row(chain=chain, meta=row_meta, meta_key=key)
+        if only.matches(row_meta, row.titles):
+            rows.append(row)
     # group together, ungrouped last, then newest-first inside each group
     rows.sort(key=lambda r: (r.meta.group == "", r.meta.group, -r.mtime))
     return rows
