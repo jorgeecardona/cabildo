@@ -519,3 +519,34 @@ def test_control_uses_launchctl_load_unload_on_darwin(darwin, monkeypatch):
     calls.clear()
     service.control("restart", unit)
     assert calls == [("unload", path), ("load", path)]
+
+
+# --- reload ------------------------------------------------------------------- #
+def test_the_unit_has_an_exec_reload_that_sends_hup(linux):
+    assert "ExecReload=/bin/kill -HUP $MAINPID" in service.render(service.daemon_unit())
+
+
+def test_reload_sends_hup_to_the_main_process_on_linux(linux, monkeypatch):
+    calls = []
+
+    def fake(*args, capture=True):
+        calls.append(args)
+        return subprocess.CompletedProcess(list(args), 0, "", "")
+
+    monkeypatch.setattr(service, "systemctl", fake)
+    unit = service.daemon_unit()
+    assert service.reload(unit)[0] == 0
+    assert calls == [("kill", "--signal=HUP", "--kill-whom=main", unit.name)]
+
+
+def test_reload_sends_sighup_through_launchctl_on_darwin(darwin, monkeypatch):
+    calls = []
+    monkeypatch.setattr(service, "systemctl", lambda *a, **k: pytest.fail("systemctl on macOS"))
+    monkeypatch.setattr(
+        service,
+        "launchctl",
+        lambda *a, capture=True: calls.append(a) or subprocess.CompletedProcess(list(a), 0, "", ""),
+    )
+    unit = service.daemon_unit()
+    service.reload(unit)
+    assert calls == [("kill", "SIGHUP", f"gui/{service.os.getuid()}/{unit.label}")]

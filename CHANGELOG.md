@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- `cabildo service reload` makes the daemon finish the intents it is running (a push in its gate,
+  for example), take no new one, then start again on the current code in the same process
+  (SIGHUP, `systemctl --user reload` too). `restart` still stops it at once and kills a running
+  push. After this version, re-run `cabildo service install` once so the unit has `ExecReload`.
 - `browser_login` needs no config: with no `site`, it fills from the 1Password Login item whose
   website URL has the page's origin (same `https`, host and port). Several matches are listed and
   `site=<title>` picks one. A `[browser.login.<site>]` table still wins for its origin. A locked

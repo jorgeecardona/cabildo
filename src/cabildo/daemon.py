@@ -20,10 +20,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import socket
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from . import (
@@ -49,6 +51,10 @@ STALE_AFTER = actions.GATE_TIMEOUT + 300
 IMPROVE_POPUP_EVERY = 60.0
 # How long exit waits for running actions before failing them.
 WORKER_JOIN_TIMEOUT = 30.0
+#: ``main`` returns this after SIGHUP, once no intent is running: ``run`` then re-executes the
+#: daemon with the same arguments, so the same process id carries new code (``cabildo service reload``).
+RELOAD_EXIT = 75
+RELOAD_LOG_EVERY = 60.0  # how often a draining daemon says what it waits for
 # How often the poll loop sweeps for sessions whose owning claude died without
 # firing the SessionEnd hook. Cheap (one os.kill per active session) but not
 # worth doing on every 2s tick.
@@ -331,6 +337,26 @@ def _write_info() -> None:
         _log(f"cannot write {info_path()}: {e}")
 
 
+def _on_sighup(reloading: threading.Event) -> signal.Handlers | Callable[..., object] | int | None:
+    """Make SIGHUP ask for a reload. Returns the old handler, or None where it cannot be set.
+
+    A signal handler can only be set from the main thread, so a daemon run on another thread
+    (a test) is simply not reloadable.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        return None
+    return signal.signal(signal.SIGHUP, lambda _sig, _frame: reloading.set())
+
+
+def run(argv: list[str] | None = None) -> int:
+    """``main``, then, after a reload request, the same command line again in this process."""
+    code = main(argv)
+    if code == RELOAD_EXIT:
+        sys.stdout.flush()
+        os.execv(sys.executable, sys.orig_argv)  # noqa: S606
+    return code
+
+
 def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) -> int:
     p = argparse.ArgumentParser(prog="cabildo-daemon", description=(__doc__ or "").split("\n")[0])
     p.add_argument(
@@ -529,6 +555,9 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
     shown_proposals: set[int] = set()
     ci_every = 0.0 if args.once else config.ci_poll()
     ci_thread: threading.Thread | None = None
+    reloading = threading.Event()
+    last_drain_log = 0.0
+    old_hup = _on_sighup(reloading) if not args.once else None
     try:
         while True:
             if stop is not None and stop.is_set():
@@ -536,7 +565,15 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
             # Intents in different lanes (a push per project) run in parallel;
             # take_next_intent never hands out a second one from a busy lane.
             workers = [t for t in workers if t.is_alive()]
-            if len(workers) < args.workers:
+            if reloading.is_set():
+                # SIGHUP: take no new intent, let the running ones finish, then start over.
+                if not workers:
+                    _log("reload: nothing is running, restarting on the new code")
+                    return RELOAD_EXIT
+                if time.monotonic() - last_drain_log >= RELOAD_LOG_EVERY:
+                    last_drain_log = time.monotonic()
+                    _log(f"reload: waiting for {len(workers)} running intent(s) to finish")
+            elif len(workers) < args.workers:
                 intent = store.take_next_intent(conn, worker)
                 if intent is not None:
                     t = threading.Thread(target=_handle_on_thread, args=(intent, ctx), daemon=True)
@@ -597,6 +634,8 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
         _log("bye")
         return 0
     finally:
+        if old_hup is not None:
+            signal.signal(signal.SIGHUP, old_hup)
         # Let running actions finish, then fail what is still running: a row
         # left 'running' blocks its lane until a reaper sees it.
         deadline = time.monotonic() + WORKER_JOIN_TIMEOUT
@@ -616,4 +655,4 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run())

@@ -121,16 +121,16 @@ def test_list_logins_falls_back_to_item_get_when_the_list_has_no_urls():
         ' "urls": [{"href": "https://github.com"}]}]'
     )
     outs = iter([bare, full])
+    calls: list[tuple[list[str], dict]] = []
 
     def runner(argv, **kw):
-        runner.calls.append((argv, kw))
+        calls.append((argv, kw))
         return subprocess.CompletedProcess(argv, 0, next(outs), "")
 
-    runner.calls = []
     items = op.list_logins(runner=runner)
     assert items[0].urls == ("https://github.com",)
-    assert runner.calls[1][0] == ["op", "item", "get", "-", "--format", "json"]
-    assert ID_A in runner.calls[1][1]["input"]
+    assert calls[1][0] == ["op", "item", "get", "-", "--format", "json"]
+    assert ID_A in calls[1][1]["input"]
 
 
 def test_a_signed_out_op_says_how_to_fix_it():

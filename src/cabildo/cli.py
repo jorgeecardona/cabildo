@@ -2043,6 +2043,16 @@ def cmd_service(args) -> int:
             steps.append((f"{args.action} {u.name}", rc, out))
         return _print_steps(steps)
 
+    if args.action == "reload":
+        units = _service_selected(args)
+        rc = _print_steps([(f"reload {u.name}", *service.reload(u)) for u in units])
+        if rc == 0:
+            print(
+                f"  {C.DIM}the daemon finishes the intents it is running, then starts again on "
+                f"the current code. Watch: cabildo service logs -f{C.OFF}"
+            )
+        return rc
+
     if args.action == "logs":
         units = _service_selected(args)
         import subprocess
@@ -2896,7 +2906,7 @@ def main(argv: list[str] | None = None) -> int:
         "action",
         nargs="?",
         default="status",
-        choices=["install", "status", "logs", "start", "stop", "restart", "uninstall"],
+        choices=["install", "status", "logs", "start", "stop", "restart", "reload", "uninstall"],
         help="default: status",
     )
     sv.add_argument(

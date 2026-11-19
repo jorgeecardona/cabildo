@@ -211,8 +211,13 @@ install, and about more than one `cabildo` on `PATH`.
 
 ```bash
 pip install -U cabildo            # or: uv pip install -U cabildo
-cabildo service restart           # the daemon
+cabildo service reload            # the daemon, after it finishes what it is running
 ```
+
+`reload` makes the daemon take no new intent, wait for the pushes and other intents it is
+running, then start again on the new code in the same process. `cabildo service restart` stops
+it at once and kills a push in the middle of its gate. Use `restart` after you change the unit's
+flags with `cabildo service install`.
 
 Then restart each Claude session, which restarts its MCP server.
 

@@ -235,6 +235,7 @@ After=default.target
 [Service]
 Type=simple
 ExecStart={exec_start}
+ExecReload=/bin/kill -HUP $MAINPID
 WorkingDirectory=%h
 {env_lines}Restart=always
 RestartSec={unit.restart_sec}
@@ -319,6 +320,20 @@ def control(action: str, unit: Unit) -> tuple[int, str]:
             p = launchctl("load", str(unit.path))
     else:
         p = systemctl(action, unit.name)
+    return p.returncode, ((p.stderr or "") + (p.stdout or "")).strip()
+
+
+def reload(unit: Unit) -> tuple[int, str]:
+    """Ask the running daemon to reload: it finishes the intents it is running, takes no new one,
+    then starts again on the current code in the same process.
+
+    A restart kills a push in the middle of its gate. A reload waits for it. The flags of the unit
+    do not change: after ``cabildo service install`` with new flags, use ``restart``.
+    """
+    if sys.platform == "darwin":
+        p = launchctl("kill", "SIGHUP", f"gui/{os.getuid()}/{unit.label}")
+    else:
+        p = systemctl("kill", "--signal=HUP", "--kill-whom=main", unit.name)
     return p.returncode, ((p.stderr or "") + (p.stdout or "")).strip()
 
 
