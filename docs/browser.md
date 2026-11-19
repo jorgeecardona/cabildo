@@ -81,8 +81,20 @@ Not available yet: `browser_drag`, `browser_drop`, `browser_find`, `browser_netw
 Use this when a saved login has expired. The agent calls `browser_login`, and the server fills the
 form from 1Password. The password never reaches the agent.
 
-1. Put the logins in a vault the 1Password CLI can read, and install `op`.
-2. Add one table per site to `~/.cabildo/config.toml`:
+1. Install `op`, unlock 1Password, and turn on Settings > Developer > Integrate with 1Password
+   CLI.
+2. Give each Login item the website URL of its site. That URL is what ties the item to a page.
+
+No config is needed. The agent calls `browser_login(username_target, password_target)` on the
+login page. The server lists your Login items (`op item list`) and uses the one whose website URL
+has the page's origin: same `https`, host and port. The targets are refs from `browser_snapshot`.
+Set `submit` to press Enter in the last field.
+
+If several items match, the answer lists them (title and vault). The agent calls again with
+`site` set to one title. A title only picks among items already matched to the page.
+
+Optional: pin a login in `~/.cabildo/config.toml`. A table for the page's origin wins over an
+item, and lets you name the fields:
 
 ```toml
 [browser.login.github]
@@ -92,22 +104,21 @@ password = "op://Cabildo/GitHub/password"
 otp      = "op://Cabildo/GitHub/one-time password?attribute=otp"
 ```
 
-`otp` is optional. The file is read only from `~/.cabildo/config.toml`, never from a repo.
-
-The agent calls `browser_login(site, username_target, password_target)`. The targets are refs
-from `browser_snapshot`. Set `submit` to press Enter in the last field.
+`otp` is optional. The file is read only from `~/.cabildo/config.toml`, never from a repo. With
+`site = "github"` the agent picks a table by name.
 
 Every target is optional. A site that asks for the one-time code on a second page needs a second
-call with only the code: `browser_login(site, otp_target=...)`. A site that asks for the password
+call with only the code: `browser_login(otp_target=...)`. A site that asks for the password
 on its own page needs a call with only `password_target`. Each call is checked as in the rules
-below.
+below. A login found without a table reads `username`, `password` and `one-time password` from the
+item.
 
 Rules the server enforces:
 
-- The page must be on the site's `origin` exactly: same scheme, host and port. Otherwise nothing
-  is read and nothing is filled.
+- The page must be on the login's origin exactly (the table's `origin`, or the item's website URL):
+  same scheme, host and port. Otherwise nothing is read and nothing is filled.
 - Each field must be in a document on that origin. A frame from another origin is refused.
 - The password goes only into a password field.
 - The password and the code are hidden in every tool result until the page navigates. While they
   are in the page, `browser_evaluate` is refused.
-- The agent names a site. It cannot pass an `op://` reference of its own.
+- The agent can name a site or an item title. It cannot pass an `op://` reference of its own.

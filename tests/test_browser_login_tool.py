@@ -286,3 +286,118 @@ def test_the_code_alone_is_still_origin_checked(tmp_path: Path) -> None:
     text = call(mcp, "browser_login", {"site": "github", "otp_target": "e3"})
     assert text.startswith("refused:")
     assert reads == []
+
+
+# --- no table: the login is the 1Password item whose website is the page's origin ------------
+
+VAULT = "v" * 26
+
+
+def item(letter: str, title: str, *urls: str, vault: str = "Personal") -> onepassword.Item:
+    return onepassword.Item(letter * 26, title, VAULT, vault, urls)
+
+
+def auto(
+    tmp_path: Path, items: list[onepassword.Item], reads: list[str] | None = None
+) -> tuple[FakeSession, FastMCP]:
+    def read(ref: str) -> onepassword.Secret:
+        if reads is not None:
+            reads.append(ref)
+        return onepassword.Secret(f"value-of-{ref.rsplit('/', 1)[1]}")
+
+    session = FakeSession(output_dir=tmp_path, read_secret=read, list_logins=lambda: items)
+    session.__post_init__()
+    return session, server.build(session)
+
+
+AUTO = {"username_target": "e1", "password_target": "e2"}
+
+
+def test_without_a_table_the_item_with_this_origin_is_filled(tmp_path: Path) -> None:
+    reads: list[str] = []
+    items = [
+        item("a", "GitHub", "https://github.com/login"),
+        item("b", "GitLab", "https://gitlab.com"),
+    ]
+    session, mcp = auto(tmp_path, items, reads)
+    text = call(mcp, "browser_login", AUTO)
+    assert text.startswith("filled GitHub from 1Password")
+    assert reads == [f"op://{VAULT}/{'a' * 26}/username", f"op://{VAULT}/{'a' * 26}/password"]
+    assert ("fill", "aria-ref=e2", "value-of-password") in session.fake.log
+    assert "value-of-password" not in text
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com.evil.com/",
+        "http://github.com/",
+        "https://github.com:8443/",
+        "about:blank",
+    ],
+)
+def test_an_item_only_matches_the_exact_https_origin(tmp_path: Path, url: str) -> None:
+    reads: list[str] = []
+    session, mcp = auto(tmp_path, [item("a", "GitHub", "https://github.com")], reads)
+    session.fake.url = url
+    assert call(mcp, "browser_login", AUTO).startswith("refused: no 1Password Login")
+    assert reads == []
+    assert session.fake.log == []
+
+
+def test_an_item_with_a_lookalike_url_is_not_used(tmp_path: Path) -> None:
+    items = [item("a", "Fake", "https://github.com.evil.com", "http://github.com")]
+    _session, mcp = auto(tmp_path, items)
+    assert call(mcp, "browser_login", AUTO).startswith("refused: no 1Password Login")
+
+
+def test_several_matches_are_listed_and_a_title_picks_one(tmp_path: Path) -> None:
+    items = [
+        item("a", "GitHub work", "https://github.com", vault="Work"),
+        item("b", "GitHub home", "https://github.com", vault="Home"),
+    ]
+    session, mcp = auto(tmp_path, items)
+    text = call(mcp, "browser_login", AUTO)
+    assert text.startswith("refused: several 1Password logins")
+    assert "GitHub home (Home); GitHub work (Work)" in text
+    assert session.fake.log == []
+    picked = call(mcp, "browser_login", {**AUTO, "site": "github HOME"})
+    assert picked.startswith("filled GitHub home")
+    assert ("fill", "aria-ref=e1", "value-of-username") in session.fake.log
+
+
+def test_a_site_title_cannot_reach_an_item_of_another_origin(tmp_path: Path) -> None:
+    items = [item("a", "GitHub", "https://github.com"), item("b", "Bank", "https://bank.example")]
+    session, mcp = auto(tmp_path, items)
+    assert call(mcp, "browser_login", {**AUTO, "site": "Bank"}).startswith("refused: no 1Password")
+    assert session.fake.log == []
+
+
+def test_the_table_wins_over_an_item_for_the_same_origin(tmp_path: Path) -> None:
+    reads: list[str] = []
+    session, mcp = make(tmp_path, reads)
+    session.list_logins = lambda: [item("a", "GitHub", GITHUB)]
+    text = call(mcp, "browser_login", {"username_target": "e1", "password_target": "e2"})
+    assert text.startswith("filled github")
+    assert reads == [ENTRY["username"], ENTRY["password"]]
+
+
+def test_a_reference_is_never_accepted_as_a_site(tmp_path: Path) -> None:
+    reads: list[str] = []
+    _session, mcp = auto(tmp_path, [item("a", "GitHub", GITHUB)], reads)
+    text = call(mcp, "browser_login", {**AUTO, "site": "op://Personal/GitHub/password"})
+    assert text.startswith("refused")
+    assert reads == []
+
+
+def test_a_locked_1password_is_reported_when_listing(tmp_path: Path) -> None:
+    session, mcp = auto(tmp_path, [])
+
+    def locked() -> list[onepassword.Item]:
+        msg = "op item list failed (exit 1): account is not signed in"
+        raise onepassword.OpError(msg)
+
+    session.list_logins = locked
+    text = call(mcp, "browser_login", AUTO)
+    assert text.startswith("refused: could not read from 1Password")
+    assert session.fake.log == []

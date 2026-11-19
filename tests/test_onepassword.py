@@ -92,3 +92,59 @@ def test_run_argv_puts_the_command_after_a_double_dash():
 def test_run_argv_refuses_an_empty_command():
     with pytest.raises(op.OpError):
         op.run_argv(Path(".env"), [])
+
+
+ID_V, ID_A, ID_B = "v" * 26, "a" * 26, "b" * 26
+LISTING = (
+    '[{"id": "%s", "title": "GitHub", "vault": {"id": "%s", "name": "Personal"},'
+    ' "urls": [{"primary": true, "href": "https://github.com/login"}]},'
+    ' {"id": "not-an-id", "title": "Bad", "vault": {"id": "%s"}, "urls": []},'
+    ' {"id": "%s", "title": "No urls", "vault": {"id": "%s"}}]'
+) % (ID_A, ID_V, ID_V, ID_B, ID_V)
+
+
+def test_list_logins_returns_items_with_urls_and_skips_bad_ids():
+    fake = Fake(out=LISTING)
+    items = op.list_logins(runner=fake)
+    assert [i.title for i in items] == ["GitHub", "No urls"]
+    assert items[0].urls == ("https://github.com/login",)
+    assert items[0].ref("password") == f"op://{ID_V}/{ID_A}/password"
+    argv, kw = fake.calls[0]
+    assert argv == ["op", "item", "list", "--categories", "Login", "--format", "json"]
+    assert "shell" not in kw
+
+
+def test_list_logins_falls_back_to_item_get_when_the_list_has_no_urls():
+    bare = f'[{{"id": "{ID_A}", "title": "GitHub", "vault": {{"id": "{ID_V}"}}}}]'
+    full = (
+        f'[{{"id": "{ID_A}", "title": "GitHub", "vault": {{"id": "{ID_V}", "name": "P"}},'
+        ' "urls": [{"href": "https://github.com"}]}]'
+    )
+    outs = iter([bare, full])
+
+    def runner(argv, **kw):
+        runner.calls.append((argv, kw))
+        return subprocess.CompletedProcess(argv, 0, next(outs), "")
+
+    runner.calls = []
+    items = op.list_logins(runner=runner)
+    assert items[0].urls == ("https://github.com",)
+    assert runner.calls[1][0] == ["op", "item", "get", "-", "--format", "json"]
+    assert ID_A in runner.calls[1][1]["input"]
+
+
+def test_a_signed_out_op_says_how_to_fix_it():
+    fake = Fake(rc=1, err="[ERROR] 2026/11/19 15:05:10 account is not signed in")
+    with pytest.raises(op.OpError) as err:
+        op.list_logins(runner=fake)
+    assert "Integrate with 1Password CLI" in str(err.value)
+    with pytest.raises(op.OpError) as err2:
+        op.read(REF, runner=Fake(rc=1, err="authorization prompt dismissed, please try again"))
+    assert "Integrate with 1Password CLI" in str(err2.value)
+
+
+def test_list_logins_reports_bad_json_and_a_missing_op():
+    with pytest.raises(op.OpError, match="did not return JSON"):
+        op.list_logins(runner=Fake(out="nope"))
+    with pytest.raises(op.OpError, match="not installed"):
+        op.list_logins(runner=Fake(raises=FileNotFoundError()))

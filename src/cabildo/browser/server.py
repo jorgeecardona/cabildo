@@ -85,6 +85,7 @@ class Session:
     handoff_seconds: float = 120.0  # how long a Cloudflare check waits for the human
     logins: Mapping[str, credentials.Credential] = field(default_factory=dict)
     read_secret: Callable[[str], onepassword.Secret] = onepassword.read
+    list_logins: Callable[[], list[onepassword.Item]] = onepassword.list_logins
     # Secrets filled by browser_login that are still in the page. Cleared on navigation.
     concealed: set[str] = field(default_factory=set)
     _login_notice_given: bool = False
@@ -523,7 +524,7 @@ def build(session: Session) -> FastMCP:
 
     @mcp.tool()
     async def browser_login(
-        site: str,
+        site: str | None = None,
         username_target: str | None = None,
         password_target: str | None = None,
         otp_target: str | None = None,
@@ -531,11 +532,13 @@ def build(session: Session) -> FastMCP:
     ) -> str:
         """Fill a login form from 1Password. The secret never comes back to you.
 
-        ``site`` is a name from the human's ``[browser.login.<site>]`` config. The fields are
-        snapshot refs, and each one is optional: give only the fields on the page. A site that
-        asks for the one-time code on a second page needs a second call with only
-        ``otp_target``. The page must be on the site's origin, or nothing is read or filled.
-        Set ``submit`` to press Enter in the last field filled.
+        Leave ``site`` out: the login is the 1Password item whose website is this page's origin.
+        If several items match, the answer lists them; call again with ``site`` set to the title
+        of one. ``site`` can also be a name from the human's ``[browser.login.<site>]`` config.
+        The fields are snapshot refs, and each one is optional: give only the fields on the page.
+        A site that asks for the one-time code on a second page needs a second call with only
+        ``otp_target``. Nothing is read or filled unless the page and the field are on the
+        login's origin. Set ``submit`` to press Enter in the last field filled.
         """
         return await login(session, site, username_target, password_target, otp_target, submit)
 
@@ -729,28 +732,72 @@ async def _check_field(
         raise credentials.CredentialError(msg)
 
 
+async def _resolve(session: Session, site: str | None, url: str) -> credentials.Credential | str:
+    """The login to fill on the page at ``url``, or ``refused: ...``.
+
+    Order: the human's table (by name, or by the page's origin), then 1Password items whose
+    website URL is the page's origin. With ``site`` set and not in the table, it picks among
+    those items by title. The agent never passes a reference.
+    """
+    configured = ", ".join(sorted(session.logins)) or "none"
+    if site and site.startswith(onepassword.REF_PREFIX):
+        return f"refused: no login for {site!r}. Configured sites: {configured}"
+    if site and site in session.logins:
+        return session.logins[site]
+    if not site:
+        here = credentials.at_origin(session.logins, url)
+        if len(here) == 1:
+            return here[0]
+        if here:
+            names = ", ".join(c.site for c in here)
+            return f"refused: several configured logins match this page: {names}. Give site."
+    try:
+        items = await asyncio.to_thread(session.list_logins)
+    except onepassword.OpError as exc:
+        return f"refused: could not read from 1Password: {exc}"
+    found = credentials.discover(items, url)
+    if site:
+        found = [i for i in found if i.title.casefold() == site.casefold()]
+    if not found:
+        what = f"called {site!r} " if site else ""
+        return (
+            f"refused: no 1Password Login {what}has this page's origin as its website. "
+            f"Configured sites: {configured}"
+        )
+    if len(found) > 1:
+        names = "; ".join(f"{i.title} ({i.vault})" for i in found)
+        return f"refused: several 1Password logins match this page: {names}. Give site=<title>."
+    try:
+        return credentials.from_item(found[0], url)
+    except credentials.CredentialError as exc:
+        return f"refused: {exc}"
+
+
 async def login(
     session: Session,
-    site: str,
+    site: str | None,
     username_target: str | None,
     password_target: str | None,
     otp_target: str | None,
     submit: bool,
 ) -> str:
-    """Fill the fields of the login form for ``site``. Returns the page state, or ``refused: ...``.
+    """Fill the fields of the login form on the page. Returns the page state, or ``refused: ...``.
 
     Each target is optional, so a login that spans two pages is two calls. At least one is needed.
 
-    The origin of the page and of each field is checked before ``op`` is called, and again just
-    before each fill. The password and the code are concealed from every tool result until the
-    page navigates.
+    The origin of the page and of each field is checked before ``op`` reads a secret, and again
+    just before each fill. The password and the code are concealed from every tool result until
+    the page navigates.
     """
-    cred = session.logins.get(site)
-    if cred is None:
-        known = ", ".join(sorted(session.logins)) or "none"
-        return f"refused: no login for {site!r}. Configured sites: {known}"
+    page = await session.page()
+    resolved = await _resolve(session, site, page.url)
+    if isinstance(resolved, str):
+        return resolved
+    cred = resolved
     if otp_target and not cred.otp:
-        return f"refused: {site} has no otp reference"
+        return f"refused: {cred.site} has no otp reference"
+    if not (username_target or password_target or otp_target):
+        return "refused: give at least one of username_target, password_target, otp_target"
     # (target, reference, is_password, is_otp), in the order the fields are filled
     plan: list[tuple[str, str, bool, bool]] = []
     if username_target:
@@ -759,9 +806,6 @@ async def login(
         plan.append((password_target, cred.password, True, False))
     if otp_target and cred.otp:
         plan.append((otp_target, cred.otp, False, True))
-    if not plan:
-        return "refused: give at least one of username_target, password_target, otp_target"
-    page = await session.page()
     try:
         credentials.check_origin(cred, page.url)
         for target, _ref, is_password, is_otp in plan:
@@ -781,7 +825,7 @@ async def login(
         return f"refused: could not read from 1Password: {exc}"
     if submit:
         await locate(page, plan[-1][0]).press("Enter")
-    return f"filled {site} from 1Password\n{await state(session)}"
+    return f"filled {cred.site} from 1Password\n{await state(session)}"
 
 
 def _save_text(session: Session, filename: str, text: str) -> str:

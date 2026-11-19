@@ -9,6 +9,10 @@ committed config is never read for it: a hostile repo could point a site at its 
     password = "op://Cabildo/GitHub/password"
     otp      = "op://Cabildo/GitHub/one-time password?attribute=otp"   # optional
 
+Without a table, ``discover`` finds the item itself: a 1Password Login whose website URL has the
+page's origin. The item's URL stands where ``origin`` stands in the table, so the fill is as
+strict. A table entry for the page's origin wins over an item.
+
 This module holds the data and the origin check. It never reads a secret: it only holds the
 ``op://`` references. An agent names a site, never a reference, so it can only reach what the
 human listed here.
@@ -16,10 +20,12 @@ human listed here.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
+
+from cabildo.onepassword import Item
 
 _HTTPS_PORT = 443
 _REF_PREFIX = "op://"
@@ -166,3 +172,42 @@ def check_origin(credential: Credential, url: str) -> None:
         shown = str(actual) if actual else "an unreadable URL"
         msg = f"{credential.site} is only for {credential.origin}, this page is {shown}"
         raise OriginMismatch(msg)
+
+
+def at_origin(credentials: Mapping[str, Credential], url: str) -> list[Credential]:
+    """The table entries whose origin is exactly the origin of ``url``, by site name."""
+    here = _origin_of(url)
+    return sorted((c for c in credentials.values() if c.origin == here), key=lambda c: c.site)
+
+
+def discover(items: Sequence[Item], url: str) -> list[Item]:
+    """The Login items with a website URL on exactly the origin of ``url``.
+
+    Only ``https`` counts, and the match is the whole origin: ``github.com.evil.com`` and
+    ``http://github.com`` are not ``https://github.com``. A page with no usable origin matches
+    nothing.
+    """
+    here = _origin_of(url)
+    if here is None or here.scheme != "https":
+        return []
+    found = [i for i in items if any(_origin_of(u) == here for u in i.urls)]
+    return sorted(found, key=lambda i: (i.title.casefold(), i.vault.casefold()))
+
+
+def from_item(item: Item, url: str) -> Credential:
+    """The ``Credential`` for ``item`` on the origin of ``url``, which ``discover`` matched.
+
+    Raises:
+        CredentialError: when ``url`` has no usable origin.
+    """
+    here = _origin_of(url)
+    if here is None:
+        msg = "this page has no origin"
+        raise CredentialError(msg)
+    return Credential(
+        site=item.title,
+        origin=here,
+        username=item.ref("username"),
+        password=item.ref("password"),
+        otp=item.ref("one-time password?attribute=otp"),
+    )

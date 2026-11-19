@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- `browser_login` needs no config: with no `site`, it fills from the 1Password Login item whose
+  website URL has the page's origin (same `https`, host and port). Several matches are listed and
+  `site=<title>` picks one. A `[browser.login.<site>]` table still wins for its origin. A locked
+  or signed-out `op` now says how to fix it.
 - You can rename a session and search sessions by title. `cabildo sessions rename <id> <name>`
   and the `sessions_rename` MCP tool set your own name (blank removes it; Claude's title shows
   again). In the workspace, `/` searches the titles, and `f` takes `q:<word>` next to `g:` and
