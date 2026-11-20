@@ -29,6 +29,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -396,6 +397,42 @@ def git_project(cwd: str | None = None) -> tuple[str, str]:
 
     override = (os.environ.get("CABILDO_PROJECT") or "").strip()
     return root, (override.lower() if override else name)
+
+
+_CATCH_ALL_SCAN = 400  # how many entries of a folder to look at when asking if it holds repos
+
+
+def is_catch_all(root: str | None) -> bool:
+    """True for a folder that is not a project: the home folder, a temp folder, or a folder with
+    no git repo of its own that holds git repos (``~/projects``). Agents started there come from
+    unrelated projects, so they must not share one ``proj:`` channel (#26).
+
+    A folder pinned with ``cabildo add`` is a project whatever it holds, and so is a git repo.
+    A path that does not exist is not a catch-all.
+    """
+    if not root:
+        return False
+    path = Path(root)
+    if not path.is_dir() or (path / ".git").exists():
+        return False
+    try:
+        from . import cloud
+
+        if cloud.project_for_path(path):
+            return False
+    except Exception:  # an unreadable registry must not decide this
+        pass
+    resolved = path.resolve()
+    if resolved in {Path.home().resolve(), Path(tempfile.gettempdir()).resolve()}:
+        return True
+    try:
+        with os.scandir(resolved) as entries:
+            for _n, entry in zip(range(_CATCH_ALL_SCAN), entries, strict=False):
+                if entry.is_dir(follow_symlinks=False) and (Path(entry.path) / ".git").exists():
+                    return True
+    except OSError:
+        return False
+    return False
 
 
 def tree_root(cwd: str | None = None) -> str:

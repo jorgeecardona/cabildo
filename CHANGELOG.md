@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- Agents started in a folder that is not a project (the home folder, the temp folder, or a folder
+  that holds git repos) no longer share one `proj:` channel. They keep `general` and direct
+  messages. `[project.<name>] isolated = false` brings the channel back. `cabildo doctor` warns
+  when two folders carry one project name and says how to rename one (#26).
 - An agent that only reads no longer blocks git in a shared checkout. The guard counts a peer
   only after it has written there: an edit tool, a git command that writes, or a shell command
   that writes a file. A session you open to ask questions never blocks another agent's squash,

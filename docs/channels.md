@@ -12,8 +12,22 @@ A session is put in some channels without asking:
 
 - `general`: every session joins it at start. `[chat] room` renames it; an empty value turns
   the auto-join off.
-- `proj:<name>`: the session's own project channel.
+- `proj:<name>`: the session's own project channel. The name is the git folder's name. Two repos
+  with one folder name would share it: `cabildo doctor` warns, and `[project] name = "..."` in
+  one repo's `.cabildo/config.toml` gives it its own name.
 - `ws:<folder>-<hash>`: a session whose folder is inside a workspace folder joins its channel.
+
+A folder that is not a project gets no `proj:` channel: the home folder, the temp folder, and a
+folder that holds git repos but is not one (`~/projects`). Agents started there come from
+unrelated projects. They still get `general` and direct messages. To keep a channel for such a
+folder, set `isolated = false` in `~/.cabildo/config.toml`:
+
+```toml
+[project.projects]
+isolated = false
+```
+
+`isolated = true` removes the channel of any project name in the same way.
 
 Each channel has a `scope`. The scope decides which paired machines receive its posts. The name
 never decides.

@@ -990,7 +990,14 @@ def _sync_derived_memberships(
         try:
             from . import config
 
-            isolated = config.project_isolated(cwd, new_pname)
+            isolated = config.project_isolated_setting(cwd, new_pname)
+            if isolated is None:  # not decided in config: a folder that is no project is isolated
+                from .context import is_catch_all
+
+                row = conn.execute(
+                    "SELECT project FROM sessions WHERE session_id=?", (session_id,)
+                ).fetchone()
+                isolated = is_catch_all(row["project"] if row else None)
         except Exception:  # config is advisory; its failure must not block a session
             isolated = False
         pt = project_topic(new_pname)

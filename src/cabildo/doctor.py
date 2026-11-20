@@ -218,6 +218,35 @@ def check_db() -> Check:
     return Check("db", OK, f"{p} reachable · WAL · {messages} message(s)")
 
 
+def check_project_names(conn=None) -> Check:
+    """Two different folders that carry one project name share one ``proj:`` channel, so their
+    agents hear each other (#26). Looks at the sessions that were live in the last week.
+    """
+    try:
+        conn = conn or store.connect()
+        rows = conn.execute(
+            "SELECT lower(project_name) AS name, project FROM sessions "
+            "WHERE project_name IS NOT NULL AND project IS NOT NULL AND last_seen_at >= ? "
+            "GROUP BY lower(project_name), project",
+            (time.time() - 7 * 86400,),
+        ).fetchall()
+    except Exception as e:
+        return Check("projects.names", NA, f"cannot read the bus: {e}")
+    roots: dict[str, list[str]] = {}
+    for r in rows:
+        roots.setdefault(r["name"], []).append(r["project"])
+    clashes = {n: sorted(p) for n, p in roots.items() if len(p) > 1}
+    if not clashes:
+        return Check("projects.names", OK, "no two folders share a project name")
+    shown = "; ".join(f"{n}: {', '.join(p)}" for n, p in sorted(clashes.items())[:3])
+    return Check(
+        "projects.names",
+        WARN,
+        f"{len(clashes)} project name(s) belong to more than one folder ({shown})",
+        'give one of them its own name: [project] name = "<name>" in its .cabildo/config.toml',
+    )
+
+
 # --------------------------------------------------------------------------- #
 # The daemon (optional)
 # --------------------------------------------------------------------------- #
@@ -514,7 +543,7 @@ def run(cwd: str | os.PathLike | None = None) -> list[Check]:
     do any of it at all (platform).
     """
     cwd = cwd if cwd is not None else os.getcwd()
-    checks = [check_hooks(), check_mcp_bus(cwd), check_db()]
+    checks = [check_hooks(), check_mcp_bus(cwd), check_db(), check_project_names()]
     checks.append(check_daemon())
     checks.append(check_daemon_push())
     checks.append(check_daemon_build())

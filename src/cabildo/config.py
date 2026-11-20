@@ -156,6 +156,20 @@ def share_general() -> bool:
     return val is True or str(val).strip().lower() in ("1", "true", "yes", "on")
 
 
+def project_isolated_setting(
+    cwd: str | None = None, project_name: str | None = None
+) -> bool | None:
+    """``[project.<name>].isolated`` when the config says it, else None (not set).
+
+    False is a choice too: it keeps a shared channel for a folder cabildo would otherwise treat
+    as a catch-all (see ``context.is_catch_all``).
+    """
+    val = get(cwd, "isolated", project_name=project_name, default=None)
+    if val is None:
+        return None
+    return val is True or str(val).strip().lower() in ("1", "true", "yes", "on")
+
+
 def project_isolated(cwd: str | None = None, project_name: str | None = None) -> bool:
     """``[project.<name>].isolated`` for this project: default False.
 
