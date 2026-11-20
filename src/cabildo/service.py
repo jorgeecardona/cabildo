@@ -207,12 +207,14 @@ GATEWAY = "gateway"
 
 
 def gateway_unit() -> Unit:
-    """The local gateway for Claude Code (``cabildo gateway serve``). Its own service, not part
-    of the daemon: a daemon reload or restart must not cut the model streams of every session.
+    """The unit that runs the local gateway for Claude Code (``cabildo gateway serve``).
+
+    It is its own service, not part of the daemon: a daemon reload or restart must not cut the
+    model streams of every session.
     """
     return Unit(
         key=GATEWAY,
-        description="cabildo gateway — local ANTHROPIC_BASE_URL that fails over between upstreams",
+        description="cabildo gateway: local ANTHROPIC_BASE_URL that fails over between upstreams",
         exec_start=[_python(), "-m", "cabildo.cli", "gateway", "serve"],
         env=_passthrough_env(),
     )

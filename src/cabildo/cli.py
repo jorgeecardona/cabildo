@@ -2012,12 +2012,16 @@ def cmd_notes(args) -> int:
 # Background services
 # --------------------------------------------------------------------------- #
 def _service_units(args):
-    """The units `install` should write: the daemon, and with ``--gateway`` the gateway."""
+    """The unit `install` should write: the daemon, or with ``--gateway`` only the gateway.
+
+    The gateway never rewrites the daemon unit, so a daemon installed with ``--allow-push`` keeps
+    its flags.
+    """
     from . import service
 
-    gateway_units = [service.gateway_unit()] if getattr(args, "gateway", False) else []
+    if getattr(args, "gateway", False):
+        return [service.gateway_unit()]
     return [
-        *gateway_units,
         service.daemon_unit(
             allow_push=args.allow_push,
             allow_spawn=args.allow_spawn,
@@ -2167,8 +2171,10 @@ def cmd_service(args) -> int:
 
     print(f"{C.BOLD}cabildo services{C.OFF} {C.DIM}{sv.unit_dir()}{C.OFF}")
     any_installed = False
-    for u in (sv.daemon_unit(),):
+    for u in (sv.daemon_unit(), sv.gateway_unit()):
         st = sv.status(u)
+        if u.key == sv.GATEWAY and not st["installed"]:
+            continue  # the gateway is optional: say nothing when it is not installed
         if not st["installed"]:
             print(f"  {C.DIM}○ {u.name:<24} not installed{C.OFF}")
             continue
@@ -2707,9 +2713,17 @@ def main(argv: list[str] | None = None) -> int:
         "gateway",
         help="a local gateway for Claude Code: fails over between your subscription and API keys",
     )
-    gw.add_argument("action", nargs="?", default="serve", choices=["serve", "status", "use"])
+    gw.add_argument(
+        "action",
+        nargs="?",
+        default="serve",
+        choices=["serve", "status", "use"],
+        help="serve (default), status, or use",
+    )
     gw.add_argument("name", nargs="?", help="use: the upstream to try first, or auto")
-    gw.add_argument("--for", dest="duration", default="2h", help="use: how long (30m, 2h, 1d)")
+    gw.add_argument(
+        "--for", dest="duration", default="2h", help="use: how long (30m, 2h, 1d; default: 2h)"
+    )
     gw.add_argument("--port", type=int, help="override [gateway] port")
     gw.set_defaults(fn=cmd_gateway)
 
@@ -2994,7 +3008,7 @@ def main(argv: list[str] | None = None) -> int:
     nt.add_argument("--ref", help="with --park: where it went (issue name, MR, ticket)")
     nt.set_defaults(fn=cmd_notes)
 
-    sv = sub.add_parser("service", help="run the daemon as a systemd --user service")
+    sv = sub.add_parser("service", help="run the daemon and the gateway as a background service")
     sv.add_argument(
         "action",
         nargs="?",
@@ -3003,7 +3017,9 @@ def main(argv: list[str] | None = None) -> int:
         help="default: status",
     )
     sv.add_argument(
-        "--gateway", action="store_true", help="install: also the gateway unit (cabildo gateway)"
+        "--gateway",
+        action="store_true",
+        help="install: the gateway unit (cabildo gateway) instead of the daemon unit",
     )
     sv.add_argument(
         "--allow-push", action="store_true", help="let the daemon actually push (default: dry run)"

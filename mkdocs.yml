@@ -51,14 +51,17 @@ plugins:
       sections:
         Usage documentation:
           - index.md
+          - using-cabildo.md
           - channels.md
           - roles.md
           - browser.md
           - gateway.md
+          - crons.md
           - design/broker-service.md
 
 nav:
   - Home: index.md
+  - Use cabildo well: using-cabildo.md
   - Design:
       - Broker service & remote agents: design/broker-service.md
   - Channels and tags: channels.md

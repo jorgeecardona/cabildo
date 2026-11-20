@@ -521,8 +521,10 @@ def remote_tables() -> dict[str, dict[str, Any]]:
 # [gateway] -- the local gateway Claude Code sends its model requests to
 # --------------------------------------------------------------------------- #
 def gateway_table() -> dict[str, Any]:
-    """``[gateway]`` of the machine-wide config. A repo's config is never read: it could point
-    your model traffic, and the credentials in it, at a host it controls.
+    """``[gateway]`` of the machine-wide config, as a dict.
+
+    A repo's config is never read: it could point your model traffic, and the credentials in it,
+    at a host it controls.
     """
     table = _read(_global_path()).get("gateway")
     return dict(table) if isinstance(table, dict) else {}

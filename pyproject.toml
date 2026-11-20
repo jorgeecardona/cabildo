@@ -107,6 +107,8 @@ packages = ["src/cabildo"]
 # cabildo/_bundled_mods/; `cabildo.mods.mods_dir()` looks there.
 [tool.hatch.build.targets.wheel.force-include]
 "mods" = "src/cabildo/_bundled_mods"
+# The guide pages for the `help` MCP tool (cabildo/help.py).
+"docs" = "src/cabildo/_bundled_docs"
 
 [tool.hatch.build.targets.sdist]
 include = ["src", "tests", "docs", "mods", "README.md", "CHANGELOG.md", "LICENSE"]

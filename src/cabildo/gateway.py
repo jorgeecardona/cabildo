@@ -1,11 +1,11 @@
 """A local gateway for Claude Code that fails over between upstreams.
 
 Claude Code sends every model request to ``ANTHROPIC_BASE_URL``. Point it at this server once
-(``http://127.0.0.1:8787``), and the choice of upstream moves out of the session: when your
+(``http://127.0.0.1:8788``), and the choice of upstream moves out of the session: when your
 subscription runs out, the next request goes to an API key or to Amazon Bedrock, with no restart.
 
     [gateway]
-    port = 8787
+    port = 8788
     # token = "env:CABILDO_GATEWAY_TOKEN"   # optional: clients must send x-cabildo-gateway
 
     [gateway.upstream.subscription]
@@ -45,7 +45,7 @@ from urllib.parse import urlsplit
 
 from . import onepassword
 
-DEFAULT_PORT = 8787
+DEFAULT_PORT = 8788  # 8787 is the port of ``cabildo viewer``
 RATE_COOLDOWN_KEY_S = 60.0
 RATE_COOLDOWN_PASSTHROUGH_S = 300.0
 OVERLOAD_COOLDOWN_S = 30.0
@@ -79,7 +79,10 @@ _UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
 
 class GatewayError(ValueError):
-    """The ``[gateway]`` config or a request is not usable. The message never holds a secret."""
+    """The ``[gateway]`` config or a request is not usable.
+
+    The message never holds a secret.
+    """
 
 
 @dataclass(frozen=True)
@@ -293,7 +296,7 @@ def classify(
 
 
 def _rate_wait(low: Mapping[str, str], kind: str, now: float) -> float:
-    """Seconds until a 429 lifts: ``retry-after``, else the unified reset (epoch), else a default."""
+    """Seconds until a 429 lifts: ``retry-after``, else the unified reset time, else a default."""
     try:
         return max(float(low["retry-after"]), 1.0)
     except (KeyError, ValueError):
@@ -337,8 +340,10 @@ class Router:
         return None
 
     def order(self, model: str | None = None, forced: str | None = None) -> list[Upstream]:
-        """The upstreams to try for ``model``: the forced one first, then those not set aside in
-        the order of the config, then the set-aside ones as a last resort.
+        """The upstreams to try for ``model``, in order.
+
+        The forced one comes first, then those not set aside in the order of the config, then
+        the set-aside ones as a last resort.
         """
         with self._lock:
             now = self._clock()
@@ -662,8 +667,10 @@ class Gateway:
         return force.name if force and force.name in known else None
 
     def reconfigure(self, settings: Settings) -> None:
-        """Use new settings for the next request. Requests in flight finish as they are, and an
-        upstream that is set aside stays set aside if the new settings still name it.
+        """Use new settings for the next request.
+
+        Requests in flight finish as they are, and an upstream that is set aside stays set aside
+        if the new settings still name it.
         """
         names = {u.name for u in settings.upstreams}
         kept = {k: v for k, v in self.router.snapshot().items() if k[0] in names}
@@ -837,7 +844,10 @@ def _no_length(headers: list[tuple[str, str]]) -> list[tuple[str, str]]:
 
 
 def make_server(gw: Gateway, port: int | None = None) -> ThreadingHTTPServer:
-    """A server for ``gw`` on 127.0.0.1. ``port`` 0 picks a free one."""
+    """A server for ``gw`` on 127.0.0.1.
+
+    ``port`` 0 picks a free one.
+    """
     server = ThreadingHTTPServer(
         ("127.0.0.1", gw.settings.port if port is None else port), make_handler(gw)
     )

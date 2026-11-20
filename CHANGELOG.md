@@ -4,6 +4,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- A new `help` MCP tool teaches an agent how to use cabildo. `help()` returns the start guide and
+  the list of topics, `help("gateway")` one page, `help("tools")` every tool with its first line,
+  and `help(query="push")` searches all pages. The pages are the files of `docs/`, bundled in the
+  wheel. The new page `docs/using-cabildo.md` is the start guide.
+- `cabildo service install --gateway` now writes only the gateway unit. Before, it also rewrote
+  the daemon unit with default flags, which turned a daemon with `--allow-push` back to dry-run.
+  `cabildo service status` lists the gateway when it is installed. The gateway default port is
+  8788, because 8787 is the port of `cabildo viewer`.
 - `cabildo gateway` is a local server for `ANTHROPIC_BASE_URL`. It sends each Claude Code request
   to your subscription first and, when that answers 429 or out of credit, to an API key or to
   Amazon Bedrock (Mantle, the Anthropic format), with no session restart. Upstreams are tried in

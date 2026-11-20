@@ -243,6 +243,44 @@ def whoami() -> dict[str, Any]:
         }
 
 
+@mcp.tool(name="help")
+async def help_tool(topic: str | None = None, query: str | None = None) -> dict[str, Any]:
+    """How to use cabildo well. With no argument: the start guide and the list of topics.
+
+    ``topic`` returns one page (``start``, ``tools``, ``gateway``, ``channels``, ``roles``,
+    ``browser``, ``crons``). ``tools`` lists every cabildo tool with its first line. ``query``
+    searches every page for the lines that hold all its words.
+    """
+    from . import help as guide
+
+    root = guide.docs_dir()
+    if root is None:
+        return {"ok": False, "error": "the guide pages are not installed with this build"}
+    names = [
+        {"name": t.name, "title": t.title, "summary": t.summary} for t in guide.topics(root)
+    ] + [{"name": "tools", "title": "Tools", "summary": "Every cabildo tool, one line each."}]
+    if query:
+        hits = guide.search(root, query)
+        return {"ok": True, "query": query, "hits": [h.__dict__ for h in hits], "topics": names}
+    if topic is None:
+        return {
+            "ok": True,
+            "topic": guide.START,
+            "text": guide.read(root, guide.START),
+            "topics": names,
+        }
+    if topic.strip().lower() == "tools":
+        lines = [
+            f"- {t.name}: {(t.description or '').strip().splitlines()[0] if t.description else ''}"
+            for t in sorted(await mcp.list_tools(), key=lambda t: t.name)
+        ]
+        return {"ok": True, "topic": "tools", "text": "\n".join(lines)}
+    text = guide.read(root, topic)
+    if text is None:
+        return {"ok": False, "error": f"no topic {topic!r}", "topics": names}
+    return {"ok": True, "topic": topic.strip().lower(), "text": text}
+
+
 @mcp.tool()
 def version() -> dict[str, Any]:
     """The cabildo version this MCP server is running, and the daemon's if one is
