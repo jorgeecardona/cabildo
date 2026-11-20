@@ -4,6 +4,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- The gateway has a third upstream kind, `bedrock-invoke`, for a Bedrock region that has no Mantle
+  endpoint. It calls the Invoke API of `bedrock-runtime.<region>.amazonaws.com` with your Bedrock
+  API key: it rewrites the path and body, decodes the AWS event stream into server-sent events,
+  and turns Bedrock errors into Anthropic errors. `docs/gateway.md` says which kind a Bedrock
+  region needs (#57).
 - A new `help` MCP tool teaches an agent how to use cabildo. `help()` returns the start guide and
   the list of topics, `help("gateway")` one page, `help("tools")` every tool with its first line,
   and `help(query="push")` searches all pages. The pages are the files of `docs/`, bundled in the

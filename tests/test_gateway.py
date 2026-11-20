@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from cabildo import gateway, onepassword
+from tests.test_eventstream import chunk
 
 
 class Fake:
@@ -585,3 +586,137 @@ def test_gateway_use_writes_the_choice_and_auto_clears_it(
     assert cli.main(["gateway", "use", "bed", "--for", "soon"]) == 2
     assert cli.main(["gateway", "use", "auto"]) == 0
     assert gateway.read_force(tmp_path / "gateway-use.json", time.time()) is None
+
+
+# --- bedrock-invoke ------------------------------------------------------------------------------
+
+
+def invoke(fakes: dict[str, Fake], **extra: Any) -> gateway.Settings:
+    return gateway.parse(
+        {
+            "upstream": {
+                "sub": {"kind": "passthrough", "base_url": fakes["sub"].url},
+                "eu": {
+                    "kind": "bedrock-invoke",
+                    "base_url": fakes["bed"].url,
+                    "key": "env:BED_KEY",
+                    "models": {"claude-opus-5-5": "eu.anthropic.claude-opus-5"},
+                    **extra,
+                },
+            }
+        }
+    )
+
+
+def test_invoke_defaults_and_the_url_from_a_region() -> None:
+    up = gateway.parse(
+        {
+            "upstream": {
+                "eu": {
+                    "kind": "bedrock-invoke",
+                    "region": "eu-central-1",
+                    "key": "env:K",
+                    "models": {"a": "b"},
+                }
+            }
+        }
+    ).upstreams[0]
+    assert up.base_url == "https://bedrock-runtime.eu-central-1.amazonaws.com"
+    assert up.auth == "bearer" and not up.server_tools and up.drop_betas == ("oauth-*",)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"key": "env:K", "models": {"a": "b"}},
+        {"region": "nope", "key": "env:K", "models": {"a": "b"}},
+        {"region": "eu-central-1", "models": {"a": "b"}},
+        {"region": "eu-central-1", "key": "env:K"},
+    ],
+)
+def test_invoke_needs_a_region_or_url_a_key_and_models(entry: dict) -> None:
+    with pytest.raises(gateway.GatewayError):
+        gateway.parse({"upstream": {"eu": {"kind": "bedrock-invoke", **entry}}})
+
+
+def test_a_request_becomes_an_invoke_call(fakes, run) -> None:
+    fakes["sub"].status = 429
+    fakes["bed"].body = b'{"id": "msg_1", "type": "message", "content": []}'
+    port = run(gateway.Gateway(invoke(fakes)))
+    body = {"model": "claude-opus-5-5", "max_tokens": 5, "messages": [], "stream": False}
+    status, _h, out = post(
+        port,
+        body,
+        headers=[
+            ("Authorization", "Bearer oauth"),
+            ("anthropic-version", "2023-06-01"),
+            ("anthropic-beta", "oauth-2025,interleaved-thinking-x"),
+        ],
+    )
+    assert status == 200 and json.loads(out)["id"] == "msg_1"
+    seen = fakes["bed"].seen[0]
+    assert seen["path"] == "/model/eu.anthropic.claude-opus-5/invoke"
+    assert json.loads(seen["body"]) == {
+        "max_tokens": 5,
+        "messages": [],
+        "anthropic_version": "bedrock-2023-05-31",
+        "anthropic_beta": ["interleaved-thinking-x"],
+    }
+    assert fakes["bed"].header(0, "authorization") == ["Bearer bedrock-secret"]
+    assert fakes["bed"].header(0, "x-api-key") == []
+    assert fakes["bed"].header(0, "anthropic-beta") == []
+    assert fakes["bed"].header(0, "anthropic-version") == []
+
+
+def test_a_streamed_answer_is_decoded_into_sse(fakes, run) -> None:
+    fakes["sub"].status = 429
+    events = [
+        {"type": "message_start", "message": {"id": "m"}},
+        {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "ok"}},
+        {"type": "message_stop"},
+    ]
+    fakes["bed"].body = b"".join(chunk(e) for e in events)
+    fakes["bed"].headers = {"Content-Type": "application/vnd.amazon.eventstream"}
+    port = run(gateway.Gateway(invoke(fakes)))
+    status, headers, out = post(port, {"model": "claude-opus-5-5", "stream": True})
+    assert status == 200 and headers["Content-Type"] == "text/event-stream"
+    assert (
+        fakes["bed"].seen[0]["path"]
+        == "/model/eu.anthropic.claude-opus-5/invoke-with-response-stream"
+    )
+    got = [
+        (blk.split(b"\n")[0], json.loads(blk.split(b"data: ")[1]))
+        for blk in out.strip().split(b"\n\n")
+    ]
+    assert [name for name, _ in got] == [b"event: " + e["type"].encode() for e in events]
+    assert [d for _, d in got] == events
+
+
+def test_a_bedrock_error_is_set_aside_and_shown_in_the_anthropic_shape(fakes, run) -> None:
+    for f in fakes.values():
+        f.status = 429
+    fakes["bed"].body = b'{"message": "Too many requests"}'
+    gw = gateway.Gateway(invoke(fakes))
+    port = run(gw)
+    status, _h, out = post(port, {"model": "claude-opus-5-5"})
+    assert status == 429
+    assert json.loads(out)["error"] == {"type": "rate_limit_error", "message": "Too many requests"}
+    assert not {r.name: r for r in gw.router.status()}["eu"].ready
+
+
+def test_a_plain_bedrock_error_is_wrapped_too(fakes, run) -> None:
+    fakes["sub"].status = 429
+    fakes["bed"].status, fakes["bed"].body = 400, b'{"message": "bad field"}'
+    port = run(gateway.Gateway(invoke(fakes)))
+    status, headers, out = post(port, {"model": "claude-opus-5-5"})
+    assert status == 400 and headers["Content-Type"] == "application/json"
+    assert json.loads(out)["error"]["type"] == "invalid_request_error"
+
+
+def test_invoke_skips_other_paths_and_unmapped_models(fakes, run) -> None:
+    fakes["sub"].status = 429
+    port = run(gateway.Gateway(invoke(fakes)))
+    post(port, {"model": "claude-opus-5-5"}, path="/v1/messages/count_tokens")
+    post(port, {"model": "claude-haiku-4-5"})
+    post(port, {"model": "claude-opus-5-5", "tools": [{"type": "web_search_20250305"}]})
+    assert fakes["bed"].seen == []

@@ -84,6 +84,36 @@ the upstream is set aside with "no usable key". Use `file:` or `op://`, or set t
   that could bill twice.
 - Any other answer, a 5xx included, goes to the client unchanged.
 
+## Bedrock in a region without Mantle
+
+Use this when Bedrock must stay in one region and `bedrock-mantle.<region>.api.aws` answers
+`not_found` for your models. `kind = "bedrock-invoke"` calls the Invoke API of
+`bedrock-runtime.<region>.amazonaws.com` with the same Bedrock API key:
+
+```toml
+[gateway.upstream.bedrock-eu]
+kind   = "bedrock-invoke"
+region = "eu-central-1"                          # or base_url = "https://..."
+key    = "file:~/.config/cabildo/bedrock.key"
+
+[gateway.upstream.bedrock-eu.models]             # required: Bedrock names models its own way
+"claude-opus-5-5" = "eu.anthropic.claude-opus-5"
+```
+
+For each request the gateway does what the Invoke API needs, and Claude Code sees no difference:
+
+- The path becomes `/model/<id>/invoke`, or `/invoke-with-response-stream` for a streamed request.
+  The id comes from `models`.
+- The body loses `model` and `stream` and gains `anthropic_version`. The `anthropic-beta` values
+  move into the body as `anthropic_beta`.
+- A streamed answer arrives as AWS binary frames. The gateway decodes them and sends server-sent
+  events.
+- A Bedrock error (`{"message": ...}`) is sent as an Anthropic error, so Claude Code reads it.
+- The key goes in `Authorization: Bearer`. The upstream only takes `/v1/messages`, and it has
+  `server_tools = false` by default.
+
+A model that is not in `models` skips the upstream. Map the background model too.
+
 ## Choose the upstream yourself
 
 ```bash
@@ -124,8 +154,8 @@ and keeps the streams that are open. The command also reloads the daemon. New ga
   `ANTHROPIC_CUSTOM_HEADERS="x-cabildo-gateway: <the secret>"` to Claude Code's `env`.
 - It reads only `~/.cabildo/config.toml`, never a repo's config. It logs one line per request
   (upstream, model, status, time) and never headers or bodies.
-- A Bedrock API key needs access to the Mantle endpoint, which serves the Anthropic Messages API.
-  The Bedrock Invoke API uses another format and is not supported.
+- A `key` upstream sends the Anthropic Messages API, so a Bedrock `key` upstream needs the Mantle
+  endpoint. Not every region has one for your account. Use `bedrock-invoke` there (next section).
 - Not checked live yet: which header Mantle expects with a real key, and whether Claude Code stops
   by itself on a usage limit before it sends a request.
 

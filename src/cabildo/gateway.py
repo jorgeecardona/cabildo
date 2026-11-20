@@ -19,6 +19,9 @@ subscription runs out, the next request goes to an API key or to Amazon Bedrock,
     server_tools = false           # Bedrock has no WebSearch and the like
     models       = { "claude-opus-5-5" = "anthropic.claude-opus-5-5" }
 
+A Bedrock region with no Mantle endpoint uses ``kind = "bedrock-invoke"``: the gateway then calls
+the Invoke API and turns its binary answer into server-sent events (docs/gateway.md).
+
 The upstreams are tried in the order of the file. An upstream that answers 429 (or out of credit,
 or a key that is refused) is set aside until its retry time, and the same request goes to the next
 one before the client sees anything. Only the machine-wide ``~/.cabildo/config.toml`` is read. The
@@ -41,9 +44,9 @@ from dataclasses import asdict, dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
-from . import onepassword
+from . import eventstream, onepassword
 
 DEFAULT_PORT = 8788  # 8787 is the port of ``cabildo viewer``
 RATE_COOLDOWN_KEY_S = 60.0
@@ -71,7 +74,10 @@ _HOP_BY_HOP = frozenset(
 )
 _NOT_FORWARDED = _HOP_BY_HOP | {"host", "content-length", "accept-encoding", TOKEN_HEADER}
 _AUTH_HEADERS = frozenset({"authorization", "x-api-key"})
-_KINDS = ("passthrough", "key")
+_KINDS = ("passthrough", "key", "bedrock-invoke")
+_INVOKE = "bedrock-invoke"
+_REGION = re.compile(r"[a-z]+(?:-[a-z0-9]+)+")
+_ANTHROPIC_VERSION = "bedrock-2023-05-31"
 _AUTHS = ("x-api-key", "bearer", "both")
 _ID = re.compile(r"[A-Za-z0-9_.-]+")
 _DURATION = re.compile(r"(\d+)([smhd])")
@@ -117,7 +123,7 @@ class Upstream:
     """One place a request can go."""
 
     name: str
-    kind: str  # "passthrough": the client's own credential; "key": ours, from ``key``
+    kind: str  # "passthrough": the client's own login; "key": our key; "bedrock-invoke": Bedrock
     base_url: str
     key: KeyRef | None = None
     auth: str = "x-api-key"  # how a key is sent: "x-api-key", "bearer" or "both"
@@ -175,6 +181,7 @@ class Job:
     path: str
     model: str | None = None
     server_tool: bool = False
+    stream: bool = False
 
 
 @dataclass(frozen=True)
@@ -227,28 +234,38 @@ def _upstream(name: str, entry: Mapping[str, Any]) -> Upstream:
         msg = f"upstream {name}: kind must be one of {', '.join(_KINDS)}"
         raise GatewayError(msg)
     base = str(entry.get("base_url", "")).rstrip("/")
+    if kind == _INVOKE and not base:
+        region = str(entry.get("region", ""))
+        if not _REGION.fullmatch(region):
+            msg = f"upstream {name}: give region (for example eu-central-1) or base_url"
+            raise GatewayError(msg)
+        base = f"https://bedrock-runtime.{region}.amazonaws.com"
     parts = urlsplit(base)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         msg = f"upstream {name}: base_url must be http(s)://host[/path]"
         raise GatewayError(msg)
     key = None
-    if kind == "key":
+    if kind != "passthrough":
         try:
             key = parse_key_ref(entry.get("key"))
         except GatewayError as exc:
             msg = f"upstream {name}: {exc}"
             raise GatewayError(msg) from exc
-    auth = str(entry.get("auth", "x-api-key"))
+    auth = str(entry.get("auth", "bearer" if kind == _INVOKE else "x-api-key"))
     if auth not in _AUTHS:
         msg = f"upstream {name}: auth must be one of {', '.join(_AUTHS)}"
         raise GatewayError(msg)
     models = entry.get("models")
+    mapping = {str(k): str(v) for k, v in models.items()} if isinstance(models, Mapping) else {}
+    if kind == _INVOKE and not mapping:
+        msg = f"upstream {name}: models is required: Bedrock names models in its own way"
+        raise GatewayError(msg)
     betas = entry.get("drop_betas")
     # An API key is not the claude.ai login: its upstream must not be sent the OAuth capability.
     drop = (
         tuple(str(b) for b in betas)
         if isinstance(betas, list)
-        else (("oauth-*",) if kind == "key" else ())
+        else (("oauth-*",) if kind != "passthrough" else ())
     )
     return Upstream(
         name=name,
@@ -256,9 +273,9 @@ def _upstream(name: str, entry: Mapping[str, Any]) -> Upstream:
         base_url=base,
         key=key,
         auth=auth,
-        models={str(k): str(v) for k, v in models.items()} if isinstance(models, Mapping) else {},
+        models=mapping,
         drop_betas=drop,
-        server_tools=entry.get("server_tools", True) is not False,
+        server_tools=entry.get("server_tools", kind != _INVOKE) is not False,
     )
 
 
@@ -304,7 +321,7 @@ def _rate_wait(low: Mapping[str, str], kind: str, now: float) -> float:
     try:
         return max(float(low["anthropic-ratelimit-unified-reset"]) - now, 1.0)
     except (KeyError, ValueError):
-        return RATE_COOLDOWN_KEY_S if kind == "key" else RATE_COOLDOWN_PASSTHROUGH_S
+        return RATE_COOLDOWN_PASSTHROUGH_S if kind == "passthrough" else RATE_COOLDOWN_KEY_S
 
 
 class Router:
@@ -477,13 +494,23 @@ def inspect(path: str, body: bytes) -> Job:
         for t in (tools if isinstance(tools, list) else ())
     )
     model = data.get("model")
-    return replace(job, model=model if isinstance(model, str) else None, server_tool=server)
+    return replace(
+        job,
+        model=model if isinstance(model, str) else None,
+        server_tool=server,
+        stream=data.get("stream") is True,
+    )
 
 
 def skip_reason(up: Upstream, job: Job) -> str | None:
     """Why ``up`` cannot serve ``job`` at all (not a failure: it is not set aside), or None."""
-    if up.kind == "key" and not job.path.split("?", 1)[0].startswith("/v1/messages"):
+    route = job.path.split("?", 1)[0]
+    if up.kind == _INVOKE and route != "/v1/messages":
+        return "path"  # Bedrock has no counterpart of count_tokens, files or models
+    if up.kind != "passthrough" and not route.startswith("/v1/messages"):
         return "path"
+    if up.kind == _INVOKE and job.model is None:
+        return "model"
     if up.models and job.model is not None and job.model not in up.models:
         return "model"
     if job.server_tool and not up.server_tools:
@@ -511,8 +538,10 @@ def request_headers(
     betas: list[str] = []
     for k, v in client:
         low = k.lower()
-        if low in _NOT_FORWARDED or (up.kind == "key" and low in _AUTH_HEADERS):
+        if low in _NOT_FORWARDED or (up.kind != "passthrough" and low in _AUTH_HEADERS):
             continue
+        if up.kind == _INVOKE and low == "anthropic-version":
+            continue  # Bedrock takes the version in the body
         if low == "anthropic-beta":
             betas += [b.strip() for b in v.split(",") if b.strip()]
         else:
@@ -521,7 +550,7 @@ def request_headers(
     if kept:
         out.append(("anthropic-beta", ",".join(kept)))
     out.append(("Accept-Encoding", "identity"))
-    if up.kind == "key" and up.key:
+    if up.kind != "passthrough" and up.key:
         secret = keys.get(up.key)
         if up.auth in ("x-api-key", "both"):
             out.append(("x-api-key", secret))
@@ -540,6 +569,39 @@ def request_body(up: Upstream, job: Job, body: bytes) -> bytes:
         return body
     data["model"] = up.models[job.model]
     return json.dumps(data).encode()
+
+
+@dataclass(frozen=True)
+class Wire:
+    """What is sent to an upstream for one request."""
+
+    path: str
+    body: bytes
+    headers: list[tuple[str, str]]
+    events: bool = False  # the answer is an AWS event stream to turn into server-sent events
+
+
+def prepare(up: Upstream, job: Job, body: bytes, headers: list[tuple[str, str]]) -> Wire:
+    """The path, body and headers to send ``up`` for ``job``.
+
+    A passthrough or key upstream gets the request as it is, less a renamed model. For Bedrock's
+    Invoke API the path names the model, the body drops ``model`` and ``stream`` and gains
+    ``anthropic_version``, and the ``anthropic-beta`` values move into the body.
+    """
+    base = urlsplit(up.base_url).path
+    if up.kind != _INVOKE or job.model is None or job.model not in up.models:
+        return Wire(base + job.path, request_body(up, job, body), headers)
+    data = json.loads(body)
+    data.pop("model", None)
+    data.pop("stream", None)
+    data["anthropic_version"] = _ANTHROPIC_VERSION
+    betas = [v for k, v in headers if k.lower() == "anthropic-beta"]
+    if betas:
+        data["anthropic_beta"] = [b for v in betas for b in v.split(",")]
+    kept = [(k, v) for k, v in headers if k.lower() != "anthropic-beta"]
+    action = "invoke-with-response-stream" if job.stream else "invoke"
+    model = quote(up.models[job.model], safe="")
+    return Wire(f"{base}/model/{model}/{action}", json.dumps(data).encode(), kept, job.stream)
 
 
 def read_body(headers: Mapping[str, str], rfile: Any) -> bytes:
@@ -742,7 +804,7 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
             client = list(self.headers.items())
             job = inspect(self.path, body)
             started = time.monotonic()
-            last: tuple[int, list[tuple[str, str]], bytes, bool] | None = None
+            last: tuple[int, list[tuple[str, str]], bytes, bool, bool] | None = None
             candidates = gw.router.order(job.model, gw.forced())
             usable = [u for u in candidates if skip_reason(u, job) is None]
             skipped = len(candidates) - len(usable)
@@ -764,17 +826,13 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
                     continue
                 # From here the request may have reached the upstream: never send it twice.
                 try:
-                    payload = request_body(up, job, body)
-                    conn.putrequest(
-                        self.command,
-                        urlsplit(up.base_url).path + self.path,
-                        skip_accept_encoding=True,
-                    )
-                    for k, v in headers:
+                    wire = prepare(up, job, body, headers)
+                    conn.putrequest(self.command, wire.path, skip_accept_encoding=True)
+                    for k, v in wire.headers:
                         conn.putheader(k, v)
-                    if payload or self.command in ("POST", "PUT", "PATCH"):
-                        conn.putheader("Content-Length", str(len(payload)))
-                    conn.endheaders(payload)
+                    if wire.body or self.command in ("POST", "PUT", "PATCH"):
+                        conn.putheader("Content-Length", str(len(wire.body)))
+                    conn.endheaders(wire.body)
                     resp = conn.getresponse()
                 except (OSError, http.client.HTTPException) as exc:
                     gw.router.failed(up, type(exc).__name__)
@@ -783,9 +841,15 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
                     self._error(504, f"{up.name} did not answer")
                     return
                 peek = b""
-                if resp.status in _WATCHED:
+                wrap = up.kind == _INVOKE and resp.status >= 400
+                if resp.status in _WATCHED or wrap:
                     peek = resp.read(_BODY_PEEK)
-                    verdict = classify(resp.status, dict(resp.getheaders()), peek, kind=up.kind)
+                    verdict = classify(
+                        resp.status,
+                        dict(resp.getheaders()),
+                        peek,
+                        kind="passthrough" if up.kind == "passthrough" else "key",
+                    )
                     if verdict is not None:
                         if resp.status == 401 and up.key:
                             gw.keys.forget(up.key)
@@ -794,19 +858,25 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
                             f"gateway: {up.name} set aside {verdict.cooldown_s:.0f}s: "
                             f"{verdict.reason}"
                         )
-                        last = (resp.status, resp.getheaders(), peek, len(peek) < _BODY_PEEK)
+                        last = (resp.status, resp.getheaders(), peek, len(peek) < _BODY_PEEK, wrap)
                         conn.close()
                         if more:
                             continue
                         break
                 gw.router.served(up)
-                self._send(resp.status, resp.getheaders(), peek, resp)
+                if wrap:
+                    self._send(*_wrapped(resp.status, resp.getheaders(), peek), None)
+                else:
+                    self._send(resp.status, resp.getheaders(), peek, resp, wire.events)
                 conn.close()
                 ms = round((time.monotonic() - started) * 1000)
                 gw.log(f"{up.name} {job.model or '-'} {resp.status} {ms}ms")
                 return
             if last is not None:
-                self._send(last[0], last[1] if last[3] else _no_length(last[1]), last[2], None)
+                if last[4]:
+                    self._send(*_wrapped(last[0], last[1], last[2]), None)
+                else:
+                    self._send(last[0], last[1] if last[3] else _no_length(last[1]), last[2], None)
                 return
             why = "no upstream can serve this request" if skipped else "no upstream is usable"
             self._error(502, why)
@@ -817,7 +887,15 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
             headers: list[tuple[str, str]],
             prefix: bytes,
             stream: http.client.HTTPResponse | None,
+            events: bool = False,
         ) -> None:
+            decoder = eventstream.Decoder() if events else None
+            if decoder is not None:
+                headers = [
+                    *(h for h in headers if h[0].lower() not in ("content-length", "content-type")),
+                    ("Content-Type", "text/event-stream"),
+                    ("Cache-Control", "no-cache"),
+                ]
             try:
                 self.send_response(status)
                 for k, v in headers:
@@ -830,12 +908,30 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
                     chunk = stream.read1(_CHUNK)
                     if not chunk:
                         break
+                    if decoder is not None:
+                        try:
+                            chunk = b"".join(eventstream.to_sse(f) for f in decoder.feed(chunk))
+                        except eventstream.EventStreamError:
+                            self.wfile.write(eventstream.error_event("api_error", "bad stream"))
+                            break
                     self.wfile.write(chunk)
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 return  # the client went away
 
     return Handler
+
+
+def _wrapped(
+    status: int, headers: list[tuple[str, str]], body: bytes
+) -> tuple[int, list[tuple[str, str]], bytes]:
+    """A Bedrock error answer as an Anthropic one: its body in the Anthropic error shape."""
+    kept = [(k, v) for k, v in headers if k.lower() not in ("content-length", "content-type")]
+    return (
+        status,
+        [*kept, ("Content-Type", "application/json")],
+        eventstream.error_body(status, body),
+    )
 
 
 def _no_length(headers: list[tuple[str, str]]) -> list[tuple[str, str]]:
