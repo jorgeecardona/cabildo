@@ -1707,8 +1707,9 @@ def cmd_session_ops(args) -> int:
 
 
 def cmd_gateway(args) -> int:
-    """``cabildo gateway serve|status``: the local gateway that fails over between upstreams."""
+    """``cabildo gateway serve|status|use``: the local gateway that fails over between upstreams."""
     import json as _json
+    import time as _time
     import urllib.request
 
     from . import config, gateway
@@ -1719,18 +1720,50 @@ def cmd_gateway(args) -> int:
         print(f"cabildo gateway: {e}", file=sys.stderr)
         return 2
     port = args.port if args.port is not None else settings.port
+    use_file = store.home() / "gateway-use.json"
+    if args.action == "use":
+        if not args.name:
+            force = gateway.read_force(use_file, _time.time())
+            print(f"using {force.name}" if force else "automatic: the order of the config")
+            return 0
+        if args.name == "auto":
+            gateway.write_force(use_file, None)
+            print("automatic again: the order of the config")
+            return 0
+        if args.name not in {u.name for u in settings.upstreams}:
+            names = ", ".join(u.name for u in settings.upstreams)
+            print(f"cabildo gateway: no upstream {args.name!r} (have: {names})", file=sys.stderr)
+            return 2
+        try:
+            seconds = gateway.parse_duration(args.duration)
+        except gateway.GatewayError as e:
+            print(f"cabildo gateway: {e}", file=sys.stderr)
+            return 2
+        gateway.write_force(use_file, gateway.Force(args.name, _time.time() + seconds))
+        print(f"using {args.name} first for {args.duration}; the others stay as fallbacks")
+        return 0
     if args.action == "status":
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/_cabildo/status", timeout=3) as r:
-                rows = _json.load(r)["upstreams"]
-        except OSError as e:
+            token = gateway.Keys().get(settings.token) if settings.token else None
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/_cabildo/status")
+            if token:
+                req.add_header(gateway.TOKEN_HEADER, token)
+            with urllib.request.urlopen(req, timeout=3) as r:
+                data = _json.load(r)
+        except (OSError, gateway.GatewayError) as e:
             print(f"{C.RED}no gateway on 127.0.0.1:{port}{C.OFF} ({e})", file=sys.stderr)
             return 1
-        for row in rows:
+        if data.get("forced"):
+            print(f"  using {data['forced']} first (cabildo gateway use auto to undo)")
+        for row in data["upstreams"]:
             state = "ready" if row["ready"] else f"set aside {row['set_aside_s']}s: {row['reason']}"
-            print(f"  {row['name']:<16} {row['kind']:<12} {state}")
+            print(
+                f"  {row['name']:<16} {row['kind']:<12} {state:<40} "
+                f"{row['requests']} served, {row['failovers']} set aside"
+                + (f", last: {row['last_error']}" if row["last_error"] else "")
+            )
         return 0
-    gw = gateway.Gateway(settings, log=lambda m: print(m, flush=True))
+    gw = gateway.Gateway(settings, use_file=use_file, log=lambda m: print(m, flush=True))
     server = gateway.make_server(gw, port)
 
     def reload_config(_sig: int, _frame: object) -> None:
@@ -1745,7 +1778,7 @@ def cmd_gateway(args) -> int:
 
     signal.signal(signal.SIGHUP, reload_config)
     names = ", ".join(u.name for u in settings.upstreams)
-    print(f"cabildo gateway on http://127.0.0.1:{server.server_port} ({settings.policy}: {names})")
+    print(f"cabildo gateway on http://127.0.0.1:{server.server_port} (in order: {names})")
     print(f"point Claude Code at it: ANTHROPIC_BASE_URL=http://127.0.0.1:{server.server_port}")
     try:
         server.serve_forever()
@@ -2674,7 +2707,9 @@ def main(argv: list[str] | None = None) -> int:
         "gateway",
         help="a local gateway for Claude Code: fails over between your subscription and API keys",
     )
-    gw.add_argument("action", nargs="?", default="serve", choices=["serve", "status"])
+    gw.add_argument("action", nargs="?", default="serve", choices=["serve", "status", "use"])
+    gw.add_argument("name", nargs="?", help="use: the upstream to try first, or auto")
+    gw.add_argument("--for", dest="duration", default="2h", help="use: how long (30m, 2h, 1d)")
     gw.add_argument("--port", type=int, help="override [gateway] port")
     gw.set_defaults(fn=cmd_gateway)
 

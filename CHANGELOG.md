@@ -6,10 +6,13 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 - `cabildo gateway` is a local server for `ANTHROPIC_BASE_URL`. It sends each Claude Code request
   to your subscription first and, when that answers 429 or out of credit, to an API key or to
-  Amazon Bedrock (Mantle, the Anthropic format), with no session restart. `failover` or
-  `round_robin`, config in `~/.cabildo/config.toml`, `cabildo service install --gateway` to run it
-  as a service, `cabildo service reload` to read the config again. Not yet tried against a live
-  Bedrock key.
+  Amazon Bedrock (Mantle, the Anthropic format), with no session restart. Upstreams are tried in
+  the order of `~/.cabildo/config.toml`; a limit is remembered per model, with the reset time the
+  upstream gives. `cabildo gateway use <name> --for 2h` picks an upstream yourself and
+  `use auto` undoes it. `server_tools`, `models` and `drop_betas` keep a request away from an
+  upstream that cannot serve it. A request from a web page is refused. `cabildo service install
+  --gateway` runs it as a service, and `cabildo service reload` reads the config again. Not yet
+  tried against a live Bedrock key.
 - Agents started in a folder that is not a project (the home folder, the temp folder, or a folder
   that holds git repos) no longer share one `proj:` channel. They keep `general` and direct
   messages. `[project.<name>] isolated = false` brings the channel back. `cabildo doctor` warns
