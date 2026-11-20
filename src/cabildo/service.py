@@ -203,6 +203,21 @@ def daemon_unit(
     )
 
 
+GATEWAY = "gateway"
+
+
+def gateway_unit() -> Unit:
+    """The local gateway for Claude Code (``cabildo gateway serve``). Its own service, not part
+    of the daemon: a daemon reload or restart must not cut the model streams of every session.
+    """
+    return Unit(
+        key=GATEWAY,
+        description="cabildo gateway — local ANTHROPIC_BASE_URL that fails over between upstreams",
+        exec_start=[_python(), "-m", "cabildo.cli", "gateway", "serve"],
+        env=_passthrough_env(),
+    )
+
+
 def _sh_quote(value: str) -> str:
     """Systemd's own quoting: only what contains whitespace or quotes needs it."""
     if value and not any(c in value for c in " \t\"'\\"):

@@ -87,6 +87,8 @@ cabildo viewer                  # read-only web view on http://127.0.0.1:8787
   `--allow-spawn`. Sweeps sessions whose `claude` died without firing `SessionEnd`.
 - **Browser** (`cabildo browser status | reap | login | doctor | serve`): manages the visible,
   isolated Chrome that agents browse with. See [docs/browser.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/browser.md).
+- **Gateway** (`cabildo gateway serve | status`): a local `ANTHROPIC_BASE_URL` that moves a request
+  to your API key or Bedrock when the subscription runs out. See [docs/gateway.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/gateway.md).
 - **Platforms**: Linux and macOS, Python 3.12+. Memory-pressure stall detection (PSI) is
   Linux-only.
 

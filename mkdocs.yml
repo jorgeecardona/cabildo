@@ -54,6 +54,7 @@ plugins:
           - channels.md
           - roles.md
           - browser.md
+          - gateway.md
           - design/broker-service.md
 
 nav:
@@ -63,5 +64,6 @@ nav:
   - Channels and tags: channels.md
   - Roles: roles.md
   - Browser: browser.md
+  - Gateway: gateway.md
   - Crons: crons.md
   - Changelog: changelog.md

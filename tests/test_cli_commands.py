@@ -23,6 +23,7 @@ COMMANDS = [
     "install",
     "plugin",
     "sessions",
+    "gateway",
     "stop",
     "mem",
     "load",

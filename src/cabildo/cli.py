@@ -1706,6 +1706,54 @@ def cmd_session_ops(args) -> int:
     return 0
 
 
+def cmd_gateway(args) -> int:
+    """``cabildo gateway serve|status``: the local gateway that fails over between upstreams."""
+    import json as _json
+    import urllib.request
+
+    from . import config, gateway
+
+    try:
+        settings = gateway.parse(config.gateway_table())
+    except gateway.GatewayError as e:
+        print(f"cabildo gateway: {e}", file=sys.stderr)
+        return 2
+    port = args.port if args.port is not None else settings.port
+    if args.action == "status":
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/_cabildo/status", timeout=3) as r:
+                rows = _json.load(r)["upstreams"]
+        except OSError as e:
+            print(f"{C.RED}no gateway on 127.0.0.1:{port}{C.OFF} ({e})", file=sys.stderr)
+            return 1
+        for row in rows:
+            state = "ready" if row["ready"] else f"set aside {row['set_aside_s']}s: {row['reason']}"
+            print(f"  {row['name']:<16} {row['kind']:<12} {state}")
+        return 0
+    gw = gateway.Gateway(settings, log=lambda m: print(m, flush=True))
+    server = gateway.make_server(gw, port)
+
+    def reload_config(_sig: int, _frame: object) -> None:
+        """SIGHUP (``cabildo service reload``): read the config again, keep open streams."""
+        try:
+            gw.reconfigure(gateway.parse(config.gateway_table()))
+            print("gateway: config reloaded", flush=True)
+        except gateway.GatewayError as e:
+            print(f"gateway: config not reloaded: {e}", flush=True)
+
+    import signal
+
+    signal.signal(signal.SIGHUP, reload_config)
+    names = ", ".join(u.name for u in settings.upstreams)
+    print(f"cabildo gateway on http://127.0.0.1:{server.server_port} ({settings.policy}: {names})")
+    print(f"point Claude Code at it: ANTHROPIC_BASE_URL=http://127.0.0.1:{server.server_port}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def cmd_minutes(args) -> int:
     """The day's conversation minutas for a project, distilled from its transcripts."""
     import datetime as _dt
@@ -1931,10 +1979,12 @@ def cmd_notes(args) -> int:
 # Background services
 # --------------------------------------------------------------------------- #
 def _service_units(args):
-    """The unit `install` should write: the daemon."""
+    """The units `install` should write: the daemon, and with ``--gateway`` the gateway."""
     from . import service
 
+    gateway_units = [service.gateway_unit()] if getattr(args, "gateway", False) else []
     return [
+        *gateway_units,
         service.daemon_unit(
             allow_push=args.allow_push,
             allow_spawn=args.allow_spawn,
@@ -1945,20 +1995,20 @@ def _service_units(args):
             max_intent_age=args.max_intent_age,
             notify=not args.no_notify,
             save_messages=args.save_messages,
-        )
+        ),
     ]
 
 
 def _service_selected(args):
-    """Which unit a status/logs/restart/uninstall applies to: the daemon, whether
-    or not it is installed, so status can report 'not installed' rather than
-    nothing.
+    """Which units a status/logs/restart/reload/uninstall applies to: the installed ones of the
+    daemon and the gateway; the daemon even when it is not installed, so status can report 'not
+    installed' rather than nothing.
     """
     from . import service
 
-    units = [service.daemon_unit()]
+    units = [service.daemon_unit(), service.gateway_unit()]
     installed = [u for u in units if u.path.exists()]
-    return installed or units
+    return installed or units[:1]
 
 
 def _print_steps(steps) -> int:
@@ -2620,6 +2670,14 @@ def main(argv: list[str] | None = None) -> int:
             sp.add_argument("--force", action="store_true", help="skip the made-from check")
         sp.set_defaults(fn=cmd_session_ops)
 
+    gw = sub.add_parser(
+        "gateway",
+        help="a local gateway for Claude Code: fails over between your subscription and API keys",
+    )
+    gw.add_argument("action", nargs="?", default="serve", choices=["serve", "status"])
+    gw.add_argument("--port", type=int, help="override [gateway] port")
+    gw.set_defaults(fn=cmd_gateway)
+
     st = sub.add_parser(
         "stop", help="set the fleet's wind-down line (e.g. 'stop 23:00'); bare to show it"
     )
@@ -2908,6 +2966,9 @@ def main(argv: list[str] | None = None) -> int:
         default="status",
         choices=["install", "status", "logs", "start", "stop", "restart", "reload", "uninstall"],
         help="default: status",
+    )
+    sv.add_argument(
+        "--gateway", action="store_true", help="install: also the gateway unit (cabildo gateway)"
     )
     sv.add_argument(
         "--allow-push", action="store_true", help="let the daemon actually push (default: dry run)"

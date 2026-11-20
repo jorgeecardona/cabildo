@@ -550,3 +550,10 @@ def test_reload_sends_sighup_through_launchctl_on_darwin(darwin, monkeypatch):
     unit = service.daemon_unit()
     service.reload(unit)
     assert calls == [("kill", "SIGHUP", f"gui/{service.os.getuid()}/{unit.label}")]
+
+
+def test_the_gateway_is_its_own_unit_with_no_daemon_flags(linux):
+    text = service.render(service.gateway_unit())
+    assert "-m cabildo.cli gateway serve" in text
+    assert "--allow-push" not in text
+    assert service.gateway_unit().name == "cabildo-gateway.service"
