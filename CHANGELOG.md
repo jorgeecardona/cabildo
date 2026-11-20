@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- An agent that only reads no longer blocks git in a shared checkout. The guard counts a peer
+  only after it has written there: an edit tool, a git command that writes, or a shell command
+  that writes a file. A session you open to ask questions never blocks another agent's squash,
+  `git add -A` or checkout. Sessions that were already open count as before until they end (#56).
 - `cabildo service reload` makes the daemon finish the intents it is running (a push in its gate,
   for example), take no new one, then start again on the current code in the same process
   (SIGHUP, `systemctl --user reload` too). `restart` still stops it at once and kills a running

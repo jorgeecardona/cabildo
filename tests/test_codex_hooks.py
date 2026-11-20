@@ -32,6 +32,12 @@ def test_session_start_registers_as_codex(conn, monkeypatch):
     assert row["owner_pid"] == 333  # bound to the codex process, not the hook's pid
 
 
+def wrote_at(conn, session_id):
+    row = store.get_session(conn, session_id)
+    assert row is not None
+    return row["wrote_at"]
+
+
 def test_pre_tool_use_denies_force_push(conn, capsys):
     store.register_session(
         conn, "cx", client="codex", owner_pid=1, project="/repo/x", project_name="x"
@@ -133,9 +139,21 @@ def test_shared_checkout_is_enforced_across_clients(conn):
         project_name="x",
     )
     store.set_handle(conn, "codex-B", "bob")
+    store.mark_wrote(conn, "claude-A")
+    store.mark_wrote(conn, "codex-B")
     # Claude commits in the shared checkout → denied, naming the Codex peer.
     reason = guard.deny_reason(conn, "claude-A", "Bash", {"command": "git commit -am x"})
     assert reason is not None and "@bob" in reason
     # Reverse: Codex commits → denied, naming the Claude peer.
     reason = guard.deny_reason(conn, "codex-B", "Bash", {"command": "git commit -am x"})
     assert reason is not None and "@alice" in reason
+
+
+def test_a_codex_apply_patch_marks_the_session_as_a_writer(conn):
+    store.register_session(
+        conn, "cx", client="codex", owner_pid=1, project="/repo/x", project_name="x"
+    )
+    codex_hooks.post_tool_use({"session_id": "cx", "tool_name": "Read", "tool_input": {}})
+    assert wrote_at(conn, "cx") is None
+    codex_hooks.post_tool_use({"session_id": "cx", "tool_name": "apply_patch", "tool_input": {}})
+    assert wrote_at(conn, "cx") is not None

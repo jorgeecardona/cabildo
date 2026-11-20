@@ -691,6 +691,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE sessions ADD COLUMN time_injected_at REAL")
     if "heartbeat_at" not in have:
         conn.execute("ALTER TABLE sessions ADD COLUMN heartbeat_at REAL")
+    if "wrote_at" not in have:
+        # When the session last ran a tool that writes files (#56). Existing rows are
+        # backfilled to "wrote when last seen", so the guard treats today's sessions as it did
+        # before; a session that starts after this only counts once it writes.
+        conn.execute("ALTER TABLE sessions ADD COLUMN wrote_at REAL")
+        conn.execute("UPDATE sessions SET wrote_at=last_seen_at")
     if "owner_pid" not in have:
         conn.execute("ALTER TABLE sessions ADD COLUMN owner_pid INTEGER")
         # One-time backfill, right after the column appears: every pre-existing
@@ -1106,6 +1112,14 @@ def touch(conn: sqlite3.Connection, session_id: str, cwd: str | None = None) -> 
         "WHERE session_id=?",
         (_now(), cwd, session_id),
     )
+    conn.commit()
+
+
+def mark_wrote(conn: sqlite3.Connection, session_id: str) -> None:
+    """Record that the session just ran a tool that writes files. Until it does, the shared
+    checkout guard does not count it as someone whose work a git command could reach (#56).
+    """
+    conn.execute("UPDATE sessions SET wrote_at=? WHERE session_id=?", (_now(), session_id))
     conn.commit()
 
 

@@ -73,9 +73,18 @@ def conn(home):
 
 
 def make_session(
-    conn, session_id, *, handle=None, project="/repo/alpha", project_name="alpha", claude_pid=1000
+    conn,
+    session_id,
+    *,
+    handle=None,
+    project="/repo/alpha",
+    project_name="alpha",
+    claude_pid=1000,
+    wrote=True,
 ):
-    """Register a session and optionally give it a handle."""
+    """Register a session and optionally give it a handle. ``wrote`` marks it as having written
+    a file (a peer the shared-checkout guard counts); pass False for one that only reads (#56).
+    """
     store.register_session(
         conn,
         session_id,
@@ -86,4 +95,6 @@ def make_session(
     )
     if handle:
         store.set_handle(conn, session_id, handle)
+    if wrote:
+        store.mark_wrote(conn, session_id)
     return session_id

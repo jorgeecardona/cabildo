@@ -462,10 +462,41 @@ def _held_by_me(conn: sqlite3.Connection, resource: str, session_id: str) -> boo
     )
 
 
+# Tools that write files. Bash is judged by ``writes_files``.
+_WRITE_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch"})
+# A shell command that writes without git: a redirect to a file (not ``2>&1`` or ``>/dev/null``),
+# ``sed -i``, ``tee``, or a command whose job is to change files.
+_SHELL_WRITE = re.compile(
+    r"(?<![\d&>])>{1,2}(?!&)\s*(?!/dev/null)[^\s>&]"
+    r"|\bsed\s+(?:-\S+\s+)*-\w*i"
+    r"|\btee\b"
+    r"|\b(?:rm|mv|cp|mkdir|rmdir|touch|chmod|ln|truncate|patch|dd)\s"
+)
+
+
+def writes_files(tool_name: str, tool_input: dict[str, Any]) -> bool:
+    """True when this tool call can change files in the checkout: an edit tool, a git command
+    that writes the index, tree or HEAD, or a shell command that writes a file (#56).
+
+    A session that only reads and answers never matches, so it never blocks a peer.
+    """
+    if tool_name in _WRITE_TOOLS:
+        return True
+    if tool_name != "Bash":
+        return False
+    command = str(tool_input.get("command") or "")
+    return bool(_SHELL_WRITE.search(command)) or any(
+        _mutates_shared_checkout(argv) for argv in _argvs(command)
+    )
+
+
 def _sharers(conn: sqlite3.Connection, me: Actor, cwd: str | None = None) -> list[sqlite3.Row]:
-    """The live peers standing in the *same* working tree as ``me``. cwd is what
-    says which checkout; project can't (it collapses worktrees). An actor without
+    """The live peers standing in the *same* working tree as ``me`` that have written there.
+    cwd is what says which checkout; project can't (it collapses worktrees). An actor without
     a cwd tells us nothing, so it is not treated as sharing anyone's tree.
+
+    A peer that has only read (it answered questions, ran ``git log``) has nothing in the tree
+    for a git command to reach, so it is not a sharer (#56).
 
     ``cwd`` names the folder the command acts on when that is not the session's own (a
     ``cd <dir> &&`` or ``git -C <dir>``), so a commit in a worktree is judged by that worktree
@@ -477,7 +508,7 @@ def _sharers(conn: sqlite3.Connection, me: Actor, cwd: str | None = None) -> lis
     return [
         p
         for p in store.active_sessions(conn, project=me.project, exclude=me.session_id)
-        if p["cwd"] and tree_root(p["cwd"]) == mine
+        if p["cwd"] and p["wrote_at"] and tree_root(p["cwd"]) == mine
     ]
 
 
@@ -647,7 +678,7 @@ def _deny_shared_checkout(conn: sqlite3.Connection, me: Actor, command: str) -> 
         label = hits[0][1]
         return (
             f"cabildo: `{label}` writes the index, working tree, or HEAD that you share with "
-            f"{len(sharers)} other agent(s) ({who}) in this one checkout — it can stage their "
+            f"{len(sharers)} other agent(s) who wrote here ({who}) in this one checkout — it can stage their "
             f"half-written files, wipe their uncommitted work, or move the branch under them. "
             f"Work in your own tree instead:\n"
             f"    git worktree add ../wt-<name> -b <name>\n"
@@ -670,7 +701,7 @@ def _deny_shared_checkout(conn: sqlite3.Connection, me: Actor, command: str) -> 
     who = ", ".join(store.display_name(p) for p in sharers[:5])
     return (
         f"cabildo: `{label}` reaches the index, working tree, or HEAD that you share with "
-        f"{len(sharers)} other agent(s) ({who}) in this one checkout — it stages or discards "
+        f"{len(sharers)} other agent(s) who wrote here ({who}) in this one checkout — it stages or discards "
         f"everyone's files, or moves the branch under them. With trunk mode off the flow here "
         f"is to commit only your own files on this branch: stage explicit paths "
         f"(never `git add -A` or `git add .`) and commit them —\n"

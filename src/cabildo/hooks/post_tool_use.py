@@ -53,6 +53,8 @@ def main() -> None:
     conn = store.connect()
     try:
         store.touch(conn, session_id, cwd=cwd)
+        if guard.writes_files(str(data.get("tool_name") or ""), data.get("tool_input") or {}):
+            store.mark_wrote(conn, session_id)
         text = notify._join(
             notify.midturn_urgent_text(conn, session_id),
             notify.condition_text(conn, session_id),

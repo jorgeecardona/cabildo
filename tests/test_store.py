@@ -318,3 +318,14 @@ def test_list_topics_hides_unused_topics_and_pages(conn):
     assert not {t["name"] for t in page} & {t["name"] for t in rest}
     assert [t["name"] for t in store.list_topics(conn, prefix="proj:unused-_")] == []
     assert len(store.list_topics(conn, prefix="proj:unused-")) == 2
+
+
+def test_migration_adds_wrote_at_and_backfills_existing_sessions(home):
+    conn = store.connect()
+    store.register_session(conn, "s", cwd="/r", project="/r", project_name="r", claude_pid=1)
+    conn.execute("UPDATE sessions SET last_seen_at=1234.5")
+    conn.execute("ALTER TABLE sessions DROP COLUMN wrote_at")  # the shape of an older bus
+    conn.commit()
+    conn.close()
+    row = store.connect().execute("SELECT wrote_at FROM sessions WHERE session_id='s'").fetchone()
+    assert row["wrote_at"] == 1234.5  # a session that was already there counts as having written

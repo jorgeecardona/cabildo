@@ -149,10 +149,12 @@ def post_tool_use(data: dict) -> None:
     session_id = data.get("session_id")
     if not session_id:
         return
-    from cabildo import notify, store
+    from cabildo import guard, notify, store
 
     conn = store.connect()
     try:
+        if guard.writes_files(str(data.get("tool_name") or ""), data.get("tool_input") or {}):
+            store.mark_wrote(conn, session_id)
         text = notify.midturn_urgent_text(conn, session_id)
     finally:
         conn.close()

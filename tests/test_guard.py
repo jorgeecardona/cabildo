@@ -664,6 +664,7 @@ def _main_and_worktree(conn, tmp_path):
             conn, sid, cwd=str(main), project=str(main), project_name="alpha", claude_pid=1000
         )
         store.set_handle(conn, sid, handle)
+        store.mark_wrote(conn, sid)
     return main, wt
 
 
@@ -705,3 +706,69 @@ def test_mutating_git_allowed_in_your_own_worktree(conn, tmp_path):
 
     assert _bash(conn, "a", "git commit -am x") is None
     assert _bash(conn, "b", "git commit -am x") is None
+
+
+def wrote_at(conn, session_id):
+    row = store.get_session(conn, session_id)
+    assert row is not None
+    return row["wrote_at"]
+
+
+# --- #56: a peer that only reads does not block --------------------------------------------
+
+
+def test_a_peer_that_never_wrote_does_not_block_a_dangerous_git_op(conn):
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha", wrote=False)
+    assert _bash(conn, "a", "git add -A") is None
+    assert _bash(conn, "a", "git checkout -b x") is None
+
+
+def test_a_peer_blocks_only_from_its_first_write(conn):
+    make_session(conn, "a", handle="alice", project=ALPHA, project_name="alpha")
+    make_session(conn, "b", handle="bob", project=ALPHA, project_name="alpha", wrote=False)
+    assert _bash(conn, "a", "git add -A") is None
+    store.mark_wrote(conn, "b")
+    reason = _bash(conn, "a", "git add -A")
+    assert reason is not None
+    assert "who wrote here (@bob)" in reason
+
+
+@pytest.mark.parametrize(
+    ("tool", "tool_input", "expected"),
+    [
+        ("Edit", {"file_path": "/x"}, True),
+        ("Write", {"file_path": "/x"}, True),
+        ("NotebookEdit", {}, True),
+        ("Read", {"file_path": "/x"}, False),
+        ("Grep", {"pattern": "x"}, False),
+        ("Bash", {"command": "git log --oneline -5"}, False),
+        ("Bash", {"command": "git status && git diff"}, False),
+        ("Bash", {"command": "ls -la | grep foo"}, False),
+        ("Bash", {"command": "cat a.txt 2>&1"}, False),
+        ("Bash", {"command": "make test >/dev/null 2>&1"}, False),
+        ("Bash", {"command": "git commit -m x"}, True),
+        ("Bash", {"command": "git add f.txt"}, True),
+        ("Bash", {"command": "echo hi > out.txt"}, True),
+        ("Bash", {"command": "echo hi >> out.txt"}, True),
+        ("Bash", {"command": "sed -i 's/a/b/' f.py"}, True),
+        ("Bash", {"command": "rm -rf build"}, True),
+        ("Bash", {"command": "cat x | tee y"}, True),
+    ],
+)
+def test_writes_files_tells_a_reader_from_a_writer(tool, tool_input, expected):
+    assert guard.writes_files(tool, tool_input) is expected
+
+
+def test_the_post_tool_hook_marks_a_session_as_a_writer(conn, monkeypatch):
+    from cabildo.hooks import post_tool_use
+
+    make_session(conn, "w", handle="writer", project=ALPHA, project_name="alpha", wrote=False)
+    assert wrote_at(conn, "w") is None
+    payload = {"session_id": "w", "tool_name": "Read", "tool_input": {"file_path": "/x"}}
+    monkeypatch.setattr(post_tool_use, "read_input", lambda: payload)
+    post_tool_use.main()
+    assert wrote_at(conn, "w") is None
+    payload.update(tool_name="Edit")
+    post_tool_use.main()
+    assert wrote_at(conn, "w") is not None
