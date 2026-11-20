@@ -90,7 +90,9 @@ def test_unknown_event_reports_and_does_not_raise(capsys, monkeypatch):
 # --------------------------------------------------------------------------- #
 # hooks.json generation
 # --------------------------------------------------------------------------- #
-def test_hooks_config_idempotent_and_preserves_others():
+def test_hooks_config_idempotent_and_preserves_others(monkeypatch):
+    # The login-shell probe has a timeout, so on a loaded machine two calls can disagree.
+    monkeypatch.setattr("cabildo.mcp_config._on_login_path", lambda _script: True)
     existing = {
         "hooks": {
             "PreToolUse": [
