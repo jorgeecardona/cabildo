@@ -4,6 +4,13 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- The gateway runs inside the daemon, so there is one service. `cabildo service install --gateway`
+  and the gateway unit are gone. `cabildo service reload` keeps open requests and hands the
+  listening socket to the new process, so clients see no refused connection.
+- `cabildo gateway enable` points every Claude Code session at the gateway through
+  `~/.claude/settings.json`. `cabildo gateway disable` removes it.
+- `docs/gateway.md` has a section on Anthropic's terms.
+
 ## [0.1.223] - 2026-11-20
 
 Entries from 0.1.16 to 0.1.223 are listed together.

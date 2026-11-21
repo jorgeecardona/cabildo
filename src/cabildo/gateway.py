@@ -27,6 +27,11 @@ or a key that is refused) is set aside until its retry time, and the same reques
 one before the client sees anything. Only the machine-wide ``~/.cabildo/config.toml`` is read. The
 server listens on 127.0.0.1, refuses browser requests, and never forwards to a host the config
 does not name.
+
+The cabildo daemon runs it (``start_service``), like the LAN and WAN services, so there is one
+service to install. On ``cabildo service reload`` the daemon stops accepting, waits for the open
+requests, and passes the listening socket to the new process, so no client sees a refused
+connection. ``cabildo gateway serve`` runs the same server in the foreground, for debugging.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ import http.client
 import json
 import os
 import re
+import socket
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -46,7 +52,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
 
-from . import eventstream, onepassword
+from . import config, eventstream, onepassword, store
 
 DEFAULT_PORT = 8788  # 8787 is the port of ``cabildo viewer``
 RATE_COOLDOWN_KEY_S = 60.0
@@ -57,6 +63,9 @@ BILLING_COOLDOWN_S = 3600.0
 UNREACHABLE_COOLDOWN_S = 30.0
 MAX_BODY = 64 * 1024 * 1024
 TOKEN_HEADER = "x-cabildo-gateway"  # noqa: S105
+HANDOFF_ENV = "CABILDO_GATEWAY_FD"
+DRAIN_S = 120.0  # how long a reload waits for open requests before it cuts them
+BACKLOG = 128  # connections that queue while a reload swaps the process
 _BODY_PEEK = 65536  # how much of an error body is read to tell "out of credit" from a bad request
 _CHUNK = 65536
 _WATCHED = frozenset({400, 401, 402, 403, 429, 529})
@@ -718,9 +727,27 @@ class Gateway:
     use_file: Path | None = None
     log: Callable[[str], None] = lambda _m: None
     wall: Callable[[], float] = time.time
+    _active: int = field(default=0, init=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
     def __post_init__(self) -> None:
         self.router = Router(self.settings)
+
+    def enter(self) -> None:
+        """Count one open connection."""
+        with self._lock:
+            self._active += 1
+
+    def leave(self) -> None:
+        """Stop counting a connection that closed."""
+        with self._lock:
+            self._active -= 1
+
+    @property
+    def active(self) -> int:
+        """How many connections are open now."""
+        with self._lock:
+            return self._active
 
     def forced(self) -> str | None:
         """The upstream the user chose with ``cabildo gateway use``, if it is still in force."""
@@ -750,6 +777,13 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
 
         def log_message(self, format: str, *args: Any) -> None:
             return
+
+        def handle(self) -> None:
+            gw.enter()
+            try:
+                super().handle()
+            finally:
+                gw.leave()
 
         def _guard(self) -> bool:
             """Answer and return False when the request must not be served."""
@@ -939,13 +973,205 @@ def _no_length(headers: list[tuple[str, str]]) -> list[tuple[str, str]]:
     return [(k, v) for k, v in headers if k.lower() != "content-length"]
 
 
-def make_server(gw: Gateway, port: int | None = None) -> ThreadingHTTPServer:
+class _Server(ThreadingHTTPServer):
+    request_queue_size = BACKLOG
+    daemon_threads = True
+
+
+def make_server(
+    gw: Gateway, port: int | None = None, *, inherited: socket.socket | None = None
+) -> ThreadingHTTPServer:
     """A server for ``gw`` on 127.0.0.1.
 
-    ``port`` 0 picks a free one.
+    ``port`` 0 picks a free one. ``inherited`` is a listening socket handed over by the process
+    this one replaced: the server uses it and binds nothing.
     """
-    server = ThreadingHTTPServer(
-        ("127.0.0.1", gw.settings.port if port is None else port), make_handler(gw)
-    )
-    server.daemon_threads = True
+    if inherited is None:
+        return _Server(("127.0.0.1", gw.settings.port if port is None else port), make_handler(gw))
+    server = _Server(("127.0.0.1", 0), make_handler(gw), bind_and_activate=False)
+    server.socket.close()
+    server.socket = inherited
+    server.server_address = inherited.getsockname()
+    server.server_port = server.server_address[1]
     return server
+
+
+def use_file() -> Path:
+    """Where ``cabildo gateway use`` writes the upstream to try first."""
+    return store.home() / "gateway-use.json"
+
+
+def _inherited(port: int) -> socket.socket | None:
+    """The listening socket the previous process left in ``HANDOFF_ENV``, if it is for ``port``."""
+    raw = os.environ.pop(HANDOFF_ENV, "")
+    if not raw.isdigit():
+        return None
+    try:
+        sock = socket.socket(fileno=int(raw))
+    except OSError:
+        return None
+    if port not in (0, sock.getsockname()[1]):  # the port changed in the config: bind a new one
+        sock.close()
+        return None
+    return sock
+
+
+BASE_URL_ENV = "ANTHROPIC_BASE_URL"
+HEADERS_ENV = "ANTHROPIC_CUSTOM_HEADERS"
+
+
+def claude_settings_path() -> Path:
+    """The user-level Claude Code settings file, which every session reads at start."""
+    root = os.environ.get("CLAUDE_CONFIG_DIR")
+    return (Path(root).expanduser() if root else Path.home() / ".claude") / "settings.json"
+
+
+def _is_local(url: object) -> bool:
+    return isinstance(url, str) and urlsplit(url).hostname in {"127.0.0.1", "localhost"}
+
+
+def point_claude_at(path: Path, port: int, token: str | None) -> list[str]:
+    """Set ``env.ANTHROPIC_BASE_URL`` in a Claude Code settings file, and the token header.
+
+    Returns notes for the user. Keeps every other entry and saves the old file as ``.json.bak``.
+
+    Raises:
+        GatewayError: when the file is not a JSON object, or the settings already name another
+            base URL (which this would overwrite).
+    """
+    data = _read_settings(path)
+    env = data.setdefault("env", {})
+    url = f"http://127.0.0.1:{port}"
+    current = env.get(BASE_URL_ENV)
+    if current not in (None, url) and not _is_local(current):
+        msg = f"{path} already sets {BASE_URL_ENV}={current}; remove it first"
+        raise GatewayError(msg)
+    env[BASE_URL_ENV] = url
+    lines = [x for x in str(env.get(HEADERS_ENV, "")).splitlines() if x and not _ours(x)]
+    if token is not None:
+        lines.append(f"{TOKEN_HEADER}: {token}")
+    if lines:
+        env[HEADERS_ENV] = "\n".join(lines)
+    else:
+        env.pop(HEADERS_ENV, None)
+    _write_settings(path, data)
+    if "apiKeyHelper" in data:
+        return ["apiKeyHelper is set: Claude Code sends that key, not your login"]
+    return []
+
+
+def unpoint_claude(path: Path) -> bool:
+    """Remove the gateway entries from a Claude Code settings file. True when it changed."""
+    if not path.exists():
+        return False
+    data = _read_settings(path)
+    env = data.get("env")
+    if not isinstance(env, dict) or not _is_local(env.get(BASE_URL_ENV)):
+        return False
+    del env[BASE_URL_ENV]
+    lines = [x for x in str(env.get(HEADERS_ENV, "")).splitlines() if x and not _ours(x)]
+    if lines:
+        env[HEADERS_ENV] = "\n".join(lines)
+    else:
+        env.pop(HEADERS_ENV, None)
+    _write_settings(path, data)
+    return True
+
+
+def _ours(line: str) -> bool:
+    return line.split(":", 1)[0].strip().lower() == TOKEN_HEADER
+
+
+def _read_settings(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        msg = f"cannot read {path}: {exc}"
+        raise GatewayError(msg) from exc
+    if not isinstance(data, dict):
+        msg = f"{path} is not a JSON object"
+        raise GatewayError(msg)
+    return data
+
+
+def _write_settings(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        path.with_suffix(".json.bak").write_bytes(path.read_bytes())
+    path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+class GatewayService:
+    """A gateway server running on a thread of the daemon, like the LAN and WAN services."""
+
+    def __init__(
+        self, gw: Gateway, server: ThreadingHTTPServer, log: Callable[[str], None]
+    ) -> None:
+        self.gw = gw
+        self.server = server
+        self.log = log
+        self.paused = False
+        self.thread = threading.Thread(target=server.serve_forever, daemon=True, name="gateway")
+
+    @property
+    def port(self) -> int:
+        """The port the server listens on."""
+        return int(self.server.server_address[1])
+
+    @property
+    def active(self) -> int:
+        """How many connections are open now."""
+        return self.gw.active
+
+    def start(self) -> None:
+        """Start serving."""
+        self.thread.start()
+
+    def pause(self) -> None:
+        """Stop accepting. The socket stays open, so new connections wait in its backlog."""
+        if not self.paused:
+            self.paused = True
+            self.server.shutdown()
+
+    def handoff(self) -> None:
+        """Leave the listening socket open for the process that replaces this one.
+
+        It passes a duplicate of the descriptor: the socket object closes its own descriptor when
+        it is garbage collected, which happens when the daemon's ``main`` returns, before the exec.
+        """
+        fd = os.dup(self.server.socket.fileno())
+        os.set_inheritable(fd, True)
+        os.environ[HANDOFF_ENV] = str(fd)
+
+    def close(self) -> None:
+        """Stop serving and close the socket."""
+        self.pause()
+        self.server.server_close()
+
+
+def start_service(log: Callable[[str], None]) -> GatewayService | None:
+    """Start the gateway in this process, or return None when ``[gateway]`` is not configured.
+
+    A bad config or a busy port is logged and the daemon goes on without the gateway.
+    """
+    table = config.gateway_table()
+    if not table:
+        return None
+    try:
+        settings = parse(table)
+    except GatewayError as exc:
+        log(f"gateway: not started: {exc}")
+        return None
+    gw = Gateway(settings, use_file=use_file(), log=log)
+    try:
+        server = make_server(gw, inherited=_inherited(settings.port))
+    except OSError as exc:
+        log(f"gateway: cannot listen on 127.0.0.1:{settings.port}: {exc}")
+        return None
+    svc = GatewayService(gw, server, log)
+    svc.start()
+    names = ", ".join(u.name for u in settings.upstreams)
+    log(f"gateway on http://127.0.0.1:{svc.port} (in order: {names})")
+    return svc

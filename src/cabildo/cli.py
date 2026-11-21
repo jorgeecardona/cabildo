@@ -1707,7 +1707,7 @@ def cmd_session_ops(args) -> int:
 
 
 def cmd_gateway(args) -> int:
-    """``cabildo gateway serve|status|use``: the local gateway that fails over between upstreams."""
+    """``cabildo gateway serve|status|use|enable|disable``: the gateway Claude Code can talk to."""
     import json as _json
     import time as _time
     import urllib.request
@@ -1720,18 +1720,19 @@ def cmd_gateway(args) -> int:
         print(f"cabildo gateway: {e}", file=sys.stderr)
         return 2
     port = args.port if args.port is not None else settings.port
-    use_file = store.home() / "gateway-use.json"
+    use_file = gateway.use_file()
     if args.action == "use":
         if not args.name:
             force = gateway.read_force(use_file, _time.time())
-            print(f"using {force.name}" if force else "automatic: the order of the config")
+            print(f"using {force.name} first" if force else "no upstream is forced (auto)")
             return 0
         if args.name == "auto":
             gateway.write_force(use_file, None)
-            print("automatic again: the order of the config")
+            print("auto: the upstreams are tried in the order of the config")
             return 0
-        if args.name not in {u.name for u in settings.upstreams}:
-            names = ", ".join(u.name for u in settings.upstreams)
+        known = [u.name for u in settings.upstreams]
+        if args.name not in known:
+            names = ", ".join(known)
             print(f"cabildo gateway: no upstream {args.name!r} (have: {names})", file=sys.stderr)
             return 2
         try:
@@ -1740,16 +1741,60 @@ def cmd_gateway(args) -> int:
             print(f"cabildo gateway: {e}", file=sys.stderr)
             return 2
         gateway.write_force(use_file, gateway.Force(args.name, _time.time() + seconds))
-        print(f"using {args.name} first for {args.duration}; the others stay as fallbacks")
+        print(f"using {args.name} first for {args.duration} (cabildo gateway use auto to undo)")
+        return 0
+
+    def fetch_status() -> dict:
+        token = gateway.Keys().get(settings.token) if settings.token else None
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/_cabildo/status")
+        if token:
+            req.add_header(gateway.TOKEN_HEADER, token)
+        with urllib.request.urlopen(req, timeout=3) as r:
+            return _json.load(r)
+
+    if args.action == "disable":
+        path = gateway.claude_settings_path()
+        try:
+            changed = gateway.unpoint_claude(path)
+        except gateway.GatewayError as e:
+            print(f"cabildo gateway: {e}", file=sys.stderr)
+            return 2
+        print(
+            f"removed {gateway.BASE_URL_ENV} from {path}"
+            if changed
+            else f"nothing to remove in {path}"
+        )
+        if changed:
+            print("sessions already running keep the gateway until they restart")
+        return 0
+    if args.action == "enable":
+        try:
+            fetch_status()
+        except (OSError, gateway.GatewayError) as e:
+            if not args.force:
+                print(
+                    f"{C.RED}no gateway on 127.0.0.1:{port}{C.OFF} ({e}). Sessions pointed at it "
+                    "would fail. Run `cabildo service restart`, or use --force.",
+                    file=sys.stderr,
+                )
+                return 1
+        path = gateway.claude_settings_path()
+        try:
+            token = gateway.Keys().get(settings.token) if settings.token else None
+            notes = gateway.point_claude_at(path, port, token)
+        except gateway.GatewayError as e:
+            print(f"cabildo gateway: {e}", file=sys.stderr)
+            return 2
+        print(f"{gateway.BASE_URL_ENV}=http://127.0.0.1:{port} set in {path}")
+        for note in notes:
+            print(f"  {C.YELLOW}!{C.OFF} {note}")
+        print("every Claude Code session started from now on uses the gateway")
+        print("sessions already running keep their old setting until they restart")
+        print("if the daemon stops, those sessions fail: cabildo gateway disable undoes this")
         return 0
     if args.action == "status":
         try:
-            token = gateway.Keys().get(settings.token) if settings.token else None
-            req = urllib.request.Request(f"http://127.0.0.1:{port}/_cabildo/status")
-            if token:
-                req.add_header(gateway.TOKEN_HEADER, token)
-            with urllib.request.urlopen(req, timeout=3) as r:
-                data = _json.load(r)
+            data = fetch_status()
         except (OSError, gateway.GatewayError) as e:
             print(f"{C.RED}no gateway on 127.0.0.1:{port}{C.OFF} ({e})", file=sys.stderr)
             return 1
@@ -1767,7 +1812,7 @@ def cmd_gateway(args) -> int:
     server = gateway.make_server(gw, port)
 
     def reload_config(_sig: int, _frame: object) -> None:
-        """SIGHUP (``cabildo service reload``): read the config again, keep open streams."""
+        """SIGHUP: read the config again, keep open streams."""
         try:
             gw.reconfigure(gateway.parse(config.gateway_table()))
             print("gateway: config reloaded", flush=True)
@@ -1779,7 +1824,7 @@ def cmd_gateway(args) -> int:
     signal.signal(signal.SIGHUP, reload_config)
     names = ", ".join(u.name for u in settings.upstreams)
     print(f"cabildo gateway on http://127.0.0.1:{server.server_port} (in order: {names})")
-    print(f"point Claude Code at it: ANTHROPIC_BASE_URL=http://127.0.0.1:{server.server_port}")
+    print("this is the foreground server for debugging: the daemon serves the gateway normally")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -2012,15 +2057,9 @@ def cmd_notes(args) -> int:
 # Background services
 # --------------------------------------------------------------------------- #
 def _service_units(args):
-    """The unit `install` should write: the daemon, or with ``--gateway`` only the gateway.
-
-    The gateway never rewrites the daemon unit, so a daemon installed with ``--allow-push`` keeps
-    its flags.
-    """
+    """The unit `install` should write: the daemon, which also serves the gateway."""
     from . import service
 
-    if getattr(args, "gateway", False):
-        return [service.gateway_unit()]
     return [
         service.daemon_unit(
             allow_push=args.allow_push,
@@ -2037,15 +2076,10 @@ def _service_units(args):
 
 
 def _service_selected(args):
-    """Which units a status/logs/restart/reload/uninstall applies to: the installed ones of the
-    daemon and the gateway; the daemon even when it is not installed, so status can report 'not
-    installed' rather than nothing.
-    """
+    """Which units a status/logs/restart/reload/uninstall applies to: the daemon's."""
     from . import service
 
-    units = [service.daemon_unit(), service.gateway_unit()]
-    installed = [u for u in units if u.path.exists()]
-    return installed or units[:1]
+    return [service.daemon_unit()]
 
 
 def _print_steps(steps) -> int:
@@ -2171,10 +2205,8 @@ def cmd_service(args) -> int:
 
     print(f"{C.BOLD}cabildo services{C.OFF} {C.DIM}{sv.unit_dir()}{C.OFF}")
     any_installed = False
-    for u in (sv.daemon_unit(), sv.gateway_unit()):
+    for u in (sv.daemon_unit(),):
         st = sv.status(u)
-        if u.key == sv.GATEWAY and not st["installed"]:
-            continue  # the gateway is optional: say nothing when it is not installed
         if not st["installed"]:
             print(f"  {C.DIM}○ {u.name:<24} not installed{C.OFF}")
             continue
@@ -2717,14 +2749,18 @@ def main(argv: list[str] | None = None) -> int:
         "action",
         nargs="?",
         default="serve",
-        choices=["serve", "status", "use"],
-        help="serve (default), status, or use",
+        choices=["serve", "status", "use", "enable", "disable"],
+        help="serve (foreground, for debugging), status, use, enable or disable "
+        "(point every Claude Code session at the gateway, or stop)",
     )
     gw.add_argument("name", nargs="?", help="use: the upstream to try first, or auto")
     gw.add_argument(
         "--for", dest="duration", default="2h", help="use: how long (30m, 2h, 1d; default: 2h)"
     )
     gw.add_argument("--port", type=int, help="override [gateway] port")
+    gw.add_argument(
+        "--force", action="store_true", help="enable: write the setting although no gateway answers"
+    )
     gw.set_defaults(fn=cmd_gateway)
 
     st = sub.add_parser(
@@ -3008,18 +3044,13 @@ def main(argv: list[str] | None = None) -> int:
     nt.add_argument("--ref", help="with --park: where it went (issue name, MR, ticket)")
     nt.set_defaults(fn=cmd_notes)
 
-    sv = sub.add_parser("service", help="run the daemon and the gateway as a background service")
+    sv = sub.add_parser("service", help="run the daemon (and the gateway in it) as a service")
     sv.add_argument(
         "action",
         nargs="?",
         default="status",
         choices=["install", "status", "logs", "start", "stop", "restart", "reload", "uninstall"],
         help="default: status",
-    )
-    sv.add_argument(
-        "--gateway",
-        action="store_true",
-        help="install: the gateway unit (cabildo gateway) instead of the daemon unit",
     )
     sv.add_argument(
         "--allow-push", action="store_true", help="let the daemon actually push (default: dry run)"

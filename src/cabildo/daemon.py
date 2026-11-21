@@ -34,6 +34,7 @@ from . import (
     ci_watch,
     config,
     desktop,
+    gateway,
     gitlab,
     grant_prompt,
     improve,
@@ -54,6 +55,7 @@ WORKER_JOIN_TIMEOUT = 30.0
 #: ``main`` returns this after SIGHUP, once no intent is running: ``run`` then re-executes the
 #: daemon with the same arguments, so the same process id carries new code (``cabildo service reload``).
 RELOAD_EXIT = 75
+GATEWAY_DRAIN = gateway.DRAIN_S  # how long a reload waits for open gateway requests
 RELOAD_LOG_EVERY = 60.0  # how often a draining daemon says what it waits for
 # How often the poll loop sweeps for sessions whose owning claude died without
 # firing the SessionEnd hook. Cheap (one os.kill per active session) but not
@@ -455,6 +457,13 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
         "instead of opening the DB directly (default on; --no-broker to disable)",
     )
     p.add_argument(
+        "--gateway",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="serve the local gateway for Claude Code when [gateway] is configured "
+        "(default on; --no-gateway to disable)",
+    )
+    p.add_argument(
         "--broker-socket",
         default=broker.socket_path(),
         help="unix socket path for the broker (default: <home>/bus.sock)",
@@ -545,6 +554,9 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
         if n:
             _log(f"🔐 {n} pending access request(s) shown again with Grant / Deny")
     wan_service = None if args.once else wan.start_service(_log)
+    gateway_service = gateway.start_service(_log) if args.gateway and not args.once else None
+    handing_off = False
+    reload_since = 0.0
 
     workers: list[threading.Thread] = []
     last_reap = 0.0
@@ -567,12 +579,25 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
             workers = [t for t in workers if t.is_alive()]
             if reloading.is_set():
                 # SIGHUP: take no new intent, let the running ones finish, then start over.
-                if not workers:
+                # The gateway stops accepting but keeps its socket, so new connections wait in
+                # the backlog; its open requests get GATEWAY_DRAIN seconds.
+                if gateway_service is not None and not reload_since:
+                    reload_since = time.monotonic()
+                    gateway_service.pause()
+                open_requests = gateway_service.active if gateway_service else 0
+                if open_requests and time.monotonic() - reload_since > GATEWAY_DRAIN:
+                    _log(f"reload: cutting {open_requests} gateway request(s) still open")
+                    open_requests = 0
+                if not workers and not open_requests:
                     _log("reload: nothing is running, restarting on the new code")
+                    handing_off = True
                     return RELOAD_EXIT
                 if time.monotonic() - last_drain_log >= RELOAD_LOG_EVERY:
                     last_drain_log = time.monotonic()
-                    _log(f"reload: waiting for {len(workers)} running intent(s) to finish")
+                    _log(
+                        f"reload: waiting for {len(workers)} running intent(s) "
+                        f"and {open_requests} gateway request(s) to finish"
+                    )
             elif len(workers) < args.workers:
                 intent = store.take_next_intent(conn, worker)
                 if intent is not None:
@@ -649,6 +674,11 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
             lan_service.close()
         if wan_service is not None:
             wan_service.close()
+        if gateway_service is not None:
+            if handing_off:
+                gateway_service.handoff()
+            else:
+                gateway_service.close()
         broker_stop.set()
         if broker_thread is not None:
             broker_thread.join(timeout=2)

@@ -38,26 +38,34 @@ of upstream is a change in the gateway, so no session restarts.
    "claude-haiku-4-5" = "anthropic.claude-haiku-4-5"
    ```
 
-3. Install and start it as its own service. This writes only the gateway unit and leaves the
-   daemon unit as it is:
+3. Restart the daemon. It serves the gateway when `[gateway]` exists, so there is no second
+   service:
 
    ```bash
-   cabildo service install --gateway
+   cabildo service restart
    cabildo gateway status
    ```
 
-4. Point Claude Code at it, in `~/.claude/settings.json`, then restart your sessions once:
+4. Point every Claude Code session at it, including sessions started outside cabildo:
 
-   ```json
-   { "env": { "ANTHROPIC_BASE_URL": "http://127.0.0.1:8788" } }
+   ```bash
+   cabildo gateway enable
    ```
 
-   Remove `apiKeyHelper` from the settings. With a helper set, Claude Code sends its key
-   instead of your subscription login.
+   This sets `env.ANTHROPIC_BASE_URL` in `~/.claude/settings.json` (or in `$CLAUDE_CONFIG_DIR`).
+   It keeps your other settings and saves the old file as `settings.json.bak`. It refuses when
+   no gateway answers, or when the settings already name another base URL. Sessions that are
+   already running keep their old setting until you restart them.
 
-The service does not see the variables of your shell. A key with `env:NAME` is empty there, and
+   Remove `apiKeyHelper` from the settings. With a helper set, Claude Code sends its key
+   instead of your subscription login. `enable` warns when it finds one.
+
+The daemon does not see the variables of your shell. A key with `env:NAME` is empty there, and
 the upstream is set aside with "no usable key". Use `file:` or `op://`, or set the variable in
-`~/.config/systemd/user/cabildo-gateway.service.d/override.conf`.
+`~/.config/systemd/user/cabildo-daemon.service.d/override.conf`.
+
+If the daemon is not running, every session that uses the gateway fails to connect. Run
+`cabildo gateway disable` to go back to Anthropic directly.
 
 ## Check that it works
 
@@ -159,15 +167,63 @@ and keeps the streams that are open. The command also reloads the daemon. New ga
 - Not checked live yet: which header Mantle expects with a real key, and whether Claude Code stops
   by itself on a usage limit before it sends a request.
 
+## Reload and restart
+
+`cabildo service reload` keeps the gateway up. The daemon stops accepting, waits up to 2 minutes
+for the open requests, and hands the listening socket to the new process. Connections that arrive
+in between wait in the socket and are served by the new process. A request still open after
+2 minutes is cut. `[gateway]` changes in the config apply at a reload.
+
+`cabildo service restart` cuts the open model streams of every session.
+
+`cabildo gateway serve` runs the same server in the foreground, for debugging. Stop the daemon's
+gateway first, or give it another `--port`.
+
 ## Undo
 
-1. Remove `ANTHROPIC_BASE_URL` from `~/.claude/settings.json`.
-2. Restart your sessions.
-3. Stop the gateway:
+1. Remove the setting from Claude Code:
 
    ```bash
-   systemctl --user disable --now cabildo-gateway.service
+   cabildo gateway disable
    ```
 
-`cabildo service uninstall` removes the daemon unit as well. Use the `systemctl` command to
-remove only the gateway.
+2. Restart your sessions.
+
+`disable` only removes a base URL that points to `127.0.0.1`. To stop serving, delete `[gateway]`
+from the config and run `cabildo service reload`, or start the daemon with `--no-gateway`.
+
+## Anthropic's terms
+
+Read this before you run `cabildo gateway enable`. The terms do not say clearly that this setup
+is allowed or forbidden. This page is not legal advice. Checked on 2026-11-21 against the pages
+named here.
+
+What the documents say:
+
+- The [legal and compliance page](https://code.claude.com/docs/en/legal-and-compliance) says
+  OAuth login "is intended exclusively for purchasers of Claude Free, Pro, Max, Ultra, Team, and
+  Enterprise subscription plans and is designed to support ordinary use of Claude Code and other
+  native Anthropic applications". It forbids third-party developers to "route requests through
+  Free, Pro, Max, or Ultra plan credentials on behalf of their users", and says developers "may
+  not collect, store, or intermediate Claude.ai credentials or session tokens".
+- The [Usage Policy](https://www.anthropic.com/legal/aup) (effective 2026-11-12), under "Do Not
+  Abuse Our Platform", forbids reselling, proxying or giving access to Claude "through
+  unauthorized means, including routing requests through consumer subscriptions". It also
+  forbids bypassing product guardrails without authorization.
+- The [LLM gateway page](https://code.claude.com/docs/en/llm-gateway) documents `ANTHROPIC_BASE_URL`
+  and says a gateway that passes subscription traffic on to Anthropic "must forward
+  `Authorization` and the OAuth capability in `anthropic-beta`".
+
+How this gateway relates to them:
+
+- The `passthrough` upstream relays the request that Claude Code sends, for one person on one
+  machine. It does not store the token, sign in, or serve anyone else. The text above is written
+  about third-party developers who serve other users. Nothing in it names a personal relay.
+- The words "intermediate" and "unauthorized means" are not defined. Anthropic can read them
+  more widely than this page does.
+- A `key` or `bedrock-invoke` upstream uses your own paid credentials. It does not use the
+  subscription. The documents do not mention a switch when the subscription limit is reached.
+  Whether that counts as getting around a limit is not stated.
+
+To be sure, ask Anthropic through the "contact sales" link on the legal page, before you use it.
+

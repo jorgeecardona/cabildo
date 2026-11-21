@@ -552,19 +552,11 @@ def test_reload_sends_sighup_through_launchctl_on_darwin(darwin, monkeypatch):
     assert calls == [("kill", "SIGHUP", f"gui/{service.os.getuid()}/{unit.label}")]
 
 
-def test_the_gateway_is_its_own_unit_with_no_daemon_flags(linux):
-    text = service.render(service.gateway_unit())
-    assert "-m cabildo.cli gateway serve" in text
-    assert "--allow-push" not in text
-    assert service.gateway_unit().name == "cabildo-gateway.service"
-
-
-def test_install_gateway_writes_only_the_gateway_unit(units_home, capsys):
+def test_there_is_one_service_and_it_has_no_gateway_unit(units_home, capsys):
     from cabildo import cli
 
-    assert cli.main(["service", "install", "--gateway", "--print"]) == 0
+    assert not hasattr(service, "gateway_unit")
+    assert cli.main(["service", "install", "--print"]) == 0
     out = capsys.readouterr().out
-    assert "cabildo gateway serve" in out or "cabildo.cli gateway serve" in out
-    assert "cabildo.daemon" not in out, "the daemon unit keeps its own flags"
-    assert cli.main(["service", "install", "--print", "--allow-push"]) == 0
-    assert "cabildo.daemon" in capsys.readouterr().out
+    assert "cabildo.daemon" in out
+    assert "gateway serve" not in out

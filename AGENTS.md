@@ -18,7 +18,10 @@ local subnet) and `cabildo wan` (`wan.py`: message sync with explicit remote pee
 messages carry a global `guid` for cross-machine dedup.
 
 `cabildo gateway` (`gateway.py`) is a local HTTP proxy for `ANTHROPIC_BASE_URL` that fails over
-between upstreams; it is the only part that sends model traffic to outside hosts. The `help` MCP
+between upstreams; it runs as a service of the daemon (`gateway.start_service`, like LAN and WAN;
+on reload it hands its listening socket to the new process) and is the only part that sends model
+traffic to outside hosts. `cabildo gateway enable` writes the base URL into the user's Claude Code
+settings so every session uses it. The `help` MCP
 tool (`help.py`) serves the pages of `docs/`, which the wheel bundles.
 
 ## Build
