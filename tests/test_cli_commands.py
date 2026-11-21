@@ -24,6 +24,7 @@ COMMANDS = [
     "plugin",
     "sessions",
     "gateway",
+    "names",
     "stop",
     "mem",
     "load",

@@ -1832,6 +1832,41 @@ def cmd_gateway(args) -> int:
     return 0
 
 
+def cmd_names(args) -> int:
+    """``cabildo names export|import|show``: keep the names you gave sessions in one file."""
+    from . import names_file
+
+    target = Path(args.file).expanduser() if args.file else names_file.path()
+    conn = store.connect()
+    try:
+        if args.action == "import":
+            try:
+                snap = names_file.parse(target.read_text(encoding="utf-8"))
+            except (OSError, names_file.NamesFileError) as e:
+                print(f"cabildo names: cannot read {target}: {e}", file=sys.stderr)
+                return 2
+            done = names_file.restore(conn, snap)
+            print(
+                f"{target}: {done.added} session(s) added, {done.filled} name(s) filled, "
+                f"{done.kept} left as they are (you set them already)"
+            )
+            return 0
+        snap = names_file.capture(conn)
+        if args.action == "export":
+            try:
+                names_file.write(snap, target, force=True)
+            except OSError as e:
+                print(f"cabildo names: cannot write {target}: {e}", file=sys.stderr)
+                return 2
+        print(
+            f"{target}: {len(snap.sessions)} handle/role(s), {len(snap.meta)} title/group/tag "
+            f"entr(ies)" + ("" if args.action == "export" else " (not written: use export)")
+        )
+        return 0
+    finally:
+        conn.close()
+
+
 def cmd_minutes(args) -> int:
     """The day's conversation minutas for a project, distilled from its transcripts."""
     import datetime as _dt
@@ -2762,6 +2797,21 @@ def main(argv: list[str] | None = None) -> int:
         "--force", action="store_true", help="enable: write the setting although no gateway answers"
     )
     gw.set_defaults(fn=cmd_gateway)
+
+    nm = sub.add_parser(
+        "names",
+        help="keep your session names (handles, roles, titles, tags) in a file that survives "
+        "a lost machine",
+    )
+    nm.add_argument(
+        "action",
+        nargs="?",
+        default="show",
+        choices=["show", "export", "import"],
+        help="show (default), export (write the file now), import (put the names back)",
+    )
+    nm.add_argument("--file", help="the names file (default: [names] file, else <home>/names.json)")
+    nm.set_defaults(fn=cmd_names)
 
     st = sub.add_parser(
         "stop", help="set the fleet's wind-down line (e.g. 'stop 23:00'); bare to show it"

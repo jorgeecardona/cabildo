@@ -56,6 +56,7 @@ plugins:
           - roles.md
           - browser.md
           - gateway.md
+          - names.md
           - crons.md
           - design/broker-service.md
 
@@ -68,5 +69,6 @@ nav:
   - Roles: roles.md
   - Browser: browser.md
   - Gateway: gateway.md
+  - Names: names.md
   - Crons: crons.md
   - Changelog: changelog.md

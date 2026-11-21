@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- The daemon saves the names you gave sessions (handles, roles, titles, groups, tags) to
+  `names.json`, or to `[names] file`. `cabildo names export` writes it now, and
+  `cabildo names import` puts the names back on a new machine without overwriting yours.
+
 - The gateway runs inside the daemon, so there is one service. `cabildo service install --gateway`
   and the gateway unit are gone. `cabildo service reload` keeps open requests and hands the
   listening socket to the new process, so clients see no refused connection.

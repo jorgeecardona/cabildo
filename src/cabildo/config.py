@@ -518,6 +518,16 @@ def remote_tables() -> dict[str, dict[str, Any]]:
 
 
 # --------------------------------------------------------------------------- #
+# [names] -- where the file with your session names is kept
+# --------------------------------------------------------------------------- #
+def names_file() -> Path | None:
+    """``[names] file`` of the machine-wide config, with ``~`` expanded; None when unset."""
+    table = _read(_global_path()).get("names")
+    value = table.get("file") if isinstance(table, dict) else None
+    return Path(value).expanduser() if isinstance(value, str) and value else None
+
+
+# --------------------------------------------------------------------------- #
 # [gateway] -- the local gateway Claude Code sends its model requests to
 # --------------------------------------------------------------------------- #
 def gateway_table() -> dict[str, Any]:

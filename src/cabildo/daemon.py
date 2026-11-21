@@ -41,6 +41,7 @@ from . import (
     lan,
     monitor,
     names,
+    names_file,
     record,
     store,
     wan,
@@ -61,6 +62,7 @@ RELOAD_LOG_EVERY = 60.0  # how often a draining daemon says what it waits for
 # firing the SessionEnd hook. Cheap (one os.kill per active session) but not
 # worth doing on every 2s tick.
 REAP_SESSIONS_EVERY = 60.0
+NAMES_EVERY = names_file.SYNC_EVERY_S  # how often the names file is brought up to date
 # How often to sweep opted-in transcripts into the DB. Cheap (each pass reads
 # only the new bytes since the last cursor), so a short cadence keeps the record
 # close to live without polling the queue any harder.
@@ -564,6 +566,7 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
     last_record = 0.0
     last_ci = 0.0
     last_improve = 0.0
+    last_names = 0.0
     shown_proposals: set[int] = set()
     ci_every = 0.0 if args.once else config.ci_poll()
     ci_thread: threading.Thread | None = None
@@ -637,6 +640,9 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
                         _log(f"🧭 {n} proposal(s) shown with Approve / Reject")
                 except Exception as e:  # a bad proposals row must not kill the daemon
                     _log(f"improve: {type(e).__name__}: {e}")
+            if not args.once and now - last_names >= NAMES_EVERY:
+                last_names = now
+                names_file.sync(conn, _log)
             if ctx.save_messages and now - last_record >= RECORD_MESSAGES_EVERY:
                 last_record = now
                 record.ingest(conn, log=_log)

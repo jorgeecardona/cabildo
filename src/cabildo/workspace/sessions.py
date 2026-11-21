@@ -658,6 +658,11 @@ def read_meta(path: Path) -> dict[str, Meta]:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    return meta_from_raw(raw)
+
+
+def meta_from_raw(raw: object) -> dict[str, Meta]:
+    """The metadata in parsed sidecar JSON; entries of the wrong shape are skipped."""
     out: dict[str, Meta] = {}
     for sid, m in raw.items() if isinstance(raw, dict) else ():
         if not isinstance(m, dict):
