@@ -25,6 +25,22 @@ class Fake:
 REF = "op://Cabildo/GitHub/password"
 
 
+@pytest.fixture(autouse=True)
+def config_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """An empty config folder, so a test never reads the real ``~/.config/cabildo/env``."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    monkeypatch.delenv(op.TOKEN_ENV, raising=False)
+    return tmp_path / "cfg" / "cabildo"
+
+
+def write_env(folder: Path, text: str, mode: int = 0o600) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "env"
+    path.write_text(text)
+    path.chmod(mode)
+    return path
+
+
 def test_read_returns_a_concealed_secret_from_an_argument_list():
     fake = Fake()
     secret = op.read(REF, runner=fake)
@@ -148,3 +164,59 @@ def test_list_logins_reports_bad_json_and_a_missing_op():
         op.list_logins(runner=Fake(out="nope"))
     with pytest.raises(op.OpError, match="not installed"):
         op.list_logins(runner=Fake(raises=FileNotFoundError()))
+
+
+def test_no_env_file_means_no_token_and_op_gets_no_env_argument():
+    fake = Fake()
+    op.read(REF, runner=fake)
+    assert "env" not in fake.calls[0][1]
+
+
+def test_the_token_in_the_env_file_reaches_op_and_other_lines_are_ignored(config_home):
+    write_env(config_home, "CABILDO_TOKEN=abc\nOP_SERVICE_ACCOUNT_TOKEN=ops_secret\n")
+    fake = Fake()
+    op.read(REF, runner=fake)
+    assert fake.calls[0][1]["env"][op.TOKEN_ENV] == "ops_secret"
+    op.list_logins(runner=Fake(out="[]"))
+
+
+def test_a_file_without_the_token_line_leaves_op_on_its_own_login(config_home):
+    write_env(config_home, "CABILDO_TOKEN=abc\n")
+    fake = Fake()
+    op.read(REF, runner=fake)
+    assert "env" not in fake.calls[0][1]
+
+
+def test_the_process_variable_wins_and_the_file_is_not_read(config_home, monkeypatch):
+    write_env(config_home, "OP_SERVICE_ACCOUNT_TOKEN=\n")
+    monkeypatch.setenv(op.TOKEN_ENV, "ops_from_process")
+    fake = Fake()
+    op.read(REF, runner=fake)
+    assert "env" not in fake.calls[0][1]  # op inherits the variable as it is
+
+
+@pytest.mark.parametrize(
+    ("text", "mode", "reason"),
+    [
+        ("OP_SERVICE_ACCOUNT_TOKEN=\n", 0o600, "is empty"),
+        ("OP_SERVICE_ACCOUNT_TOKEN=op://V/I/f\n", 0o600, "not an op:// reference"),
+        ("OP_SERVICE_ACCOUNT_TOKEN=ops_x\n", 0o644, "chmod 600"),
+    ],
+)
+def test_an_unusable_token_line_stops_the_call_and_never_falls_back(
+    config_home, text, mode, reason
+):
+    write_env(config_home, text, mode)
+    fake = Fake()
+    with pytest.raises(op.OpError, match=reason) as err:
+        op.read(REF, runner=fake)
+    assert fake.calls == []
+    assert "ops_x" not in str(err.value)
+
+
+def test_an_env_file_that_cannot_be_parsed_stops_the_call(config_home):
+    write_env(config_home, "not a line\n")
+    fake = Fake()
+    with pytest.raises(op.OpError, match="cannot read"):
+        op.list_logins(runner=fake)
+    assert fake.calls == []

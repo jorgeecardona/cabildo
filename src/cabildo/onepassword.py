@@ -17,12 +17,15 @@ holds no secret, and never a value.
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
 import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from cabildo import envfile
 from cabildo.envfile import REF_PREFIX
 
 OP = "op"
@@ -36,6 +39,8 @@ _UNLOCK_HINT = (
 )
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
+
+TOKEN_ENV = "OP_SERVICE_ACCOUNT_TOKEN"  # noqa: S105
 
 
 class OpError(RuntimeError):
@@ -73,6 +78,51 @@ class Item:
         return f"{REF_PREFIX}{self.vault_id}/{self.id}/{field}"
 
 
+def env_path() -> Path:
+    """``cabildo/env`` in the user's config folder: the file that holds the service account token."""
+    root = os.environ.get("XDG_CONFIG_HOME") or "~/.config"
+    return Path(root).expanduser() / "cabildo" / "env"
+
+
+def _auth() -> dict[str, dict[str, str]]:
+    """The ``env`` for an ``op`` call: the service account token of ``~/.config/cabildo/env``.
+
+    With ``OP_SERVICE_ACCOUNT_TOKEN`` in that file, ``op`` reaches only the vaults of that service
+    account, not your whole account. The variable of the process wins when it is set. A token
+    line that cannot be used is an error: a call must never fall back to the account of the
+    desktop app.
+
+    Raises:
+        OpError: when the file has the token line but it is empty, an ``op://`` reference, in a
+            file that others can read, or the file cannot be parsed.
+    """
+    path = env_path()
+    if TOKEN_ENV in os.environ or not path.exists():
+        return {}
+    try:
+        entries = envfile.parse(path.read_text(encoding="utf-8")).entries
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except (OSError, envfile.EnvFileError) as exc:
+        msg = f"cannot read {path}: {exc}"
+        raise OpError(msg) from exc
+    token = next((e for e in entries if e.name == TOKEN_ENV), None)
+    if token is None:
+        return {}
+    problem = (
+        "is empty"
+        if not token.value
+        else "must be the token, not an op:// reference"
+        if token.reference
+        else "is in a file that others can read: run chmod 600"
+        if mode & 0o077
+        else ""
+    )
+    if problem:
+        msg = f"{TOKEN_ENV} in {path} {problem}: not falling back to your full 1Password account"
+        raise OpError(msg)
+    return {"env": {**os.environ, TOKEN_ENV: token.value}}
+
+
 def _failure(what: str, code: int, stderr: str) -> OpError:
     """An ``OpError`` with ``op``'s stderr, and the fix when 1Password is locked or signed out."""
     detail = (stderr or "").strip()[:_STDERR_LIMIT]
@@ -105,8 +155,9 @@ def read(
             ``op`` exits non-zero, or the value is empty.
     """
     argv = [OP, "read", "--no-newline", check_reference(ref)]
+    auth = _auth()
     try:
-        done = runner(argv, capture_output=True, text=True, timeout=timeout, check=False)
+        done = runner(argv, capture_output=True, text=True, timeout=timeout, check=False, **auth)
     except FileNotFoundError as exc:
         msg = f"the 1Password CLI ({OP}) is not installed"
         raise OpError(msg) from exc
@@ -150,9 +201,16 @@ def _item_of(raw: object) -> Item | None:
 def _run_json(
     argv: list[str], what: str, *, runner: Runner, timeout: float, stdin: str | None = None
 ) -> list[object]:
+    auth = _auth()
     try:
         done = runner(
-            argv, capture_output=True, text=True, timeout=timeout, check=False, input=stdin
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            input=stdin,
+            **auth,
         )
     except FileNotFoundError as exc:
         msg = f"the 1Password CLI ({OP}) is not installed"

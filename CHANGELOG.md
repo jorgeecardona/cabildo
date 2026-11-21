@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- `browser_login` and the other 1Password reads use the service account token in
+  `~/.config/cabildo/env` (`OP_SERVICE_ACCOUNT_TOKEN`) when it is there, so cabildo can read only
+  the vaults of that service account (#59). A token line that cannot be used stops the call.
+
 - A `bedrock-invoke` upstream rewrites or drops the fields Bedrock refuses (`thinking.type
   enabled`, `context_management`, `service_tier`, `top_p` with `temperature`) and logs each change
   (#60). `drop_fields` lists more fields to drop for any `key` or `bedrock-invoke` upstream.

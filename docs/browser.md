@@ -81,17 +81,51 @@ Not available yet: `browser_drag`, `browser_drop`, `browser_find`, `browser_netw
 Use this when a saved login has expired. The agent calls `browser_login`, and the server fills the
 form from 1Password. The password never reaches the agent.
 
-1. Install `op`, unlock 1Password, and turn on Settings > Developer > Integrate with 1Password
-   CLI.
-2. Give each Login item the website URL of its site. That URL is what ties the item to a page.
+1. Install `op`.
+2. Limit what cabildo can read. Without this step it can read every vault of your account (see
+   the next section).
+3. Give each Login item the website URL of its site. That URL is what ties the item to a page.
 
-No config is needed. The agent calls `browser_login(username_target, password_target)` on the
+The agent calls `browser_login(username_target, password_target)` on the
 login page. The server lists your Login items (`op item list`) and uses the one whose website URL
 has the page's origin: same `https`, host and port. The targets are refs from `browser_snapshot`.
 Set `submit` to press Enter in the last field.
 
 If several items match, the answer lists them (title and vault). The agent calls again with
 `site` set to one title. A title only picks among items already matched to the page.
+
+### Limit what cabildo can read
+
+Use a 1Password service account that can read one vault. Cabildo then lists and reads only that
+vault. 1Password enforces the limit, not cabildo.
+
+1. On 1Password.com, create a service account at
+   `start.1password.com/developer-tools/infrastructure-secrets/serviceaccount/`.
+2. Turn off "can create vaults". Give it read access to one vault, for example `cabildo`, and
+   put the logins for agents in that vault. A service account cannot be given your Personal,
+   Private, Employee or default Shared vault.
+3. Save the token in a vault that the service account cannot read. The token is shown once.
+4. Add it to `~/.config/cabildo/env` and make the file private:
+
+   ```bash
+   chmod 600 ~/.config/cabildo/env
+   ```
+
+   ```text
+   OP_SERVICE_ACCOUNT_TOKEN=ops_...
+   ```
+
+The file follows `$XDG_CONFIG_HOME`. A variable of the same name in the environment of the
+process wins. If the line is empty, is an `op://` reference, or the file can be read by others,
+cabildo refuses to call `op`. It never falls back to your full account.
+
+A service account cannot be edited later. To change its vaults, create a new one and revoke the
+old one.
+
+Agents that run `op` in a shell are not limited by this file. For them, also turn off Settings >
+Developer > Integrate with 1Password CLI in the 1Password app, and do not export the token.
+
+### Pin a login
 
 Optional: pin a login in `~/.cabildo/config.toml`. A table for the page's origin wins over an
 item, and lets you name the fields:
