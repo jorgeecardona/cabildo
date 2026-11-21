@@ -25,6 +25,7 @@ class Fake:
     ) -> None:
         self.status, self.body, self.headers = status, body, headers or {}
         self.seen: list[dict[str, Any]] = []
+        self.queue: list[tuple[int, bytes]] = []  # answers to give first, one per request
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -40,13 +41,14 @@ class Fake:
                         "body": self.rfile.read(n),
                     }
                 )
-                self.send_response(outer.status)
+                status, answer = outer.queue.pop(0) if outer.queue else (outer.status, outer.body)
+                self.send_response(status)
                 for k, v in outer.headers.items():
                     self.send_header(k, v)
                 if "Content-Length" not in outer.headers:
-                    self.send_header("Content-Length", str(len(outer.body)))
+                    self.send_header("Content-Length", str(len(answer)))
                 self.end_headers()
-                self.wfile.write(outer.body)
+                self.wfile.write(answer)
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), H)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -800,3 +802,129 @@ def test_invoke_skips_other_paths_and_unmapped_models(fakes, run) -> None:
     post(port, {"model": "claude-haiku-4-5"})
     post(port, {"model": "claude-opus-5-5", "tools": [{"type": "web_search_20250305"}]})
     assert fakes["bed"].seen == []
+
+
+# --- thinking signatures across upstreams (#61) --------------------------------------------------
+
+SIGNED = {"type": "thinking", "thinking": "hm", "signature": "sig-from-one-upstream"}
+
+
+def history(*, system: str = "sys", first: str = "hello", **extra: Any) -> dict:
+    """A request with one earlier assistant turn that holds a signed thinking block."""
+    return {
+        "model": "claude-opus-5-5",
+        "max_tokens": 5,
+        "system": [{"type": "text", "text": system}],
+        "messages": [
+            {"role": "user", "content": first},
+            {"role": "assistant", "content": [SIGNED, {"type": "text", "text": "hi"}]},
+            {"role": "user", "content": "and now?"},
+        ],
+        **extra,
+    }
+
+
+def test_strip_thinking_keeps_everything_else() -> None:
+    data = {
+        "messages": [
+            {"role": "user", "content": "q"},
+            {
+                "role": "assistant",
+                "content": [
+                    SIGNED,
+                    {"type": "redacted_thinking", "data": "x"},
+                    {"type": "tool_use", "id": "t", "name": "n", "input": {}},
+                ],
+            },
+            {"role": "assistant", "content": [SIGNED]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t"}]},
+        ]
+    }
+    assert gateway.strip_thinking(data) == 3
+    assert [m["role"] for m in data["messages"]] == ["user", "assistant", "user"]
+    assert data["messages"][1]["content"] == [
+        {"type": "tool_use", "id": "t", "name": "n", "input": {}}
+    ]
+    assert gateway.strip_thinking({"messages": "nope"}) == 0
+
+
+def test_a_conversation_key_follows_the_first_system_block_and_first_user_message() -> None:
+    key = gateway.conversation_key(history())
+    assert key == gateway.conversation_key(history())
+    assert key != gateway.conversation_key(history(first="another"))
+    assert key != gateway.conversation_key(history(system="other"))
+    assert gateway.conversation_key({"messages": []}) is None
+
+
+def test_failing_over_removes_the_thinking_blocks_another_upstream_issued(fakes, run) -> None:
+    lines: list[str] = []
+    gw = gateway.Gateway(settings(fakes), keys=gateway.Keys(), log=lines.append)
+    port = run(gw)
+    assert post(port, history())[0] == 200  # the subscription serves it and issues the blocks
+    fakes["sub"].status = 429
+    assert post(port, history())[0] == 200  # bedrock takes over
+    sent = json.loads(fakes["bed"].seen[0]["body"])
+    assert all(m["content"] != [SIGNED] for m in sent["messages"])
+    assert b"signature" not in fakes["bed"].seen[0]["body"]
+    assert any("dropped 1 thinking block" in line for line in lines)
+    assert b"signature" in fakes["sub"].seen[0]["body"], "the first upstream got it unchanged"
+    # The client keeps sending the old blocks: they stay out, whichever upstream answers.
+    fakes["sub"].status = 200
+    gw.router.restore(({}, {}, {}))
+    gw.router = gateway.Router(gw.settings)
+    post(port, history(), headers=[("Authorization", "Bearer oauth")])
+    assert b"signature" not in fakes["sub"].seen[-1]["body"]
+
+
+def test_an_upstream_that_refuses_a_signature_gets_the_request_again_without_blocks(
+    fakes, run
+) -> None:
+    lines: list[str] = []
+    fakes["sub"].queue = [
+        (
+            400,
+            b'{"type": "error", "error": {"type": "invalid_request_error", '
+            b'"message": "messages.1.content.0: Invalid `signature` in `thinking` block"}}',
+        )
+    ]
+    gw = gateway.Gateway(settings(fakes), keys=gateway.Keys(), log=lines.append)
+    port = run(gw)
+    status, _, _ = post(port, history())
+    assert status == 200
+    first, second = fakes["sub"].seen
+    assert b"signature" in first["body"] and b"signature" not in second["body"]
+    assert any("retrying without" in line for line in lines)
+    assert fakes["bed"].seen == [], "the retry went to the same upstream"
+    assert gw.issued(gateway.conversation_key(history())) == gateway.Conversation("sub", True)
+
+
+def test_a_400_about_something_else_is_not_retried(fakes, run) -> None:
+    fakes["sub"].queue = [(400, b'{"error": {"message": "max_tokens is too large"}}')]
+    port = run(gateway.Gateway(settings(fakes), keys=gateway.Keys()))
+    assert post(port, history())[0] == 400
+    assert len(fakes["sub"].seen) == 1
+
+
+def test_manual_thinking_is_turned_off_when_blocks_are_removed(fakes, run) -> None:
+    fakes["sub"].status = 429
+    gw = gateway.Gateway(settings(fakes), keys=gateway.Keys(), log=lambda _m: None)
+    port = run(gw)
+    body = history(thinking={"type": "enabled", "budget_tokens": 1024})
+    gw.remember(gateway.conversation_key(body), "sub", tainted=False)
+    assert post(port, body)[0] == 200
+    sent = json.loads(fakes["bed"].seen[0]["body"])
+    assert "thinking" not in sent
+
+
+def test_invoke_drops_a_temperature_other_than_1_while_thinking_is_on(fakes, run) -> None:
+    fakes["sub"].status = 429
+    port = run(gateway.Gateway(invoke(fakes), keys=gateway.Keys()))
+    post(
+        port,
+        history(thinking={"type": "enabled", "budget_tokens": 1024}, temperature=0.3),
+        headers=[("Authorization", "Bearer oauth")],
+    )
+    sent = json.loads(fakes["bed"].seen[0]["body"])
+    assert sent["thinking"] == {"type": "adaptive"} and "temperature" not in sent
+    post(port, history(thinking={"type": "adaptive"}, temperature=1))
+    assert json.loads(fakes["bed"].seen[1]["body"])["temperature"] == 1

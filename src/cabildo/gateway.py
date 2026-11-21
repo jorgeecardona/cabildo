@@ -37,6 +37,7 @@ connection. ``cabildo gateway serve`` runs the same server in the foreground, fo
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import hmac
 import http.client
 import json
@@ -45,6 +46,7 @@ import re
 import socket
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -66,6 +68,7 @@ TOKEN_HEADER = "x-cabildo-gateway"  # noqa: S105
 HANDOFF_ENV = "CABILDO_GATEWAY_FD"
 DRAIN_S = 120.0  # how long a reload waits for open requests before it cuts them
 BACKLOG = 128  # connections that queue while a reload swaps the process
+MAX_CONVERSATIONS = 4096  # how many conversations the gateway remembers an issuer for
 _BODY_PEEK = 65536  # how much of an error body is read to tell "out of credit" from a bad request
 _CHUNK = 65536
 _WATCHED = frozenset({400, 401, 402, 403, 429, 529})
@@ -87,6 +90,9 @@ _KINDS = ("passthrough", "key", "bedrock-invoke")
 _INVOKE = "bedrock-invoke"
 _REGION = re.compile(r"[a-z]+(?:-[a-z0-9]+)+")
 _ANTHROPIC_VERSION = "bedrock-2023-05-31"
+_SIGNED = b'"signature"'  # every thinking block carries one
+_THINKING = ("thinking", "redacted_thinking")
+_SIGNATURE_ERROR = re.compile(rb"thinking.{0,12}(block|signature)|redacted_thinking", re.IGNORECASE)
 _AUTHS = ("x-api-key", "bearer", "both")
 _ID = re.compile(r"[A-Za-z0-9_.-]+")
 _DURATION = re.compile(r"(\d+)([smhd])")
@@ -192,6 +198,7 @@ class Job:
     model: str | None = None
     server_tool: bool = False
     stream: bool = False
+    conversation: str | None = None  # a key for the conversation: see ``conversation_key``
 
 
 @dataclass(frozen=True)
@@ -517,7 +524,27 @@ def inspect(path: str, body: bytes) -> Job:
         model=model if isinstance(model, str) else None,
         server_tool=server,
         stream=data.get("stream") is True,
+        conversation=conversation_key(data),
     )
+
+
+def conversation_key(data: Mapping[str, Any]) -> str | None:
+    """A short hash of the first system block and the first user message, or None.
+
+    The Messages API has no conversation id. Later turns repeat both, so they give the same key.
+    """
+    messages = data.get("messages")
+    first = (
+        next((m for m in messages if isinstance(m, Mapping) and m.get("role") == "user"), None)
+        if isinstance(messages, list)
+        else None
+    )
+    if first is None:
+        return None
+    system = data.get("system")
+    head = system[0] if isinstance(system, list) and system else system
+    raw = json.dumps([head, first.get("content")], sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 def skip_reason(up: Upstream, job: Job) -> str | None:
@@ -598,6 +625,7 @@ class Wire:
     headers: list[tuple[str, str]]
     events: bool = False  # the answer is an AWS event stream to turn into server-sent events
     changes: tuple[str, ...] = ()  # body fields that were rewritten or dropped, for the log
+    stripped: int = 0  # thinking blocks removed from the history
 
 
 _INVOKE_REFUSES = ("context_management", "service_tier")  # Bedrock's Invoke API: 400 on these
@@ -616,6 +644,14 @@ def normalise(up: Upstream, data: dict[str, Any]) -> list[str]:
         if isinstance(thinking, dict) and thinking.get("type") == "enabled":
             data["thinking"] = {"type": "adaptive"}
             changes.append("thinking enabled -> adaptive")
+        thinking = data.get("thinking")
+        if (
+            isinstance(thinking, dict)
+            and thinking.get("type") in ("enabled", "adaptive")
+            and data.get("temperature") not in (None, 1)
+        ):
+            del data["temperature"]  # only 1 is allowed while thinking is on (#61)
+            changes.append("dropped temperature (thinking is on)")
         if "top_p" in data and "temperature" in data:
             del data["top_p"]
             changes.append("dropped top_p")
@@ -626,40 +662,103 @@ def normalise(up: Upstream, data: dict[str, Any]) -> list[str]:
     return changes
 
 
-def prepare(up: Upstream, job: Job, body: bytes, headers: list[tuple[str, str]]) -> Wire:
+def strip_thinking(data: dict[str, Any]) -> int:
+    """Remove the thinking blocks of assistant messages from ``data`` in place.
+
+    A signature belongs to the upstream that issued it, so another upstream refuses it (#61).
+    An assistant message left with no content is removed. Returns how many blocks were removed.
+    """
+    messages = data.get("messages")
+    if not isinstance(messages, list):
+        return 0
+    removed = 0
+    kept: list[Any] = []
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else None
+        if (
+            isinstance(message, dict)
+            and message.get("role") == "assistant"
+            and isinstance(content, list)
+        ):
+            blocks = [
+                b for b in content if not (isinstance(b, dict) and b.get("type") in _THINKING)
+            ]
+            removed += len(content) - len(blocks)
+            if not blocks:
+                continue
+            message = {**message, "content": blocks}
+        kept.append(message)
+    if removed:
+        data["messages"] = kept
+    return removed
+
+
+def prepare(
+    up: Upstream,
+    job: Job,
+    body: bytes,
+    headers: list[tuple[str, str]],
+    *,
+    strip: bool = False,
+) -> Wire:
     """The path, body and headers to send ``up`` for ``job``.
 
     A passthrough or key upstream gets the request as it is, less a renamed model and the fields
     of its ``drop_fields``. For Bedrock's Invoke API the path names the model, the body drops
     ``model`` and ``stream`` and gains ``anthropic_version``, the ``anthropic-beta`` values move
     into the body, and the fields Bedrock refuses are rewritten or dropped (``normalise``).
+
+    With ``strip``, the thinking blocks of earlier assistant messages are removed (#61). Manual
+    thinking (``type`` ``enabled``) needs the last assistant turn to start with a thinking block,
+    so it is turned off for that request.
     """
     base = urlsplit(up.base_url).path
-    if up.kind != _INVOKE or job.model is None or job.model not in up.models:
-        out = request_body(up, job, body)
-        changes: list[str] = []
-        if up.drop_fields:
-            try:
-                data = json.loads(out)
-            except ValueError:
-                data = None
-            if isinstance(data, dict):
-                changes = normalise(up, data)
-                out = json.dumps(data).encode() if changes else out
-        return Wire(base + job.path, out, headers, changes=tuple(changes))
-    data = json.loads(body)
-    data.pop("model", None)
-    data.pop("stream", None)
+    invoke = up.kind == _INVOKE and job.model is not None and job.model in up.models
+    plain = Wire(base + job.path, body if invoke else request_body(up, job, body), headers)
+    if invoke:
+        data = json.loads(body)
+        data.pop("model", None)
+        data.pop("stream", None)
+    else:
+        out = plain.body
+        if not (up.drop_fields or (strip and _SIGNED in out)):
+            return plain
+        try:
+            data = json.loads(out)
+        except ValueError:
+            return plain
+        if not isinstance(data, dict):
+            return plain
     changes = normalise(up, data)
+    removed = strip_thinking(data) if strip else 0
+    if removed:
+        changes.append(f"dropped {removed} thinking block(s) another upstream may have issued")
+        thinking = data.get("thinking")
+        if isinstance(thinking, dict) and thinking.get("type") == "enabled":
+            del data["thinking"]
+            changes.append("thinking off for this request")
+    if not invoke:
+        return replace(
+            plain,
+            body=json.dumps(data).encode() if changes else plain.body,
+            changes=tuple(changes),
+            stripped=removed,
+        )
     data["anthropic_version"] = _ANTHROPIC_VERSION
     betas = [v for k, v in headers if k.lower() == "anthropic-beta"]
     if betas:
         data["anthropic_beta"] = [b for v in betas for b in v.split(",")]
     kept = [(k, v) for k, v in headers if k.lower() != "anthropic-beta"]
     action = "invoke-with-response-stream" if job.stream else "invoke"
-    model = quote(up.models[job.model], safe="")
-    wire = Wire(f"{base}/model/{model}/{action}", json.dumps(data).encode(), kept, job.stream)
-    return replace(wire, changes=tuple(changes))
+    model = quote(up.models[job.model or ""], safe="")
+    return Wire(
+        f"{base}/model/{model}/{action}",
+        json.dumps(data).encode(),
+        kept,
+        job.stream,
+        tuple(changes),
+        removed,
+    )
 
 
 def read_body(headers: Mapping[str, str], rfile: Any) -> bytes:
@@ -764,6 +863,18 @@ def connect(up: Upstream, timeout: float) -> http.client.HTTPConnection:
     return cls(parts.hostname or "", parts.port, timeout=timeout)
 
 
+@dataclass(frozen=True)
+class Conversation:
+    """What the gateway knows about one conversation: who served it last, and if it is mixed.
+
+    ``tainted`` is true once thinking blocks had to be removed: the client keeps resending them,
+    and nobody can tell which upstream issued which, so they are removed from every later request.
+    """
+
+    issuer: str
+    tainted: bool = False
+
+
 @dataclass
 class Gateway:
     """The routing, key lookup and connection factory a server's handlers share."""
@@ -778,9 +889,27 @@ class Gateway:
     wall: Callable[[], float] = time.time
     _active: int = field(default=0, init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _issued: OrderedDict[str, Conversation] = field(default_factory=OrderedDict, init=False)
 
     def __post_init__(self) -> None:
         self.router = Router(self.settings)
+
+    def issued(self, key: str | None) -> Conversation | None:
+        """Which upstream last served this conversation, or None when the gateway does not know."""
+        if key is None:
+            return None
+        with self._lock:
+            return self._issued.get(key)
+
+    def remember(self, key: str | None, upstream: str, *, tainted: bool) -> None:
+        """Note that ``upstream`` served the conversation, and whether its history is mixed."""
+        if key is None:
+            return
+        with self._lock:
+            self._issued[key] = Conversation(upstream, tainted)
+            self._issued.move_to_end(key)
+            while len(self._issued) > MAX_CONVERSATIONS:
+                self._issued.popitem(last=False)
 
     def enter(self) -> None:
         """Count one open connection."""
@@ -889,10 +1018,10 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
             started = time.monotonic()
             last: tuple[int, list[tuple[str, str]], bytes, bool, bool] | None = None
             candidates = gw.router.order(job.model, gw.forced())
-            usable = [u for u in candidates if skip_reason(u, job) is None]
-            skipped = len(candidates) - len(usable)
-            for i, up in enumerate(usable):
-                more = i < len(usable) - 1
+            attempts = [(u, False) for u in candidates if skip_reason(u, job) is None]
+            skipped = len(candidates) - len(attempts)
+            for i, (up, forced) in enumerate(attempts):
+                more = i < len(attempts) - 1
                 try:
                     headers = request_headers(up, client, gw.keys)
                 except GatewayError as exc:
@@ -909,7 +1038,11 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
                     continue
                 # From here the request may have reached the upstream: never send it twice.
                 try:
-                    wire = prepare(up, job, body, headers)
+                    state = gw.issued(job.conversation)
+                    strip = forced or (
+                        state is not None and (state.tainted or state.issuer != up.name)
+                    )
+                    wire = prepare(up, job, body, headers, strip=strip)
                     if wire.changes:
                         gw.log(f"gateway: {up.name}: {'; '.join(wire.changes)}")
                     conn.putrequest(self.command, wire.path, skip_accept_encoding=True)
@@ -929,6 +1062,20 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
                 wrap = up.kind == _INVOKE and resp.status >= 400
                 if resp.status in _WATCHED or wrap:
                     peek = resp.read(_BODY_PEEK)
+                    if (
+                        resp.status == 400
+                        and not strip
+                        and _SIGNED in body
+                        and _SIGNATURE_ERROR.search(peek)
+                    ):
+                        # The upstream answered and did not process the request, so sending it
+                        # again without the thinking blocks cannot repeat anything.
+                        gw.log(
+                            f"gateway: {up.name}: refused a thinking signature, retrying without"
+                        )
+                        conn.close()
+                        attempts.insert(i + 1, (up, True))
+                        continue
                     verdict = classify(
                         resp.status,
                         dict(resp.getheaders()),
@@ -949,6 +1096,12 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
                             continue
                         break
                 gw.router.served(up)
+                if resp.status < 400:
+                    gw.remember(
+                        job.conversation,
+                        up.name,
+                        tainted=wire.stripped > 0 or (state is not None and state.tainted),
+                    )
                 if wrap:
                     self._send(*_wrapped(resp.status, resp.getheaders(), peek), None)
                 else:

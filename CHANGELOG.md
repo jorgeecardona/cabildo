@@ -8,6 +8,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   `~/.config/cabildo/env` (`OP_SERVICE_ACCOUNT_TOKEN`) when it is there, so cabildo can read only
   the vaults of that service account (#59). A token line that cannot be used stops the call.
 
+- Failover no longer breaks a conversation that has thinking on: the gateway removes thinking
+  blocks another upstream issued, and retries once without them when an upstream refuses a
+  signature. A `bedrock-invoke` upstream also drops a `temperature` other than 1 while thinking
+  is on (#61).
+
 - A `bedrock-invoke` upstream rewrites or drops the fields Bedrock refuses (`thinking.type
   enabled`, `context_management`, `service_tier`, `top_p` with `temperature`) and logs each change
   (#60). `drop_fields` lists more fields to drop for any `key` or `bedrock-invoke` upstream.

@@ -117,6 +117,7 @@ For each request the gateway does what the Invoke API needs, and Claude Code see
 - Fields Bedrock refuses are changed or dropped, and the log says which (#60).
   `thinking.type: "enabled"` becomes `"adaptive"` (the token budget is dropped).
   `context_management` and `service_tier` are dropped, and so is `top_p` when `temperature` is set.
+  A `temperature` other than 1 is dropped while thinking is on.
   Without this, a refused `context_management` makes Claude Code compact in a loop.
 - A streamed answer arrives as AWS binary frames. The gateway decodes them and sends server-sent
   events.
@@ -162,6 +163,16 @@ and keeps the streams that are open. The command also reloads the daemon. New ga
   `kind = "key"` replaces the client's credential with its own key, sent as `x-api-key`
   (`auth = "bearer"` or `"both"` change that).
 - Switching upstream starts a new prompt cache, so the first request after a switch costs more.
+- A thinking block carries a signature that only the upstream that issued it accepts. When a
+  conversation moves to another upstream, the gateway removes the thinking blocks of earlier
+  assistant turns from that request. The client keeps its own copy and sends the blocks again, so
+  the gateway keeps removing them for the rest of that conversation. The model loses its earlier
+  reasoning, and the first request after a switch is a cache miss anyway. Manual thinking
+  (`type: "enabled"`) needs the last turn to start with a thinking block, so it is turned off for
+  such a request. A conversation is found by a hash of its first system block and first user
+  message, and the gateway forgets it when the daemon restarts. If an upstream then answers 400
+  about a thinking signature, the gateway sends the request once more to the same upstream
+  without the blocks (#61).
 - The server listens on `127.0.0.1` only. It refuses any request that has an `Origin` header or
   another `Host`, so a web page cannot use it. Any program on your machine can still call it and
   spend your keys. To require a secret, set `token = "file:/path"` in `[gateway]` and add
