@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+## [0.1.223] - 2026-11-20
+
+Entries from 0.1.16 to 0.1.223 are listed together.
+
 - The gateway has a third upstream kind, `bedrock-invoke`, for a Bedrock region that has no Mantle
   endpoint. It calls the Invoke API of `bedrock-runtime.<region>.amazonaws.com` with your Bedrock
   API key: it rewrites the path and body, decodes the AWS event stream into server-sent events,
@@ -400,8 +404,7 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   when its parent dies. An idle session costs one sleeping process instead of a Python start
   per second. Reinstall the mod (`cabildo plugin`) to pick it up.
 - **Mode-aware spawn prompt**: the git-flow paragraph a spawned agent receives is
-  now chosen from the repo's `[push].mode`. A `push` repo is told to `push` and,
-  crucially, that `push` moves work to `origin/<target>` and does NOT touch its
+  now chosen from the repo's `[push].mode`. A `push` repo is told to `push` and that `push` moves work to `origin/<target>` and does NOT touch its
   local `<target>` (cabildo catches that up after a push) — so agents stop
   overloading "push" to mean "update my local main". A `manual` repo is told the
   opposite: cabildo does not push or push for it, so do not queue a push or push
@@ -444,12 +447,12 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
-- **Peer-to-peer LAN sync (#7)** — `cabildo lan` shares a project's message bus
+- **Peer-to-peer LAN sync (#7)**: `cabildo lan` shares a project's message bus
   with peers on the local network, with nothing leaving the subnet. Each peer
   UDP-broadcasts a beacon (`255.255.255.255`, so it never routes off-LAN) and
   serves its rows over TCP; peers discover each other and PULL, so the sync is
   bidirectional by both sides pulling and the serving side only ever reads. New
-  messages are deduped by `guid`, stamped `provenance='lan'`, and — crucially — the
+  messages are deduped by `guid`, stamped `provenance='lan'`, and the
   App Engine uplink now excludes `provenance='lan'`, so a LAN peer's messages never
   silently escape to the hosted mirror. Single-machine SQLite stays the default;
   this is opt-in. Flags: `-l/--loop`, `--interval`, `--port`, `--project`,
@@ -458,14 +461,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   project; presence/claim sync and encrypted/authenticated pairing are the
   follow-up (the RTC-over-backbone transport). LAN v1 is trusted-LAN: the secret
   gates the pull handshake, but there is no transport encryption.
-- **Global message `guid` (#7)** — `messages` gains a `guid` column (uuid4,
+- **Global message `guid` (#7)**: `messages` gains a `guid` column (uuid4,
   additive migration that backfills existing rows and adds a unique index).
   `store.post_message` mints one per locally-born message and is now idempotent
   by guid (`ON CONFLICT DO NOTHING`); the cloud downlink and the LAN transport
   pass the original guid + `created_at` so the same message merges once across
   machines instead of re-inserting. This also closes a latent double-insert on a
   lost sync cursor.
-- **Installer client selection + non-mutating preview (#12)** — `scripts/install.py`
+- **Installer client selection + non-mutating preview (#12)**: `scripts/install.py`
   gains `--client {claude,codex,both}` (default `claude`, preserving the historical
   behavior). `--client codex` delegates to `cabildo codex` and never touches
   `~/.claude/settings.json`; `--client both` wires both onto one bus. `--print` is
@@ -479,7 +482,7 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   produces a valid command (a no-op for ordinary paths, so re-running stays
   idempotent). No server-side `--client` flag exists — Codex identity is carried by
   the `CABILDO_CLIENT=codex` env, not a flag.
-- **Cross-process transport test (#12)** — `tests/test_transport_subprocess.py` runs
+- **Cross-process transport test (#12)**: `tests/test_transport_subprocess.py` runs
   two independently identified sessions in separate OS processes against one shared
   `CABILDO_HOME`, exercising a project-channel message with an explicit read receipt,
   DMs in both directions, a conflicting claim (held → denied → released → re-taken),
@@ -500,7 +503,7 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
-- **Codex delivery + cooperative coordination (#10)** — `cabildo codex` now also
+- **Codex delivery + cooperative coordination (#10)**: `cabildo codex` now also
   wires Codex lifecycle hooks (merged into `~/.codex/hooks.json`, non-clobbering
   like `.mcp.json`). New `codex_hooks.py` handles `SessionStart` (register +
   presence banner), `UserPromptSubmit` (unread + machine conditions),
@@ -529,7 +532,7 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
-- **Codex MCP setup (#9)** — `cabildo codex` wires Codex onto the same local bus
+- **Codex MCP setup (#9)**: `cabildo codex` wires Codex onto the same local bus
   as Claude Code. It delegates to `codex mcp add` when Codex is on PATH, and
   otherwise prints the `[mcp_servers.cabildo]` block for `~/.codex/config.toml`
   (also the `--print` preview); Codex owns its own config, so unrelated servers
@@ -555,7 +558,7 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
-- **Agent instructions (#5)** — root `AGENTS.md` (Overview/Build/Test/Style/Gotchas)
+- **Agent instructions (#5)**: root `AGENTS.md` (Overview/Build/Test/Style/Gotchas)
   plus a one-line `CLAUDE.md` (`@AGENTS.md`) so Claude Code reads the same
   instructions; `CLAUDE.local.md` gitignored for personal overrides.
 
@@ -577,7 +580,7 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
-- **Client-independent session identity and lifecycle (#6)** — the `sessions`
+- **Client-independent session identity and lifecycle (#6)**. The `sessions`
   table gains `client` ('claude', 'codex', ...) and a generic `owner_pid` (the
   OS process whose death retires the session), via an additive migration that
   backfills every existing row to `client='claude'`, `owner_pid=claude_pid`.
@@ -606,7 +609,7 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
-- **macOS service install via launchd (#5)** — `cabildo service` gains a launchd
+- **macOS service install via launchd (#5)**: `cabildo service` gains a launchd
   backend behind a `sys.platform` check: it emits a `~/Library/LaunchAgents/`
   plist and `launchctl load`s it, mirroring the systemd `--user` install (dry-run
   default, refuse-to-overwrite, `status`, `uninstall`). The systemd internals were
@@ -626,7 +629,7 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
-- **macOS memory attribution (#3)** — `procs.py` gains darwin backends behind a
+- **macOS memory attribution (#3)**: `procs.py` gains darwin backends behind a
   `sys.platform` check: `_memory_darwin` (`sysctl`/`vm_stat` for RAM and swap),
   `_processes_darwin` (`ps -axo` for per-process RSS and ancestry), so `cabildo
   mem`, per-agent RSS, and orphan detection now work on macOS. Memory-pressure
@@ -647,7 +650,7 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
-- **macOS process identity (#2, #11)** — `context.py`'s `_ppid`/`_argv` gain a
+- **macOS process identity (#2, #11)**: `context.py`'s `_ppid`/`_argv` gain a
   `ps`-backed darwin backend (`ps -o ppid=`, `ps -ww -o command=`) behind a
   `sys.platform` check, so the MCP server can resolve its owning `claude` session
   on macOS, where there is no `/proc`. The Linux `/proc` fast path is byte-for-byte
@@ -668,7 +671,7 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
-- **macOS desktop notifications (#4)** — `desktop.py` gains a darwin backend
+- **macOS desktop notifications (#4)**: `desktop.py` gains a darwin backend
   behind a `sys.platform` check (the Linux `notify-send`/D-Bus path is unchanged):
   `available()` returns true when `osascript` is present, passive notifications use
   `osascript display notification`, and the `request(action="ask")` button
@@ -688,12 +691,12 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
-- **`cabildo doctor`** — one command that verifies the whole install and flags
+- **`cabildo doctor`**: one command that verifies the whole install and flags
   what won't work on this machine. It checks the six hooks are wired in
   `~/.claude/settings.json`, that the `cabildo` bus server is registered (user or
   project scope) and the per-repo `issues` server is wired where a `docs/issues/`
   exists, that the SQLite bus is reachable and in WAL, and whether a daemon is
-  live. Crucially it also flags the platform features cabildo leans on that a
+  live. It also flags the platform features cabildo leans on that a
   given OS may lack — `/proc` process identity, `notify-send`, and
   `systemd --user` — so the macOS gaps surface at check time instead of as an
   agent that mysteriously never joins the bus. Exits non-zero only on a genuine
@@ -722,7 +725,7 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ### Added
 
-- **`cabildo viewer`** — a read-only local web view of the bus (agents, locks,
+- **`cabildo viewer`**: a read-only local web view of the bus (agents, locks,
   messages) served on `http://127.0.0.1:8787`, refreshing every 2s. Stdlib
   `http.server` only, binds to localhost, needs nothing running. It is the open
   counterpart of the hosted dashboard: the same glanceable view of your fleet,

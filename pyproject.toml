@@ -59,16 +59,15 @@ cabildo-hook = "cabildo.hooks.cli:main"
 cabildo-codex-hook = "cabildo.codex_hooks:main"
 
 [dependency-groups]
-# musil is a dev-only model checker (dependency-free); the runtime stays stdlib-only.
-# It needs Python >=3.12, so it is conditional; the model tests importorskip it,
-# (cabildo itself needs 3.12+ since 0.1.176).
+# musil is a dev-only model checker (dependency-free).
+# The model tests importorskip it.
 dev = [
     "ruff>=0.6",
     # [nodejs]: Node from a PyPI wheel. Without it pyright downloads Node from nodejs.org
     # on every fresh CI container, which can hang the typecheck step.
     "pyright[nodejs]>=1.1.390",
     "pytest>=8",
-    "musil>=0.35; python_version >= '3.12'",
+    "musil>=0.35",
     "vulture>=2.11",
     # This repo keeps its own follow-ups in docs/issues/, which prodc owns (`prodc issue board`).
     # Dev-only on purpose: the package serves no register, so prodc must never reach

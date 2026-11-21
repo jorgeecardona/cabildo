@@ -1,15 +1,15 @@
 # Contributing to cabildo
 
 Thanks for helping. This is a normal Python package: a stdio MCP server plus
-hook scripts, stdlib-only at runtime (the sole runtime dependency is `mcp`). All
-state lives in one shared SQLite DB.
+hook scripts. Runtime dependencies: `mcp`, `zeroconf`, `textual`, `textual-tty`,
+`playwright`. All state lives in one shared SQLite DB.
 
 ## Contributing with an AI agent
 
-Most changes here will be written with a coding agent — that's expected and welcome. To get a good
+Most changes here will be written with a coding agent. That's expected and welcome. To get a good
 result from yours:
 
-- **Point it at [`AGENTS.md`](AGENTS.md) first** — the machine-facing contract for this repo: build
+- **Point it at [`AGENTS.md`](AGENTS.md) first**. The machine-facing contract for this repo: build
   and test commands, the style rules, and the repo-specific gotchas (the `mcp<2` pin, platform
   specifics). Agents read it automatically when started from the repo root.
 - **Ship a green `make check`** (lint + format-check + typecheck + test). Have the agent run it and
@@ -30,7 +30,7 @@ The toolchain (moon, uv) is pinned in `.prototools`. Install it with
 proto install
 ```
 
-Python 3.11 or newer is required (see `requires-python` in `pyproject.toml`).
+Python 3.12 or newer is required (see `requires-python` in `pyproject.toml`).
 
 ## Setup
 

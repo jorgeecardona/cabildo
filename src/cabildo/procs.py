@@ -423,8 +423,8 @@ def attribute(procs: list[Proc], *, pid_to_session: dict[int, str] | None = None
     ancestry still resolves a pid, and the caller can map it later.
 
     On darwin, `_cwd` and `resolve_claude_pid` still read /proc directly (that
-    ancestry walk is `context.py`'s, out of this module's scope) and simply
-    find nothing there — same "degrade to empty" contract, no crash. So on
+    ancestry walk is `context.py`'s, out of this module's scope) and finds
+    nothing there — same "degrade to empty" contract, no crash. So on
     darwin only the path route (cmdline against the scratchpad pattern) can
     attribute a process; ancestry attribution is a follow-up, not something
     this fix claims to cover.

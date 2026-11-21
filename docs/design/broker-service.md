@@ -24,7 +24,7 @@ symmetric: both are just clients of a service.
 
 ## Current architecture
 
-```
+```text
   ┌── session A ──┐   ┌── session B ──┐
   │ mcp subprocess│   │ mcp subprocess│      hooks (short-lived processes)
   │  store.connect│   │  store.connect│      cli / tui / daemon

@@ -419,7 +419,7 @@ def summarize(since: float) -> dict[str, Any]:
 
 def rate_per_hour(by_hour: dict[int, float], lookback_hours: int = 6) -> float:
     """Recent burn rate. Uses only hours that actually have activity: averaging
-    over wall-clock would report a low rate simply because you slept, and then
+    over wall-clock would report a low rate because you slept, and then
     forecast that you'll never hit the limit.
     """
     if not by_hour:

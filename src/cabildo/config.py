@@ -414,7 +414,7 @@ def record_messages(cwd: str | None = None, project_name: str | None = None) -> 
     True opts this repo's conversation turns into cabildo's own DB (the daemon,
     started with --save-messages, ingests its transcripts). Off by default and
     per-project on purpose: a repo whose transcripts must never enter the shared
-    bus simply never sets it, and nothing is recorded for it.
+    bus never sets it, and nothing is recorded for it.
     """
     val = get(cwd, "record", "messages", project_name=project_name, default=False)
     return val is True or str(val).strip().lower() in ("1", "true", "yes", "on")

@@ -4,9 +4,9 @@ concurrent agents cause, before they happen rather than after.
 Five conventions are enforced, all scoped to the session's own project:
 
   * ``git push`` — denied while ``push:<project_name>`` is held by someone else,
-    and *also* denied while any other agent is simply live on the project, with
-    the reason pointing at ``request push``. A lease you hold yourself is the
-    deliberate escape hatch. (A push the remote then rejects non-fast-forward is
+    and *also* denied while any other agent in the same checkout has ``wrote_at``
+    set, with the reason pointing at ``request push``. Claim ``push:<project>``
+    yourself to push by hand. (A push the remote then rejects non-fast-forward is
     not a collision to pre-block — ``push_failure_recipe`` coaches the recovery.)
   * force/delete push — ``git push --force``/``-f``/``--force-with-lease``/
     ``--delete``/``+<refspec>`` — denied by default whether or not a peer is live,

@@ -20,8 +20,7 @@ None of those failures announce themselves near their cause: a missing hook
 looks like an agent that just never shows up. And one whole class of failure has
 no error at all — cabildo leans on Linux /proc for process identity (the PID
 rendezvous that binds an MCP subprocess to the session the hooks see), which is
-simply absent on macOS, so the install "succeeds" and then quietly does half of
-nothing. Desktop alerts work on both (notify-send on Linux, osascript on macOS),
+absent on macOS, so the install "succeeds" and then quietly does half of nothing. Desktop alerts work on both (notify-send on Linux, osascript on macOS),
 but the macOS button round-trip is a modal dialog unless terminal-notifier is
 installed. doctor names all of that here, at check time, instead of leaving it
 to be discovered.
@@ -45,7 +44,7 @@ from pathlib import Path
 from . import desktop, mcp_config, procs, service, store
 
 # Verdicts. `na` is "not applicable / nothing to fix here" — an issues server
-# with no docs/issues/ to back it, or a daemon that has simply never run. It is
+# with no docs/issues/ to back it, or a daemon that has never run. It is
 # reported, not counted against the exit code; only `fail` does that.
 OK = "ok"
 WARN = "warn"

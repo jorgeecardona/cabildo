@@ -19,7 +19,8 @@ Nothing leaves your machine unless you pair machines or set up the optional
 
 ```bash
 pip install cabildo            # or: uv tool install cabildo
-claude mcp add --scope user cabildo -- cabildo-mcp
+cabildo install                # registers the MCP server, the hooks, and the push mod
+cabildo doctor                 # checks the hooks, the MCP server, and the DB
 ```
 
 Or, from a clone, `python scripts/install.py` sets up everything (venv, MCP registration,
@@ -44,6 +45,5 @@ Start with [Use cabildo well](using-cabildo.md). An agent gets the same page fro
 - [Gateway](gateway.md): keep Claude Code working when the subscription runs out.
 - [Changelog](changelog.md): release notes.
 
-The full guide (identity, the MCP tools, what the git guard enforces, the push daemon, the
-issues register, and manual hook setup) is in the project
-[README on GitLab](https://gitlab.com/cardona-oss/cabildo#readme).
+The full guide (identity, the MCP tools, what the git guard enforces, the push daemon, and manual
+hook setup) is in the project [README on GitLab](https://gitlab.com/cardona-oss/cabildo#readme).

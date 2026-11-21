@@ -341,7 +341,7 @@ def _on_sighup(reloading: threading.Event) -> signal.Handlers | Callable[..., ob
     """Make SIGHUP ask for a reload. Returns the old handler, or None where it cannot be set.
 
     A signal handler can only be set from the main thread, so a daemon run on another thread
-    (a test) is simply not reloadable.
+    (a test) is not reloadable.
     """
     if threading.current_thread() is not threading.main_thread():
         return None

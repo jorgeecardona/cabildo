@@ -38,7 +38,7 @@ from pathlib import Path
 # elsewhere (macOS has no /proc at all).
 # --------------------------------------------------------------------------- #
 def _ppid_linux(pid: int) -> int:
-    """Parent PID of `pid`, or 0. Parses /proc/<pid>/stat robustly: comm is
+    """Parent PID of `pid`, or 0. Parses /proc/<pid>/stat tolerantly: comm is
     wrapped in parens and may itself contain spaces/parens, so we index off the
     final ')' rather than splitting the whole line.
     """

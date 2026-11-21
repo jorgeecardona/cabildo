@@ -77,8 +77,9 @@ cabildo viewer                  # read-only web view on http://127.0.0.1:8787
   `send_to_role(..., question=True)`; any holder answers with `send(..., reply_to=...)`. See
   [Roles](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/roles.md).
 - **Advisory locks**: `claim(resource, ttl_seconds, note)`, `release`, `claims`.
-- **Hook-level git guard**: denies the pushes and destructive git that overwrite other agents' work (see
-  [What is enforced](#what-is-enforced-and-what-is-not)); `cabildo cost` reports what the hooks
+- **Hook-level git guard**: denies the pushes and destructive git that overwrite other agents'
+  work (see [What is enforced](#what-is-enforced-and-what-is-not)); `cabildo cost` reports what
+  the hooks
   inject and how long they take.
 - **Optional daemon** (`cabildo service install`; systemd `--user` on Linux, launchd on macOS).
   Agents `request(action="push")` and a single worker runs fetch, rebase, gate, push, verify, then
@@ -92,8 +93,9 @@ cabildo viewer                  # read-only web view on http://127.0.0.1:8787
 - **Platforms**: Linux and macOS, Python 3.12+. Memory-pressure stall detection (PSI) is
   Linux-only.
 
-Beyond these: other clients on the same bus (`cabildo codex`, `cabildo opencode`), `cabildo sessions` to find a lost session, context-cheap unread/preview handling, and
-per-repo config (`.cabildo/config.toml`).
+Beyond these: other clients on the same bus (`cabildo codex`, `cabildo opencode`), `cabildo sessions`
+to find a lost session, context-cheap unread/preview handling, and per-repo config
+(`.cabildo/config.toml`). The 46 tools are listed by `help("tools")` from the MCP server.
 
 Put a folder on the bus with `cabildo add --project <name> .`: it pins the project name and writes
 the MCP entry into the folder's `.mcp.json` at project scope. `CABILDO_HOME` relocates the DB;
@@ -112,8 +114,9 @@ Other ways to coordinate agents, and where they stop:
 - **A lockfile in the repo.** It coordinates one repo for processes that agree to check it.
   cabildo's locks are keyed by project, name the holder, expire, and the deny comes from the
   harness, not from the agent choosing to check.
-- **A hosted orchestrator.** cabildo has no server, no account, and nothing leaves the machine.
-  Cross-machine sync (LAN pairing with `request("pair")`, WAN peers in config) is peer-to-peer.
+- **A hosted orchestrator.** cabildo has no server, no account, and nothing leaves your own
+  machines. Cross-machine sync (LAN pairing with `request("pair")`, WAN peers in config) is
+  peer-to-peer. The optional gateway sends model traffic to the upstreams you name.
 
 What it does not do:
 
@@ -136,8 +139,9 @@ cabildo is a normal Python package with two halves:
   delivered, stay listed, and be held to the rules.
 
 All state is one SQLite database (`~/.cabildo/chat.db`, WAL) shared by every session. No daemon is
-required and nothing touches the network: if two agents share a filesystem, they share a bus. The
-runtime is stdlib-only; the one dependency is `mcp`.
+required. If two agents share a filesystem, they share a bus; no network needed for that. For
+LAN pairing and the gateway, the network is used. Runtime dependencies: `mcp`, `zeroconf`,
+`textual`, `textual-tty`, `playwright`.
 
 Identity is automatic. Claude Code never hands an MCP server its `session_id`, but hooks get it,
 and both hooks and the MCP subprocess descend from the same `claude` process. The `SessionStart`
@@ -154,16 +158,17 @@ agent never deadlocks the bus, and `SessionEnd` drops a session's locks. The `Pr
 enforces the convention at the one place agents overwrite each other: **git, issued as a
 `Bash` tool call**. It denies, with a reason naming the holder or peers:
 
-- **`git push`** while another session holds `push:<project>`, or while any other agent is simply
-  live on the project. A lease you hold yourself is the escape hatch; otherwise queue it through
-  the daemon.
+- **`git push`** while another session holds `push:<project>`, or while any other agent has
+  written in the same checkout (holds `wrote_at`). To push by hand, claim `push:<project>` first;
+  otherwise use `request(action="push")`.
 - **Force/delete push** (`--force`, `-f`, `--force-with-lease`, `--delete`, `+refspec`): always.
   It destroys committed work that lives only on the remote.
 - **Tree-destroying git** (`reset --hard`, discarding `checkout`/`restore`, `clean -f`, tree-wide
   `stash`): always. It wipes uncommitted work an autonomous agent cannot bring back.
-- **Index/tree/HEAD-mutating git** (`add`, `commit`, `checkout`, `merge`, `rebase`, ...) while
-  another agent stands in the **same checkout**. One index, one HEAD to collide on; the fix is
-  `git worktree add`, not refereeing.
+- **Tree-wide git** (`add -A`, `add .`, `commit -a`, `checkout`, `merge`, `rebase`, ...) while
+  another agent has written in the **same checkout** (holds `wrote_at`). `git add <file>` and
+  path-scoped commits are allowed. One index, one HEAD to collide on; the fix is `git worktree
+  add`, not refereeing.
 - **Commit on a protected trunk**, only where a repo opts in with `[trunk].mode = "guard"`.
 
 Force-push and destructive-git denials opt out per repo via `.cabildo/config.toml`. A push the
@@ -199,6 +204,7 @@ composes with an existing hook, and fails open.
 | `SessionEnd` | `session_end` | 10 | none |
 | `Stop` | `stop` | 10 | none |
 | `SubagentStop` | `subagent_stop` | 10 | none |
+| `StopFailure` | `stop_failure` | 10 | `rate_limit` |
 | `PostToolUse` | `post_tool_use` | 5 | `*` |
 | `PreToolUse` | `pre_tool_use` | 5 | `Bash\|Edit\|Write\|NotebookEdit` |
 
@@ -228,11 +234,11 @@ Then restart each Claude session, which restarts its MCP server.
 
 ## Links
 
-- **Repository:** https://gitlab.com/cardona-oss/cabildo
-- **PyPI:** https://pypi.org/project/cabildo/
-- **Documentation:** <https://cardona-oss.gitlab.io/cabildo/>
-- **Changelog:** [CHANGELOG.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/CHANGELOG.md)
-- **Issues:** <https://gitlab.com/cardona-oss/cabildo/-/issues>
+- Repository: https://gitlab.com/cardona-oss/cabildo
+- PyPI: https://pypi.org/project/cabildo/
+- Documentation: <https://cardona-oss.gitlab.io/cabildo/>
+- Changelog: [CHANGELOG.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/CHANGELOG.md)
+- Issues: <https://gitlab.com/cardona-oss/cabildo/-/issues>
 
 ## Contributing
 
