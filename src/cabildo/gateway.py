@@ -138,6 +138,7 @@ class Upstream:
     auth: str = "x-api-key"  # how a key is sent: "x-api-key", "bearer" or "both"
     models: Mapping[str, str] = field(default_factory=dict)  # client model id -> this upstream's
     drop_betas: tuple[str, ...] = ()  # ``anthropic-beta`` values this upstream cannot take
+    drop_fields: tuple[str, ...] = ()  # top-level body fields this upstream refuses
     server_tools: bool = True  # False: a request with WebSearch and the like skips this upstream
 
 
@@ -276,6 +277,13 @@ def _upstream(name: str, entry: Mapping[str, Any]) -> Upstream:
         if isinstance(betas, list)
         else (("oauth-*",) if kind != "passthrough" else ())
     )
+    fields = entry.get("drop_fields", [])
+    if not isinstance(fields, list) or not all(isinstance(f, str) and f for f in fields):
+        msg = f"upstream {name}: drop_fields must be a list of field names"
+        raise GatewayError(msg)
+    if fields and kind == "passthrough":
+        msg = f"upstream {name}: drop_fields does not apply to a passthrough upstream"
+        raise GatewayError(msg)
     return Upstream(
         name=name,
         kind=kind,
@@ -284,6 +292,7 @@ def _upstream(name: str, entry: Mapping[str, Any]) -> Upstream:
         auth=auth,
         models=mapping,
         drop_betas=drop,
+        drop_fields=tuple(fields),
         server_tools=entry.get("server_tools", kind != _INVOKE) is not False,
     )
 
@@ -588,21 +597,60 @@ class Wire:
     body: bytes
     headers: list[tuple[str, str]]
     events: bool = False  # the answer is an AWS event stream to turn into server-sent events
+    changes: tuple[str, ...] = ()  # body fields that were rewritten or dropped, for the log
+
+
+_INVOKE_REFUSES = ("context_management", "service_tier")  # Bedrock's Invoke API: 400 on these
+
+
+def normalise(up: Upstream, data: dict[str, Any]) -> list[str]:
+    """Change ``data`` in place to what ``up`` accepts. Returns what changed, for the log.
+
+    Bedrock's Invoke API lags the first-party API: it refuses ``thinking.type = "enabled"``,
+    ``context_management``, ``service_tier``, and ``top_p`` next to ``temperature``. ``drop_fields``
+    of any non-passthrough upstream is dropped too.
+    """
+    changes: list[str] = []
+    if up.kind == _INVOKE:
+        thinking = data.get("thinking")
+        if isinstance(thinking, dict) and thinking.get("type") == "enabled":
+            data["thinking"] = {"type": "adaptive"}
+            changes.append("thinking enabled -> adaptive")
+        if "top_p" in data and "temperature" in data:
+            del data["top_p"]
+            changes.append("dropped top_p")
+    for name in (*(_INVOKE_REFUSES if up.kind == _INVOKE else ()), *up.drop_fields):
+        if name in data:
+            del data[name]
+            changes.append(f"dropped {name}")
+    return changes
 
 
 def prepare(up: Upstream, job: Job, body: bytes, headers: list[tuple[str, str]]) -> Wire:
     """The path, body and headers to send ``up`` for ``job``.
 
-    A passthrough or key upstream gets the request as it is, less a renamed model. For Bedrock's
-    Invoke API the path names the model, the body drops ``model`` and ``stream`` and gains
-    ``anthropic_version``, and the ``anthropic-beta`` values move into the body.
+    A passthrough or key upstream gets the request as it is, less a renamed model and the fields
+    of its ``drop_fields``. For Bedrock's Invoke API the path names the model, the body drops
+    ``model`` and ``stream`` and gains ``anthropic_version``, the ``anthropic-beta`` values move
+    into the body, and the fields Bedrock refuses are rewritten or dropped (``normalise``).
     """
     base = urlsplit(up.base_url).path
     if up.kind != _INVOKE or job.model is None or job.model not in up.models:
-        return Wire(base + job.path, request_body(up, job, body), headers)
+        out = request_body(up, job, body)
+        changes: list[str] = []
+        if up.drop_fields:
+            try:
+                data = json.loads(out)
+            except ValueError:
+                data = None
+            if isinstance(data, dict):
+                changes = normalise(up, data)
+                out = json.dumps(data).encode() if changes else out
+        return Wire(base + job.path, out, headers, changes=tuple(changes))
     data = json.loads(body)
     data.pop("model", None)
     data.pop("stream", None)
+    changes = normalise(up, data)
     data["anthropic_version"] = _ANTHROPIC_VERSION
     betas = [v for k, v in headers if k.lower() == "anthropic-beta"]
     if betas:
@@ -610,7 +658,8 @@ def prepare(up: Upstream, job: Job, body: bytes, headers: list[tuple[str, str]])
     kept = [(k, v) for k, v in headers if k.lower() != "anthropic-beta"]
     action = "invoke-with-response-stream" if job.stream else "invoke"
     model = quote(up.models[job.model], safe="")
-    return Wire(f"{base}/model/{model}/{action}", json.dumps(data).encode(), kept, job.stream)
+    wire = Wire(f"{base}/model/{model}/{action}", json.dumps(data).encode(), kept, job.stream)
+    return replace(wire, changes=tuple(changes))
 
 
 def read_body(headers: Mapping[str, str], rfile: Any) -> bytes:
@@ -861,6 +910,8 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
                 # From here the request may have reached the upstream: never send it twice.
                 try:
                     wire = prepare(up, job, body, headers)
+                    if wire.changes:
+                        gw.log(f"gateway: {up.name}: {'; '.join(wire.changes)}")
                     conn.putrequest(self.command, wire.path, skip_accept_encoding=True)
                     for k, v in wire.headers:
                         conn.putheader(k, v)

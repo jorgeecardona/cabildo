@@ -114,6 +114,10 @@ For each request the gateway does what the Invoke API needs, and Claude Code see
   The id comes from `models`.
 - The body loses `model` and `stream` and gains `anthropic_version`. The `anthropic-beta` values
   move into the body as `anthropic_beta`.
+- Fields Bedrock refuses are changed or dropped, and the log says which (#60).
+  `thinking.type: "enabled"` becomes `"adaptive"` (the token budget is dropped).
+  `context_management` and `service_tier` are dropped, and so is `top_p` when `temperature` is set.
+  Without this, a refused `context_management` makes Claude Code compact in a loop.
 - A streamed answer arrives as AWS binary frames. The gateway decodes them and sends server-sent
   events.
 - A Bedrock error (`{"message": ...}`) is sent as an Anthropic error, so Claude Code reads it.
@@ -146,6 +150,8 @@ and keeps the streams that are open. The command also reloads the daemon. New ga
   WebSearch.
 - `drop_betas` is a list of glob patterns for `anthropic-beta` values. It replaces the default
   `["oauth-*"]` of a key upstream. A subscription upstream drops nothing by default.
+- `drop_fields` is a list of top-level body fields to remove for that upstream, for a `key` or
+  `bedrock-invoke` upstream. Use it when an upstream answers 400 for a field Claude Code sends.
 - A key upstream only gets `/v1/messages` paths.
 - A skipped upstream is not set aside. If every upstream is skipped, the answer is a 502 that
   says so.

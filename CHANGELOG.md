@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- A `bedrock-invoke` upstream rewrites or drops the fields Bedrock refuses (`thinking.type
+  enabled`, `context_management`, `service_tier`, `top_p` with `temperature`) and logs each change
+  (#60). `drop_fields` lists more fields to drop for any `key` or `bedrock-invoke` upstream.
+
 - The daemon saves the names you gave sessions (handles, roles, titles, groups, tags) to
   `names.json`, or to `[names] file`. `cabildo names export` writes it now, and
   `cabildo names import` puts the names back on a new machine without overwriting yours.

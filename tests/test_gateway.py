@@ -668,6 +668,86 @@ def test_a_request_becomes_an_invoke_call(fakes, run) -> None:
     assert fakes["bed"].header(0, "anthropic-version") == []
 
 
+@pytest.mark.parametrize(
+    ("sent", "expected", "logged"),
+    [
+        (
+            {"thinking": {"type": "enabled", "budget_tokens": 1024}},
+            {"thinking": {"type": "adaptive"}},
+            "thinking enabled -> adaptive",
+        ),
+        (
+            {"context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]}},
+            {},
+            "dropped context_management",
+        ),
+        ({"service_tier": "auto"}, {}, "dropped service_tier"),
+        ({"temperature": 1, "top_p": 0.9}, {"temperature": 1}, "dropped top_p"),
+    ],
+)
+def test_invoke_rewrites_the_fields_bedrock_refuses_and_logs_it(
+    fakes, run, sent: dict, expected: dict, logged: str
+) -> None:
+    fakes["sub"].status = 429
+    lines: list[str] = []
+    gw = gateway.Gateway(invoke(fakes), keys=gateway.Keys(), log=lines.append)
+    port = run(gw)
+    body = {"model": "claude-opus-5-5", "max_tokens": 5, "messages": [], **sent}
+    status, _, _ = post(port, body, headers=[("Authorization", "Bearer oauth")])
+    assert status == 200
+    seen = json.loads(fakes["bed"].seen[0]["body"])
+    seen.pop("anthropic_version")
+    assert seen == {"max_tokens": 5, "messages": [], **expected}
+    assert any(logged in line and "eu" in line for line in lines)
+
+
+def test_invoke_keeps_top_p_alone_and_adaptive_thinking(fakes, run) -> None:
+    fakes["sub"].status = 429
+    gw = gateway.Gateway(invoke(fakes), keys=gateway.Keys())
+    port = run(gw)
+    body = {
+        "model": "claude-opus-5-5",
+        "max_tokens": 5,
+        "messages": [],
+        "top_p": 0.9,
+        "thinking": {"type": "adaptive"},
+    }
+    post(port, body, headers=[("Authorization", "Bearer oauth")])
+    seen = json.loads(fakes["bed"].seen[0]["body"])
+    assert seen["top_p"] == 0.9 and seen["thinking"] == {"type": "adaptive"}
+
+
+def test_drop_fields_removes_what_a_key_upstream_refuses(fakes, run) -> None:
+    fakes["sub"].status = 429
+    gw = gateway.Gateway(
+        settings(fakes, bed={"drop_fields": ["context_management"]}), keys=gateway.Keys()
+    )
+    port = run(gw)
+    body = {"model": "claude-opus-5-5", "context_management": {"edits": []}, "keep": 1}
+    post(port, body)
+    assert json.loads(fakes["bed"].seen[0]["body"]) == {"model": "claude-opus-5-5", "keep": 1}
+    assert "context_management" in json.loads(fakes["sub"].seen[0]["body"])
+
+
+def test_drop_fields_is_checked() -> None:
+    with pytest.raises(gateway.GatewayError, match="list of field names"):
+        gateway.parse(
+            {
+                "upstream": {
+                    "k": {"kind": "key", "base_url": "http://x", "key": "env:K", "drop_fields": "a"}
+                }
+            }
+        )
+    with pytest.raises(gateway.GatewayError, match="passthrough"):
+        gateway.parse(
+            {
+                "upstream": {
+                    "p": {"kind": "passthrough", "base_url": "http://x", "drop_fields": ["a"]}
+                }
+            }
+        )
+
+
 def test_a_streamed_answer_is_decoded_into_sse(fakes, run) -> None:
     fakes["sub"].status = 429
     events = [
