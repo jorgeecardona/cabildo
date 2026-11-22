@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 DAEMON = "daemon"
+RETIRED = ("gateway",)  # jobs an older cabildo ran as their own unit, and the daemon now runs
 
 # Stamped into every unit we write, and looked for before we overwrite one.
 # The name is obvious enough that a hand-rolled cabildo-daemon.service is a
@@ -391,15 +392,30 @@ def write_units(units: list[Unit], *, force: bool = False) -> list[Path]:
     return written
 
 
+def retired_units() -> list[Unit]:
+    """The units of ``RETIRED`` jobs that exist on this machine.
+
+    ``cabildo service install --gateway`` used to write a second unit. The daemon serves the
+    gateway now, so a leftover unit would still listen on the gateway port.
+    """
+    found = [Unit(key=k, description="retired", exec_start=[]) for k in RETIRED]
+    return [u for u in found if u.path.exists()]
+
+
 def install(
     units: list[Unit], *, start: bool = True, force: bool = False
 ) -> list[tuple[str, int, str]]:
     """Write, then enable (and start). Returns one (step, rc, output) per
     systemctl/launchctl call so the caller can show exactly what failed.
+
+    A retired unit is stopped and removed first, so the daemon can take over its port. One that
+    cabildo did not write is left alone.
     """
+    old = retired_units()
+    steps = uninstall(old) if old else []
     if sys.platform == "darwin":
-        return _install_launchd(units, start=start, force=force)
-    return _install_systemd(units, start=start, force=force)
+        return steps + _install_launchd(units, start=start, force=force)
+    return steps + _install_systemd(units, start=start, force=force)
 
 
 def _install_systemd(units: list[Unit], *, start: bool, force: bool) -> list[tuple[str, int, str]]:
@@ -454,6 +470,8 @@ def uninstall(units: list[Unit], *, force: bool = False) -> list[tuple[str, int,
     service must never look like uninstalling your data — and leaves alone
     any unit/agent file we didn't write.
     """
+    listed = {u.name for u in units}
+    units = [*units, *(u for u in retired_units() if u.name not in listed)]
     if sys.platform == "darwin":
         return _uninstall_launchd(units, force=force)
     return _uninstall_systemd(units, force=force)

@@ -8,6 +8,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   asks for in `context_management`: the gateway applies the `clear_tool_uses` edit itself before
   it drops the field, so long conversations stay under Bedrock's window (#60).
 
+- `cabildo service install` stops and removes the old `cabildo-gateway.service` (or
+  `com.cabildo.gateway.plist`) that `service install --gateway` used to write, so it no longer
+  holds the gateway port. `service uninstall` removes it too, and `service status` points it
+  out. A unit that cabildo did not write is left alone (#58).
+
 - The MCP servers no longer use the `mcp` package. A stdio server written in cabildo
   (`mcp_stdio.py`) replaces it, so an install drops `mcp`, `starlette`, `uvicorn`, `sse-starlette`
   and the packages only they needed. Tool names, arguments and results are the same. A tool

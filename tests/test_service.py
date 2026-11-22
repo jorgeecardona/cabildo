@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import plistlib
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -560,3 +561,98 @@ def test_there_is_one_service_and_it_has_no_gateway_unit(units_home, capsys):
     out = capsys.readouterr().out
     assert "cabildo.daemon" in out
     assert "gateway serve" not in out
+
+
+# --- the retired gateway unit -------------------------------------------------------------------
+
+
+def _old_gateway(home: Path, *, ours: bool = True) -> Path:
+    home.mkdir(parents=True, exist_ok=True)
+    unit = home / "cabildo-gateway.service"
+    unit.write_text(
+        ("# Written by `cabildo service install`.\n" if ours else "") + "[Service]\nExecStart=x\n"
+    )
+    return unit
+
+
+def test_install_stops_and_removes_the_old_gateway_unit_before_the_daemon_starts(
+    units_home, monkeypatch
+):
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        service,
+        "systemctl",
+        lambda *a, capture=True: (
+            calls.append(a) or __import__("subprocess").CompletedProcess(list(a), 0, "", "")
+        ),
+    )
+    old = _old_gateway(units_home)
+    steps = service.install([service.daemon_unit()])
+    assert not old.exists()
+    assert ("stop", "cabildo-gateway.service") in calls
+    assert ("disable", "cabildo-gateway.service") in calls
+    assert calls.index(("stop", "cabildo-gateway.service")) < calls.index(
+        ("restart", "cabildo-daemon.service")
+    )
+    assert any("cabildo-gateway.service" in s[0] for s in steps)
+
+
+def test_install_leaves_a_gateway_unit_it_did_not_write(units_home, monkeypatch):
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        service,
+        "systemctl",
+        lambda *a, capture=True: (
+            calls.append(a) or __import__("subprocess").CompletedProcess(list(a), 0, "", "")
+        ),
+    )
+    theirs = _old_gateway(units_home, ours=False)
+    service.install([service.daemon_unit()])
+    assert theirs.exists()
+    assert ("stop", "cabildo-gateway.service") not in calls
+
+
+def test_install_without_an_old_unit_touches_nothing_extra(units_home, monkeypatch):
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        service,
+        "systemctl",
+        lambda *a, capture=True: (
+            calls.append(a) or __import__("subprocess").CompletedProcess(list(a), 0, "", "")
+        ),
+    )
+    service.install([service.daemon_unit()])
+    assert not any("gateway" in " ".join(c) for c in calls)
+
+
+def test_uninstall_also_removes_the_old_gateway_unit(units_home, monkeypatch):
+    monkeypatch.setattr(
+        service,
+        "systemctl",
+        lambda *a, capture=True: __import__("subprocess").CompletedProcess(list(a), 0, "", ""),
+    )
+    old = _old_gateway(units_home)
+    unit = service.daemon_unit()
+    service.write_units([unit])
+    service.uninstall([unit])
+    assert not old.exists() and not unit.path.exists()
+
+
+def test_a_launchd_install_unloads_and_removes_the_old_gateway_plist(agents_home, monkeypatch):
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        service,
+        "launchctl",
+        lambda *a, capture=True: (
+            calls.append(a) or __import__("subprocess").CompletedProcess(list(a), 0, "", "")
+        ),
+    )
+    agents_home.mkdir(parents=True)
+    old = agents_home / "com.cabildo.gateway.plist"
+    old.write_text(f"<plist><!-- {service.MARKER} --></plist>")
+    service.install([service.daemon_unit()])
+    assert not old.exists()
+    assert ("unload", str(old)) in calls
+    assert calls.index(("unload", str(old))) < next(
+        i for i, c in enumerate(calls) if c[0] == "load"
+    )

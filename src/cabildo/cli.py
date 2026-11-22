@@ -2263,6 +2263,11 @@ def cmd_service(args) -> int:
                 f"      {C.YELLOW}not written by cabildo{C.OFF} "
                 f"{C.DIM}— {sv.exec_start_of(u.path)}{C.OFF}"
             )
+    for old in sv.retired_units():
+        print(
+            f"  {C.YELLOW}old unit {old.name} is still installed{C.OFF} "
+            f"{C.DIM}— the daemon serves that job now. `cabildo service install` removes it{C.OFF}"
+        )
     if not any_installed:
         print(f"\n{C.DIM}nothing installed yet: {C.OFF}cabildo service install --allow-push{C.OFF}")
         return 0
