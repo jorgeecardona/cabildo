@@ -116,9 +116,16 @@ For each request the gateway does what the Invoke API needs, and Claude Code see
   move into the body as `anthropic_beta`.
 - Fields Bedrock refuses are changed or dropped, and the log says which (#60).
   `thinking.type: "enabled"` becomes `"adaptive"` (the token budget is dropped).
-  `context_management` and `service_tier` are dropped, and so is `top_p` when `temperature` is set.
+  `service_tier` is dropped, and so is `top_p` when `temperature` is set.
   A `temperature` other than 1 is dropped while thinking is on.
-  Without this, a refused `context_management` makes Claude Code compact in a loop.
+- `context_management` is dropped too, but first the gateway does what its
+  `clear_tool_uses_20250919` edit asks (#60). Once the prompt passes the `trigger` (default 100,000
+  tokens, estimated from the size of the JSON), the oldest tool results become a short
+  placeholder, and the last `keep` tool uses (default 3) stay. `exclude_tools`, `clear_at_least`
+  and `clear_tool_inputs` work as in the API. Without this the conversation grows until Bedrock
+  refuses it, and Claude Code compacts in a loop. The client keeps its full history. The
+  `clear_thinking` edit is ignored. A request that goes to an upstream that supports the field is
+  sent as it is.
 - A streamed answer arrives as AWS binary frames. The gateway decodes them and sends server-sent
   events.
 - A Bedrock error (`{"message": ...}`) is sent as an Anthropic error, so Claude Code reads it.

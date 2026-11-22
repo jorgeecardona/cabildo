@@ -630,6 +630,11 @@ class Wire:
 
 
 _INVOKE_REFUSES = ("context_management", "service_tier")  # Bedrock's Invoke API: 400 on these
+_CLEAR_TOOL_USES = "clear_tool_uses_20250919"
+_CLEARED = "[tool result cleared to save context]"
+_TRIGGER_TOKENS = 100_000  # the API's default trigger for clearing tool results
+_KEEP_TOOL_USES = 3  # and its default for how many recent tool uses stay
+_CHARS_PER_TOKEN = 3  # an estimate low enough to clear a little early, never too late
 
 
 def normalise(up: Upstream, data: dict[str, Any]) -> list[str]:
@@ -637,9 +642,14 @@ def normalise(up: Upstream, data: dict[str, Any]) -> list[str]:
 
     Bedrock's Invoke API lags the first-party API: it refuses ``thinking.type = "enabled"``,
     ``context_management``, ``service_tier``, and ``top_p`` next to ``temperature``. ``drop_fields``
-    of any non-passthrough upstream is dropped too.
+    of any non-passthrough upstream is dropped too. Before ``context_management`` is dropped, the
+    clearing of old tool results it asks for is done here (``apply_context_management``), so a
+    long conversation does not grow past the window of an upstream that ignores the field.
     """
     changes: list[str] = []
+    dropped = (*(_INVOKE_REFUSES if up.kind == _INVOKE else ()), *up.drop_fields)
+    if "context_management" in dropped:
+        changes.extend(apply_context_management(data))
     if up.kind == _INVOKE:
         thinking = data.get("thinking")
         if isinstance(thinking, dict) and thinking.get("type") == "enabled":
@@ -656,11 +666,95 @@ def normalise(up: Upstream, data: dict[str, Any]) -> list[str]:
         if "top_p" in data and "temperature" in data:
             del data["top_p"]
             changes.append("dropped top_p")
-    for name in (*(_INVOKE_REFUSES if up.kind == _INVOKE else ()), *up.drop_fields):
+    for name in dropped:
         if name in data:
             del data[name]
             changes.append(f"dropped {name}")
     return changes
+
+
+def _size(value: Any) -> int:
+    """The length of ``value`` as JSON, in characters."""
+    return len(json.dumps(value, default=str))
+
+
+def _number(spec: Any, default: int, kind: str) -> int:
+    """``value`` of a ``{"type": kind, "value": N}`` setting, or ``default``."""
+    if isinstance(spec, dict) and spec.get("type") == kind:
+        value = spec.get("value")
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+    return default
+
+
+def apply_context_management(data: dict[str, Any]) -> list[str]:
+    """Do what the ``clear_tool_uses_20250919`` edit of ``context_management`` asks, in place.
+
+    The Messages API clears the oldest tool results once the prompt passes a trigger, and keeps
+    the most recent tool uses. Bedrock's Invoke API refuses the field, so the gateway does the
+    same on the request: a cleared result becomes a short placeholder and its ``tool_use_id``
+    stays. The client keeps its full history and sends it again, and the same results are cleared
+    each time. Tokens are estimated from the size of the JSON, so clearing may start a little
+    early. Other edits (``clear_thinking_20251015``) are ignored.
+
+    Returns a note for the log, or nothing when no edit applies or nothing was cleared.
+    """
+    management = data.get("context_management")
+    edits = management.get("edits") if isinstance(management, dict) else None
+    edit = next(
+        (e for e in edits or [] if isinstance(e, dict) and e.get("type") == _CLEAR_TOOL_USES), None
+    )
+    messages = data.get("messages")
+    if edit is None or not isinstance(messages, list):
+        return []
+    uses: list[tuple[int, int, str]] = []  # (message, block, tool_use id) in order of appearance
+    names: dict[str, str] = {}
+    for i, message in enumerate(messages):
+        content = message.get("content") if isinstance(message, dict) else None
+        for j, block in enumerate(content if isinstance(content, list) else ()):
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                uses.append((i, j, str(block.get("id"))))
+                names[str(block.get("id"))] = str(block.get("name"))
+    trigger = edit.get("trigger")
+    if isinstance(trigger, dict) and trigger.get("type") == "tool_uses":
+        if len(uses) <= _number(trigger, 0, "tool_uses"):
+            return []
+    else:
+        limit = _number(trigger, _TRIGGER_TOKENS, "input_tokens")
+        if _size([data.get("system"), messages, data.get("tools")]) // _CHARS_PER_TOKEN <= limit:
+            return []
+    keep = _number(edit.get("keep"), _KEEP_TOOL_USES, "tool_uses")
+    kept = {u[2] for u in uses[len(uses) - keep :]} if keep else set()
+    excluded = {x for x in edit.get("exclude_tools") or [] if isinstance(x, str)}
+    clear_inputs = edit.get("clear_tool_inputs") is True
+    targets: list[tuple[dict[str, Any], int]] = []
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content if isinstance(content, list) else ():
+            if not (isinstance(block, dict) and block.get("type") == "tool_result"):
+                continue
+            use_id = str(block.get("tool_use_id"))
+            if use_id in kept or names.get(use_id) in excluded or block.get("content") == _CLEARED:
+                continue
+            targets.append((block, _size(block.get("content")) // _CHARS_PER_TOKEN))
+    saved = sum(size for _block, size in targets)
+    least = _number(edit.get("clear_at_least"), 0, "input_tokens")
+    if not targets or saved < least:
+        return []
+    for block, _size_tokens in targets:
+        block["content"] = _CLEARED
+    if clear_inputs:
+        cleared = {str(b.get("tool_use_id")) for b, _s in targets}
+        for message in messages:
+            content = message.get("content") if isinstance(message, dict) else None
+            for block in content if isinstance(content, list) else ():
+                if (
+                    isinstance(block, dict)
+                    and block.get("type") == "tool_use"
+                    and str(block.get("id")) in cleared
+                ):
+                    block["input"] = {}
+    return [f"cleared {len(targets)} old tool result(s), about {saved} tokens"]
 
 
 def strip_thinking(data: dict[str, Any]) -> int:

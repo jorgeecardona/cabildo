@@ -992,3 +992,141 @@ def test_a_500_is_logged_with_its_message_and_still_reaches_the_client(fakes, ru
         lines,
         lambda x: x.startswith("sub claude-opus-5-5 500") and x.endswith(": internal trouble"),
     )
+
+
+# --- the clearing of old tool results that Bedrock's Invoke API does not do ---------------------
+
+BIG = "result " * 400  # about 930 tokens by the gateway's estimate
+
+
+def tool_history(count: int, **edit: Any) -> dict:
+    """A conversation of ``count`` tool calls, each with a large result."""
+    messages: list[dict] = [{"role": "user", "content": "go"}]
+    for n in range(count):
+        messages.append(
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": f"t{n}",
+                        "name": "Read" if n else "Bash",
+                        "input": {"n": n},
+                    }
+                ],
+            }
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": f"t{n}", "content": BIG}],
+            }
+        )
+    return {
+        "model": "claude-opus-5-5",
+        "max_tokens": 5,
+        "messages": messages,
+        "context_management": {"edits": [{"type": "clear_tool_uses_20250919", **edit}]},
+    }
+
+
+def cleared(data: dict) -> list[bool]:
+    """For each tool result of ``data``, whether it was replaced by the placeholder."""
+    return [
+        b["content"] == gateway._CLEARED
+        for m in data["messages"]
+        if isinstance(m["content"], list)
+        for b in m["content"]
+        if b["type"] == "tool_result"
+    ]
+
+
+def test_old_tool_results_are_cleared_once_the_trigger_is_passed_and_the_last_three_stay() -> None:
+    data = tool_history(6, trigger={"type": "input_tokens", "value": 2000})
+    notes = gateway.apply_context_management(data)
+    assert cleared(data) == [True, True, True, False, False, False]
+    assert notes and notes[0].startswith("cleared 3 old tool result(s)")
+    results = [
+        m["content"][0] for m in data["messages"] if m["role"] == "user" and m["content"] != "go"
+    ]
+    assert [r["tool_use_id"] for r in results] == [f"t{n}" for n in range(6)]
+
+
+def test_nothing_is_cleared_below_the_trigger_and_the_default_is_100k_tokens() -> None:
+    small = tool_history(6, trigger={"type": "input_tokens", "value": 50_000})
+    assert gateway.apply_context_management(small) == [] and not any(cleared(small))
+    default = tool_history(6)
+    assert gateway.apply_context_management(default) == []  # about 5,600 tokens: far below 100k
+
+
+def test_keep_exclude_and_clear_tool_inputs_are_respected() -> None:
+    data = tool_history(
+        5,
+        trigger={"type": "input_tokens", "value": 100},
+        keep={"type": "tool_uses", "value": 1},
+        exclude_tools=["Bash"],
+        clear_tool_inputs=True,
+    )
+    gateway.apply_context_management(data)
+    assert cleared(data) == [False, True, True, True, False]  # t0 is Bash, t4 is the one kept
+    uses = [b for m in data["messages"] if m["role"] == "assistant" for b in m["content"]]
+    assert [u["input"] for u in uses] == [{"n": 0}, {}, {}, {}, {"n": 4}]
+
+
+def test_a_trigger_in_tool_uses_counts_calls_not_tokens() -> None:
+    few = tool_history(
+        3, trigger={"type": "tool_uses", "value": 3}, keep={"type": "tool_uses", "value": 1}
+    )
+    assert gateway.apply_context_management(few) == []
+    many = tool_history(
+        4, trigger={"type": "tool_uses", "value": 3}, keep={"type": "tool_uses", "value": 1}
+    )
+    assert gateway.apply_context_management(many) and cleared(many) == [True, True, True, False]
+
+
+def test_clear_at_least_stops_a_clearing_that_would_free_too_little() -> None:
+    data = tool_history(
+        5,
+        trigger={"type": "input_tokens", "value": 100},
+        clear_at_least={"type": "input_tokens", "value": 50_000},
+    )
+    assert gateway.apply_context_management(data) == [] and not any(cleared(data))
+
+
+def test_clearing_twice_clears_nothing_more() -> None:
+    data = tool_history(6, trigger={"type": "input_tokens", "value": 100})
+    gateway.apply_context_management(data)
+    before = json.dumps(data)
+    gateway.apply_context_management(data)
+    assert json.dumps(data) == before
+
+
+def test_a_request_without_context_management_or_messages_is_left_alone() -> None:
+    assert gateway.apply_context_management({"messages": []}) == []
+    assert (
+        gateway.apply_context_management({"context_management": {"edits": [{"type": "other"}]}})
+        == []
+    )
+
+
+def test_invoke_clears_old_tool_results_and_drops_the_field(fakes, run) -> None:
+    fakes["sub"].status = 429
+    lines: list[str] = []
+    port = run(gateway.Gateway(invoke(fakes), keys=gateway.Keys(), log=lines.append))
+    body = tool_history(6, trigger={"type": "input_tokens", "value": 2000})
+    assert post(port, body, headers=[("Authorization", "Bearer oauth")])[0] == 200
+    sent = json.loads(fakes["bed"].seen[0]["body"])
+    assert "context_management" not in sent
+    assert cleared(sent) == [True, True, True, False, False, False]
+    assert any(
+        "cleared 3 old tool result(s)" in line and "dropped context_management" in line
+        for line in lines
+    )
+
+
+def test_the_first_upstream_still_gets_the_field_and_the_full_history(fakes, run) -> None:
+    port = run(gateway.Gateway(invoke(fakes), keys=gateway.Keys()))
+    body = tool_history(6, trigger={"type": "input_tokens", "value": 2000})
+    post(port, body, headers=[("Authorization", "Bearer oauth")])
+    sent = json.loads(fakes["sub"].seen[0]["body"])
+    assert "context_management" in sent and not any(cleared(sent))

@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- A `bedrock-invoke` upstream no longer loses the clearing of old tool results that Claude Code
+  asks for in `context_management`: the gateway applies the `clear_tool_uses` edit itself before
+  it drops the field, so long conversations stay under Bedrock's window (#60).
+
 - The MCP servers no longer use the `mcp` package. A stdio server written in cabildo
   (`mcp_stdio.py`) replaces it, so an install drops `mcp`, `starlette`, `uvicorn`, `sse-starlette`
   and the packages only they needed. Tool names, arguments and results are the same. A tool
