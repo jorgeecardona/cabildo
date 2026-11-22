@@ -729,6 +729,21 @@ def test_the_spend_matrix_is_a_row_per_period_and_a_column_per_model() -> None:
     assert rows[2] == ["7d", "$584.12", "$47.84", "$5,054.11"]
 
 
+def test_the_share_row_is_each_models_part_of_the_weeks_cost() -> None:
+    from cabildo.workspace.app import fmt_spend
+
+    rows = [line.split() for line in fmt_spend(_report(), "spend", width=60)]
+    share = next(x for x in rows if x[:2] == ["7d", "share"])
+    assert share[2:] == ["92%", "8%", "100%"]  # $584.12 and $47.84 of $632.00 (rounded)
+
+
+def test_the_share_row_is_dashes_when_the_week_has_no_priced_cost() -> None:
+    from cabildo.workspace.app import fmt_spend
+
+    share = next(x for x in fmt_spend(_report(split={}), "spend", 60) if x.startswith("7d share"))
+    assert set(share.split()[2:]) == {"-"}
+
+
 def test_the_tokens_row_has_no_total() -> None:
     """Summing tokens across models is the one number this table refuses to print, so the
     row that carries them stops before the total column.

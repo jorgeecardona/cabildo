@@ -269,7 +269,7 @@ def fmt_money(dollars: float) -> str:
 NO_SPEND_ROW = "-"  # remembered when the login turned out to want no spend row at all
 COL = 10  # every numeric column, so the rows line up under each other
 LABEL = 11
-TOTAL, BILLED, TOKENS = "total", "billed", "tokens"
+TOTAL, BILLED, TOKENS, SHARE = "total", "billed", "tokens", "7d share"
 
 
 def fmt_spend(r: spend.Report, label: str = "api key", width: int = 1000) -> list[str]:
@@ -288,6 +288,10 @@ def fmt_spend(r: spend.Report, label: str = "api key", width: int = 1000) -> lis
     is why today's is usually a dash rather than a zero.
 
     ``session`` is the conversation in the main pane, over its whole life.
+
+    ``7d share`` is each model's part of the last week's priced cost, in percent. It is the
+    share of money, because a share of tokens would be mostly cache reads, which are cheap
+    and not comparable across models.
 
     The ``tokens`` row has no total on purpose. Summing tokens across models is the one
     number this table refuses to print: a Haiku token and a Fable token are 80 times apart
@@ -319,6 +323,17 @@ def fmt_spend(r: spend.Report, label: str = "api key", width: int = 1000) -> lis
             else:
                 found = r.split.get(name, {}).get(column)
                 cells.append(fmt_money(found.cost) if found and found.priced else "-")
+        week = r.split.get("7d", {})
+        spent = sum(m.cost for m in week.values() if m.priced)
+        if column == TOTAL:
+            cells.append("100%" if spent else "-")
+        elif column == BILLED:
+            cells.append("")
+        else:
+            found = week.get(column)
+            cells.append(
+                f"{100 * found.cost / spent:.0f}%" if spent and found and found.priced else "-"
+            )
         # Tokens, per model, over the same window as the `all` row -- and no total. The
         # blank is the point: a sum of tokens across models is the number this refuses.
         found = by_model.get(column)
@@ -330,7 +345,7 @@ def fmt_spend(r: spend.Report, label: str = "api key", width: int = 1000) -> lis
         columns = shown + [TOTAL] + ([BILLED] if r.any_billed else [])
         grids = [column_cells(c) for c in columns]
         widths = [max(len(c) for c in cells) for cells in grids]
-        names = [label, *(name for name, *_ in periods), TOKENS]
+        names = [label, *(name for name, *_ in periods), SHARE, TOKENS]
         rows = []
         for i, name in enumerate(names):
             line = f"{name:<{LABEL}}" + " ".join(

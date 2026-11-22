@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- The workspace spend table has a `7d share` row: each model's part of the last week's priced
+  cost, in percent. The table shows on a plan login with `[workspace] spend = "always"` in
+  `~/.cabildo/config.toml`; the default `auto` shows it only on an API key.
+
 - A `bedrock-invoke` upstream no longer loses the clearing of old tool results that Claude Code
   asks for in `context_management`: the gateway applies the `clear_tool_uses` edit itself before
   it drops the field, so long conversations stay under Bedrock's window (#60).
