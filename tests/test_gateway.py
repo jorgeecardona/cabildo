@@ -6,7 +6,7 @@ import http.client
 import json
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -933,6 +933,16 @@ def test_invoke_drops_a_temperature_other_than_1_while_thinking_is_on(fakes, run
 # --- the upstream's error message in the log ----------------------------------------------------
 
 
+def logged(lines: list[str], wanted: Callable[[str], bool]) -> bool:
+    """Whether a log line matches, waiting a moment: the gateway logs after it has answered."""
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if any(wanted(line) for line in list(lines)):
+            return True
+        time.sleep(0.02)
+    return False
+
+
 def test_error_text_reads_the_message_and_never_the_whole_body() -> None:
     anthropic = b'{"type": "error", "error": {"type": "x", "message": "prompt is\\n too long"}}'
     assert gateway.error_text(anthropic) == "prompt is too long"
@@ -952,9 +962,12 @@ def test_a_4xx_from_an_upstream_is_logged_with_its_message(fakes, run) -> None:
     lines: list[str] = []
     port = run(gateway.Gateway(settings(fakes), keys=gateway.Keys(), log=lines.append))
     assert post(port)[0] == 400
-    assert any(
-        line.startswith("bed claude-opus-5-5 400") and line.endswith(": prompt is too long: 1 > 0")
-        for line in lines
+    assert logged(
+        lines,
+        lambda line: (
+            line.startswith("bed claude-opus-5-5 400")
+            and line.endswith(": prompt is too long: 1 > 0")
+        ),
     )
 
 
@@ -964,8 +977,8 @@ def test_a_set_aside_is_logged_with_the_message_and_a_200_has_none(fakes, run) -
     lines: list[str] = []
     port = run(gateway.Gateway(settings(fakes), keys=gateway.Keys(), log=lines.append))
     assert post(port)[0] == 200
-    assert any("set aside" in line and line.endswith(": weekly limit reached") for line in lines)
-    assert any(line.startswith("bed claude-opus-5-5 200") and ": " not in line for line in lines)
+    assert logged(lines, lambda x: "set aside" in x and x.endswith(": weekly limit reached"))
+    assert logged(lines, lambda x: x.startswith("bed claude-opus-5-5 200") and ": " not in x)
 
 
 def test_a_500_is_logged_with_its_message_and_still_reaches_the_client(fakes, run) -> None:
@@ -975,7 +988,7 @@ def test_a_500_is_logged_with_its_message_and_still_reaches_the_client(fakes, ru
     port = run(gateway.Gateway(settings(fakes), keys=gateway.Keys(), log=lines.append))
     status, _, out = post(port)
     assert status == 500 and b"internal trouble" in out
-    assert any(
-        line.startswith("sub claude-opus-5-5 500") and line.endswith(": internal trouble")
-        for line in lines
+    assert logged(
+        lines,
+        lambda x: x.startswith("sub claude-opus-5-5 500") and x.endswith(": internal trouble"),
     )
