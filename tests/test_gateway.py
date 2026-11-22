@@ -928,3 +928,54 @@ def test_invoke_drops_a_temperature_other_than_1_while_thinking_is_on(fakes, run
     assert sent["thinking"] == {"type": "adaptive"} and "temperature" not in sent
     post(port, history(thinking={"type": "adaptive"}, temperature=1))
     assert json.loads(fakes["bed"].seen[1]["body"])["temperature"] == 1
+
+
+# --- the upstream's error message in the log ----------------------------------------------------
+
+
+def test_error_text_reads_the_message_and_never_the_whole_body() -> None:
+    anthropic = b'{"type": "error", "error": {"type": "x", "message": "prompt is\\n too long"}}'
+    assert gateway.error_text(anthropic) == "prompt is too long"
+    assert gateway.error_text(b'{"message": "bedrock says no"}') == "bedrock says no"
+    assert gateway.error_text(b"<html>gateway timeout</html>") == ""
+    assert gateway.error_text(b'{"error": {"code": 7}}') == ""
+    long = json.dumps({"message": "word " * 100}).encode()
+    assert len(gateway.error_text(long)) == 200
+    leaked = json.dumps({"message": "bad key sk-" + "a1" * 30 + " refused"}).encode()
+    assert gateway.error_text(leaked) == "bad key <redacted> refused"
+
+
+def test_a_4xx_from_an_upstream_is_logged_with_its_message(fakes, run) -> None:
+    fakes["sub"].status = 429
+    fakes["bed"].status = 400
+    fakes["bed"].body = b'{"type": "error", "error": {"message": "prompt is too long: 1 > 0"}}'
+    lines: list[str] = []
+    port = run(gateway.Gateway(settings(fakes), keys=gateway.Keys(), log=lines.append))
+    assert post(port)[0] == 400
+    assert any(
+        line.startswith("bed claude-opus-5-5 400") and line.endswith(": prompt is too long: 1 > 0")
+        for line in lines
+    )
+
+
+def test_a_set_aside_is_logged_with_the_message_and_a_200_has_none(fakes, run) -> None:
+    fakes["sub"].status = 429
+    fakes["sub"].body = b'{"error": {"message": "weekly limit reached"}}'
+    lines: list[str] = []
+    port = run(gateway.Gateway(settings(fakes), keys=gateway.Keys(), log=lines.append))
+    assert post(port)[0] == 200
+    assert any("set aside" in line and line.endswith(": weekly limit reached") for line in lines)
+    assert any(line.startswith("bed claude-opus-5-5 200") and ": " not in line for line in lines)
+
+
+def test_a_500_is_logged_with_its_message_and_still_reaches_the_client(fakes, run) -> None:
+    fakes["sub"].status = 500
+    fakes["sub"].body = b'{"error": {"message": "internal trouble"}}'
+    lines: list[str] = []
+    port = run(gateway.Gateway(settings(fakes), keys=gateway.Keys(), log=lines.append))
+    status, _, out = post(port)
+    assert status == 500 and b"internal trouble" in out
+    assert any(
+        line.startswith("sub claude-opus-5-5 500") and line.endswith(": internal trouble")
+        for line in lines
+    )

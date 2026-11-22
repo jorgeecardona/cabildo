@@ -69,9 +69,10 @@ HANDOFF_ENV = "CABILDO_GATEWAY_FD"
 DRAIN_S = 120.0  # how long a reload waits for open requests before it cuts them
 BACKLOG = 128  # connections that queue while a reload swaps the process
 MAX_CONVERSATIONS = 4096  # how many conversations the gateway remembers an issuer for
+_ERROR_TEXT = 200  # characters of an upstream's error message that reach the log
+_TOKENISH = re.compile(r"[A-Za-z0-9_\-]{32,}")
 _BODY_PEEK = 65536  # how much of an error body is read to tell "out of credit" from a bad request
 _CHUNK = 65536
-_WATCHED = frozenset({400, 401, 402, 403, 429, 529})
 _HOP_BY_HOP = frozenset(
     {
         "connection",
@@ -761,6 +762,27 @@ def prepare(
     )
 
 
+def error_text(body: bytes) -> str:
+    """The message of an upstream's JSON error, on one short line fit for a log, or "".
+
+    It reads ``error.message`` (Anthropic) or ``message`` (Bedrock) and nothing else, so a body is
+    never logged whole. A long run of token-like characters is replaced, in case an upstream
+    echoes a credential.
+    """
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return ""
+    error = data.get("error") if isinstance(data, dict) else None
+    message = error.get("message") if isinstance(error, dict) else None
+    if message is None and isinstance(data, dict):
+        message = data.get("message")
+    if not isinstance(message, str):
+        return ""
+    text = _TOKENISH.sub("<redacted>", " ".join(message.split()))
+    return text if len(text) <= _ERROR_TEXT else text[: _ERROR_TEXT - 1] + "…"
+
+
 def read_body(headers: Mapping[str, str], rfile: Any) -> bytes:
     """The request body: ``Content-Length`` bytes, or a chunked body decoded.
 
@@ -1060,7 +1082,7 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
                     return
                 peek = b""
                 wrap = up.kind == _INVOKE and resp.status >= 400
-                if resp.status in _WATCHED or wrap:
+                if resp.status >= 400 or wrap:
                     peek = resp.read(_BODY_PEEK)
                     if (
                         resp.status == 400
@@ -1088,7 +1110,7 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
                         gw.router.set_aside(up, verdict, job.model)
                         gw.log(
                             f"gateway: {up.name} set aside {verdict.cooldown_s:.0f}s: "
-                            f"{verdict.reason}"
+                            f"{verdict.reason}" + _because(peek)
                         )
                         last = (resp.status, resp.getheaders(), peek, len(peek) < _BODY_PEEK, wrap)
                         conn.close()
@@ -1108,7 +1130,7 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
                     self._send(resp.status, resp.getheaders(), peek, resp, wire.events)
                 conn.close()
                 ms = round((time.monotonic() - started) * 1000)
-                gw.log(f"{up.name} {job.model or '-'} {resp.status} {ms}ms")
+                gw.log(f"{up.name} {job.model or '-'} {resp.status} {ms}ms" + _because(peek))
                 return
             if last is not None:
                 if last[4]:
@@ -1158,6 +1180,12 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
                 return  # the client went away
 
     return Handler
+
+
+def _because(peek: bytes) -> str:
+    """``: <message>`` for a log line, or "" when the answer carries no readable error message."""
+    text = error_text(peek)
+    return f": {text}" if text else ""
 
 
 def _wrapped(

@@ -4,6 +4,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- The gateway log shows the upstream's error message on a 4xx or 5xx answer, on one line, cut to
+  200 characters, so a 400 can be diagnosed without a separate reproduction.
+
 - `browser_login` and the other 1Password reads use the service account token in
   `~/.config/cabildo/env` (`OP_SERVICE_ACCOUNT_TOKEN`) when it is there, so cabildo can read only
   the vaults of that service account (#59). A token line that cannot be used stops the call.

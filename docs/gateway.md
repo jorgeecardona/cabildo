@@ -178,7 +178,8 @@ and keeps the streams that are open. The command also reloads the daemon. New ga
   spend your keys. To require a secret, set `token = "file:/path"` in `[gateway]` and add
   `ANTHROPIC_CUSTOM_HEADERS="x-cabildo-gateway: <the secret>"` to Claude Code's `env`.
 - It reads only `~/.cabildo/config.toml`, never a repo's config. It logs one line per request
-  (upstream, model, status, time) and never headers or bodies.
+  (upstream, model, status, time). On a 4xx or 5xx the line ends with the upstream's error message,
+  cut to 200 characters, with long token-like strings replaced. It never logs headers or bodies.
 - A `key` upstream sends the Anthropic Messages API, so a Bedrock `key` upstream needs the Mantle
   endpoint. Not every region has one for your account. Use `bedrock-invoke` there (next section).
 - Not checked live yet: which header Mantle expects with a real key, and whether Claude Code stops
