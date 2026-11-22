@@ -24,12 +24,6 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    # Upper-bounded on purpose. Both servers import `mcp.server.fastmcp.FastMCP`, and mcp 2.0 moved
-    # that to `mcp.server.mcpserver.MCPServer` — an unbounded declaration means a fresh install
-    # resolves to a version where our own import does not exist, and the failure shows up as a
-    # session whose MCP tools silently never appear. Relax this in the same commit that migrates
-    # the imports, not before.
-    "mcp>=1.2,<2",
     "zeroconf>=0.130,<1",
     # the session switcher (cabildo.workspace) uses private APIs of both: pinned
     "textual==8.2.8",

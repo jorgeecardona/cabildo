@@ -4,6 +4,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- The MCP servers no longer use the `mcp` package. A stdio server written in cabildo
+  (`mcp_stdio.py`) replaces it, so an install drops `mcp`, `starlette`, `uvicorn`, `sse-starlette`
+  and the packages only they needed. Tool names, arguments and results are the same. A tool
+  result is now one compact line of JSON.
+
 - The gateway log shows the upstream's error message on a 4xx or 5xx answer, on one line, cut to
   200 characters, so a 400 can be diagnosed without a separate reproduction.
 

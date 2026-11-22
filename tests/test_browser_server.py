@@ -8,12 +8,12 @@ from pathlib import Path
 from typing import Any, ClassVar, TypeVar
 
 import pytest
-from mcp.server.fastmcp import FastMCP
 from playwright.async_api import Error as PlaywrightError
 
 from cabildo import cli
 from cabildo.browser import server
 from cabildo.browser.server import Session
+from cabildo.mcp_stdio import McpServer
 
 T = TypeVar("T")
 
@@ -83,7 +83,7 @@ class FakeSession(Session):
         self.closed += 1
 
 
-def make(tmp_path: Path) -> tuple[FakeSession, FastMCP]:
+def make(tmp_path: Path) -> tuple[FakeSession, McpServer]:
     session = FakeSession(output_dir=tmp_path / "out")
     session.__post_init__()
     return session, server.build(session)
@@ -93,7 +93,7 @@ def run[T](coro: Awaitable[T]) -> T:
     return asyncio.run(coro)  # type: ignore[arg-type]
 
 
-def call(mcp: FastMCP, name: str, args: dict[str, Any] | None = None) -> str:
+def call(mcp: McpServer, name: str, args: dict[str, Any] | None = None) -> str:
     out = run(mcp.call_tool(name, args or {}))
     blocks = out[0] if isinstance(out, tuple) else out
     return blocks[0].text  # type: ignore[union-attr]
@@ -266,7 +266,7 @@ class TabSession(FakeSession):
         return self.tabs
 
 
-def tab_server(tmp_path: Path) -> tuple[TabSession, FastMCP]:
+def tab_server(tmp_path: Path) -> tuple[TabSession, McpServer]:
     session = TabSession(output_dir=tmp_path / "out")
     session.__post_init__()
     return session, server.build(session)

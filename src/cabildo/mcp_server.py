@@ -17,13 +17,12 @@ import subprocess
 import time
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
-
 from . import cloud, config, names, questions, store
 from .actions import ACTIONS
 from .context import git_project, resolve_claude_pid
+from .mcp_stdio import McpServer
 
-mcp = FastMCP("cabildo")
+mcp = McpServer("cabildo")
 
 # Single source of truth: the daemon's registry decides what may be requested.
 ACTION_NAMES = sorted(ACTIONS)
@@ -1711,7 +1710,7 @@ def branches(repo: str | None = None, target: str = "main") -> dict[str, Any]:
     return _branches.inventory(cwd=cwd, target=target)
 
 
-@mcp.tool(structured_output=False)
+@mcp.tool()
 def standup(hours: float = 24.0) -> str:
     """Who touched what over the last `hours`: messages, tasks in flight (claim = flow),
     spawns, active agents, and token cost — from cabildo's own record, not scraped chat.

@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Any, ClassVar, TypeVar
 
 import pytest
-from mcp.server.fastmcp import FastMCP
 
 from cabildo import onepassword
 from cabildo.browser import credentials, server
 from cabildo.browser.server import Session
+from cabildo.mcp_stdio import McpServer
 
 T = TypeVar("T")
 GITHUB = "https://github.com"
@@ -81,7 +81,7 @@ class FakeSession(Session):
         self.concealed.clear()
 
 
-def make(tmp_path: Path, reads: list[str] | None = None) -> tuple[FakeSession, FastMCP]:
+def make(tmp_path: Path, reads: list[str] | None = None) -> tuple[FakeSession, McpServer]:
     def read(ref: str) -> onepassword.Secret:
         if reads is not None:
             reads.append(ref)
@@ -100,7 +100,7 @@ def run[T](coro: Awaitable[T]) -> T:
     return asyncio.run(coro)  # type: ignore[arg-type]
 
 
-def call(mcp: FastMCP, name: str, args: dict[str, Any] | None = None) -> str:
+def call(mcp: McpServer, name: str, args: dict[str, Any] | None = None) -> str:
     out = run(mcp.call_tool(name, args or {}))
     blocks = out[0] if isinstance(out, tuple) else out
     return blocks[0].text  # type: ignore[union-attr]
@@ -299,7 +299,7 @@ def item(letter: str, title: str, *urls: str, vault: str = "Personal") -> onepas
 
 def auto(
     tmp_path: Path, items: list[onepassword.Item], reads: list[str] | None = None
-) -> tuple[FakeSession, FastMCP]:
+) -> tuple[FakeSession, McpServer]:
     def read(ref: str) -> onepassword.Secret:
         if reads is not None:
             reads.append(ref)

@@ -27,8 +27,9 @@ tool (`help.py`) serves the pages of `docs/`, which the wheel bundles.
 ## Build
 
 - Toolchain (moon, uv) is pinned in `.prototools`; `proto install` brings it up.
-- `uv sync` installs dependencies. Runtime dependencies: `mcp` (pinned `<2`), `zeroconf`
-  (mDNS discovery for LAN pairing), `textual`, `textual-tty`, `playwright`.
+- `uv sync` installs dependencies. Runtime dependencies: `zeroconf` (mDNS discovery
+  for LAN pairing), `textual`, `textual-tty`, `playwright`. There is no `mcp` SDK: the MCP servers
+  use `src/cabildo/mcp_stdio.py`.
 - `python scripts/install.py` (aka `make install`) does the full editable install: it also
   registers the MCP server and wires the git hooks.
   `--client {claude,codex,opencode,both,all}` selects which client(s) to wire (default `claude`);
@@ -57,9 +58,12 @@ tool (`help.py`) serves the pages of `docs/`, which the wheel bundles.
 - The version is the `__version__` literal in `src/cabildo/__init__.py`; hatchling reads it so
   `pyproject.toml` never disagrees. The pre-commit hook auto-bumps it when `src/` changes, and
   CI's version-guard enforces that a `src/` change carries a bump. Do not edit versions by hand.
-- The `mcp` dependency is pinned `<2` on purpose: mcp 2.0 moves `FastMCP`, so an unbounded
-  install resolves to a version where the import is gone and the MCP tools silently never appear.
-  Relax it only in the same commit that migrates the imports.
+- The MCP servers are `mcp_stdio.McpServer`, written in this repo: stdio only, the `tools`
+  capability only, and the `initialize` era of the protocol (`2024-11-05` to `2025-11-25`). It
+  answers `server/discover` with "method not found", so a client of the newer era falls back to
+  `initialize`. A tool parameter needs a type hint that `mcp_stdio.schema_of` maps (`str`, `int`,
+  `float`, `bool`, `Any`, `Literal`, `list`, `dict`, and `| None`); another type fails when the
+  tool is defined.
 - moon owns task ordering; do not hand-wire CI stages. Run tasks through `make` or `moon run`.
 - Some features rely on platform specifics (`/proc` process identity, `notify-send`,
   `systemd --user`); `cabildo doctor` flags what a given OS lacks.

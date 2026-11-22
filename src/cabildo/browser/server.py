@@ -25,7 +25,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from mcp.server.fastmcp import FastMCP, Image
 from playwright.async_api import (
     Browser,
     BrowserContext,
@@ -42,6 +41,7 @@ from cabildo import config, desktop, onepassword
 from cabildo.browser import credentials
 from cabildo.browser.entry import STALE_DAYS, read_storage_state
 from cabildo.browser.login import write_state
+from cabildo.mcp_stdio import Image, McpServer
 
 _REF = re.compile(r"^(f\d+)?e\d+$")
 # Sites with a bot check (Hetzner's Heray) refuse a browser that reports
@@ -415,17 +415,17 @@ async def state(session: Session) -> str:
     )
 
 
-def build(session: Session) -> FastMCP:
+def build(session: Session) -> McpServer:
     """The MCP server with every tool bound to ``session``."""
 
     @asynccontextmanager
-    async def lifespan(_app: FastMCP) -> AsyncGenerator[None]:
+    async def lifespan(_app: McpServer) -> AsyncGenerator[None]:
         try:
             yield
         finally:
             await session.close()
 
-    mcp = FastMCP("cabildo-browser", lifespan=lifespan)
+    mcp = McpServer("cabildo-browser", lifespan=lifespan)
 
     @mcp.tool()
     async def browser_navigate(url: str) -> str:
@@ -565,7 +565,7 @@ def build(session: Session) -> FastMCP:
         await locate(page, target).select_option(values)
         return await state(session)
 
-    @mcp.tool(structured_output=False)
+    @mcp.tool()
     async def browser_take_screenshot(
         target: str | None = None,
         element: str | None = None,

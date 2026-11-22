@@ -142,8 +142,8 @@ cabildo is a normal Python package with two halves:
 
 All state is one SQLite database (`~/.cabildo/chat.db`, WAL) shared by every session. No daemon is
 required. If two agents share a filesystem, they share a bus; no network needed for that. For
-LAN pairing and the gateway, the network is used. Runtime dependencies: `mcp`, `zeroconf`,
-`textual`, `textual-tty`, `playwright`.
+LAN pairing and the gateway, the network is used. Runtime dependencies: `zeroconf`, `textual`,
+`textual-tty`, `playwright`.
 
 Identity is automatic. Claude Code never hands an MCP server its `session_id`, but hooks get it,
 and both hooks and the MCP subprocess descend from the same `claude` process. The `SessionStart`
