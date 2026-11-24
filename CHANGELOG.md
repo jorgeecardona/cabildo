@@ -4,6 +4,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- New MCP tool `sessions_focus(name)`: tell an agent "take me to xxx" and the running workspace
+  opens that session and gives it the keys. `name` is an id, a robot name, an `@handle` or part
+  of a title. It answers why when the workspace does not list the session or the name is
+  ambiguous.
+
 - Find a session by name: `sessions_list(query=...)`, `cabildo sessions list -q` and the workspace
   `q:` filter now match the robot name (`tiny-dynamo-616b8`), the `@handle` and the session id.
   `sessions_rename`, `sessions_tag`, `sessions_trash` and `sessions_read` accept a robot name or

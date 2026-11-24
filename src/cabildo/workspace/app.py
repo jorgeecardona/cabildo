@@ -17,6 +17,7 @@ import sys
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Literal
 
 from rich.cells import cell_len
@@ -40,6 +41,7 @@ from cabildo import usage as usage_tokens
 from cabildo.workspace import (
     agents,
     attach,
+    focus,
     heatmap,
     intents,
     keys,
@@ -212,6 +214,7 @@ INTENT_LINES = (
     7  # the intents group never takes more rows than this: the screen height is the limit
 )
 INTENT_POLL_SECONDS = 3.0
+FOCUS_POLL_SECONDS = 0.5  # how often to look for a sessions_focus request
 INTENT_FAILED = ("failed", "rejected", "expired")
 
 
@@ -737,6 +740,7 @@ class SwitcherApp(App[None]):
         self._start_filter = only
         self.proj = os.path.basename(cwd.rstrip("/")) or cwd
         self.rows: list[Row] = []
+        self._focus_dir: Path | None = None  # where sessions_focus requests arrive
         self.selected: set[str] = set()  # `space`: head session ids the bulk actions act on
         self.scope: Scope = "here"  # `a` rotates it: here, subfolders, all
         self.filter = Filter()  # `f`: the list shows only these groups / tags / titles
@@ -817,6 +821,34 @@ class SwitcherApp(App[None]):
         self._spend_start()
         self._intents_tick()
         self.set_interval(INTENT_POLL_SECONDS, self._intents_tick)
+        self._focus_dir = focus.register()
+        self.set_interval(FOCUS_POLL_SECONDS, self._focus_tick)
+
+    def on_unmount(self) -> None:
+        if self._focus_dir is not None:
+            focus.unregister(self._focus_dir)
+
+    async def _focus_tick(self) -> None:
+        """Show the conversation a ``sessions_focus`` request names, then answer it."""
+        folder = self._focus_dir
+        request = focus.take(folder) if folder else None
+        if folder is None or request is None:
+            return
+        found = sessions_ops.find(self.rows, request.name)
+        if len(found) > 1:
+            titles = ", ".join(repr(r.display_title) for r in found[:5])
+            message = f"{len(found)} sessions match {request.name!r}: {titles}"
+            focus.answer(folder, request, ok=False, message=message)
+            return
+        if not found:
+            note = " (a filter is on)" if self.filter.active else ""
+            message = f"no session {request.name!r} in this workspace's list{note}"
+            focus.answer(folder, request, ok=False, message=message)
+            return
+        row = found[0]
+        await self._open(row)
+        self._restore_cursor(row.head.session_id)
+        focus.answer(folder, request, ok=True, message=f"showing {row.display_title!r}")
 
     def _intents_tick(self) -> None:
         self.run_worker(self._intents_fetch, thread=True, group="intents", exclusive=True)

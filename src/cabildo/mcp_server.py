@@ -1743,6 +1743,26 @@ def _sessions_select(
 
 
 @mcp.tool()
+def sessions_focus(name: str) -> dict[str, Any]:
+    """Make the cabildo workspace show a session: "take me to xxx".
+
+    ``name`` is a session id or 8-char prefix, a robot name, an ``@handle`` or a part of the
+    title or label. It works while a workspace (``cabildo workspace``) is running and lists
+    that session; the workspace opens it, starts it again if it had ended, and gives it the
+    keys. Ambiguous or unknown names change nothing and say why.
+    """
+    from .workspace import focus
+
+    replies = focus.ask(name)
+    if not replies:
+        return {"ok": False, "error": "no cabildo workspace answered: is one running?"}
+    shown = next((r for r in replies if r.ok), None)
+    if shown is not None:
+        return {"ok": True, "message": shown.message}
+    return {"ok": False, "error": "; ".join(r.message for r in replies)}
+
+
+@mcp.tool()
 def sessions_list(
     tag: str | None = None,
     query: str | None = None,

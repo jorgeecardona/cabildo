@@ -111,6 +111,20 @@ def answers_to(row: ws.Row, name: str) -> bool:
     return want in robots or (bool(row.rooms.handle) and want == row.rooms.handle.casefold())
 
 
+def find(rows: list[ws.Row], name: str) -> list[ws.Row]:
+    """The rows ``name`` points at: those it ``answers_to``, else those whose names contain it.
+
+    An exact id, prefix, robot name or ``@handle`` wins over a part of a title, so a name
+    never turns ambiguous because a title happens to contain it. Rows need their rooms
+    (``attach_rooms``) for a handle to match.
+    """
+    exact = [r for r in rows if answers_to(r, name)]
+    if exact:
+        return exact
+    q = name.strip().lstrip("@").casefold()
+    return [r for r in rows if q and q in r.titles.casefold()]
+
+
 def select(
     cwd: str | None,
     *,

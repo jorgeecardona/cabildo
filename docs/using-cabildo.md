@@ -73,6 +73,19 @@ The `sessions_*` tools and `cabildo sessions` also take a robot name or an `@han
 take an id. The workspace `q:` filter matches the same names. `sessions_read` prints one conversation.
 `sessions_rename` gives a session a name you can find later, and `sessions_tag` adds tags.
 
+## Take me to a session
+
+Ask an agent "take me to tiny-dynamo-616b8" (or an `@handle`, an id, or part of a title). The
+agent calls `sessions_focus(name="...")`. The workspace that is running opens that session, starts
+it again if it had ended, moves the list cursor to it and gives it the keys.
+
+- It needs a running `cabildo workspace` that lists the session. A filter or a smaller scope hides
+  it: the tool then answers "no session ... in this workspace's list".
+- A name that matches several titles changes nothing and lists them. An id, robot name or
+  `@handle` always wins over a part of a title.
+- With several workspaces open, each one looks in its own list and the first that has the session
+  shows it.
+
 ## More topics
 
 Call `help()` for the list. Each topic is a page of this guide.
