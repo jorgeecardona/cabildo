@@ -1751,8 +1751,9 @@ def sessions_list(
 ) -> dict[str, Any]:
     """Find Claude Code sessions of this project: id, title, date, tags, cwd, first prompt.
 
-    ``tag`` keeps those with that tag; ``query`` matches title, label and first
-    prompt; ``contains`` matches any user or assistant text. ``all_projects``
+    ``tag`` keeps those with that tag; ``query`` matches title, label, first prompt,
+    robot name (``tiny-dynamo-616b8``), ``@handle`` and session id; ``contains``
+    matches any user or assistant text. ``all_projects``
     searches every folder instead of this project and its subfolders. Read one
     with ``sessions_read``.
     """
@@ -1799,7 +1800,7 @@ def sessions_tag(
     remove: list[str] | None = None,
     all_projects: bool = False,
 ) -> dict[str, Any]:
-    """Add and remove tags on sessions (ids or 8-char prefixes from ``sessions_list``)."""
+    """Add and remove tags on sessions (id, 8-char prefix, robot name or ``@handle`` each)."""
     from . import sessions_ops
 
     try:
@@ -1816,7 +1817,7 @@ def sessions_rename(
     title: str,
     all_projects: bool = False,
 ) -> dict[str, Any]:
-    """Give one session your own name (id or 8-char prefix from ``sessions_list``).
+    """Give one session your own name (id, 8-char prefix, robot name or ``@handle``).
 
     An empty ``title`` removes the name, so Claude's own title shows again.
     ``sessions_list(query=...)`` finds a session by this name.

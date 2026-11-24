@@ -19,6 +19,7 @@ class Rooms:
     # listed is local (docs/channels.md)
     scopes: tuple[tuple[str, str], ...] = ()
     agent: str = ""  # the session's robot name on the bus
+    handle: str = ""  # the @handle the session set for itself, without the @
 
 
 NO_ROOMS = Rooms(project=None, topics=())
@@ -68,11 +69,11 @@ def load(session_ids: Iterable[str]) -> dict[str, Rooms]:
 def _load_chunk(conn: sqlite3.Connection, ids: list[str]) -> dict[str, Rooms]:
     """Rooms of one batch of ids, small enough for SQLite's variable limit."""
     marks = ",".join("?" * len(ids))
-    projects = dict(
-        conn.execute(
-            f"SELECT session_id, project_name FROM sessions WHERE session_id IN ({marks})", ids
-        )
-    )
+    rows = conn.execute(
+        f"SELECT session_id, project_name, handle FROM sessions WHERE session_id IN ({marks})", ids
+    ).fetchall()
+    projects = {sid: project for sid, project, _handle in rows}
+    handles = {sid: handle or "" for sid, _project, handle in rows}
     topics: dict[str, list[str]] = {}
     for sid, topic in conn.execute(
         f"SELECT session_id, topic FROM subscriptions WHERE session_id IN ({marks})", ids
@@ -83,7 +84,7 @@ def _load_chunk(conn: sqlite3.Connection, ids: list[str]) -> dict[str, Rooms]:
     for sid in projects:
         mine = tuple(sorted(topics.get(sid, [])))
         away = tuple((t, scopes[t]) for t in mine if scopes.get(t, "local") != "local")
-        out[sid] = Rooms(projects[sid], mine, away, names.robot_name(sid))
+        out[sid] = Rooms(projects[sid], mine, away, names.robot_name(sid), handles[sid])
     return out
 
 

@@ -67,8 +67,10 @@ Several agents often work in one folder. These rules keep their work apart.
 
 ## Find old sessions
 
-`sessions_list(query="words")` searches the title, the label and the first prompt, and
-`contains="words"` searches all text. `sessions_read` prints one conversation.
+`sessions_list(query="words")` searches the title, the label, the first prompt, the robot name
+(`tiny-dynamo-616b8`), the `@handle` and the session id. `contains="words"` searches all text.
+The `sessions_*` tools and `cabildo sessions` also take a robot name or an `@handle` where they
+take an id. The workspace `q:` filter matches the same names. `sessions_read` prints one conversation.
 `sessions_rename` gives a session a name you can find later, and `sessions_tag` adds tags.
 
 ## More topics

@@ -21,6 +21,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from . import names
 from .workspace import sessions as ws
 
 # Text Claude Code injects into the user turn. Searching or exporting it would match
@@ -80,24 +81,34 @@ def rows(
 ) -> list[ws.Row]:
     """The conversations of ``cwd`` (None: every directory), filtered by tag and text.
 
-    ``query`` matches the title, label and first prompt; ``contains`` matches any user
-    or assistant text (slower: it reads every transcript). Both ignore case.
+    ``query`` matches the title, label, first prompt, robot name (``tiny-dynamo-616b8``),
+    ``@handle`` and session id; ``contains`` matches any user or assistant text (slower: it
+    reads every transcript). Both ignore case.
     """
     only = ws.Filter(tags=(tag,)) if tag else ws.NO_FILTER
     out = ws.build_rows(cwd, only=only, subfolders=subfolders)
     if query:
-        q = query.casefold()
+        q = query.casefold().lstrip("@")
         out = [
             r
-            for r in out
-            if q in r.display_title.casefold()
-            or q in r.meta.label.casefold()
+            for r in ws.attach_rooms(out)
+            if q in r.titles.casefold()
+            or any(q in i for i in r.ids)
             or any(q in clean(s.first_prompt).casefold() for s in r.chain)
         ]
     if contains:
         c = contains.casefold()
         out = [r for r in out if any(c in t.text.casefold() for t in conversation(r))]
     return out
+
+
+def answers_to(row: ws.Row, name: str) -> bool:
+    """Whether ``name`` picks ``row``: an id or its prefix, a robot name, or an ``@handle``."""
+    want = name.strip().lstrip("@").casefold()
+    if any(s.startswith(name.strip()) for s in row.ids):
+        return True
+    robots = {names.robot_name(i).casefold() for i in row.ids}
+    return want in robots or (bool(row.rooms.handle) and want == row.rooms.handle.casefold())
 
 
 def select(
@@ -107,7 +118,9 @@ def select(
     tag: str | None = None,
     subfolders: bool = True,
 ) -> list[ws.Row]:
-    """The conversations named by ``ids`` (any id or 8-char prefix in a chain) or ``tag``.
+    """The conversations named by ``ids`` or ``tag``.
+
+    An entry of ``ids`` is any id or 8-char prefix in a chain, a robot name, or an ``@handle``.
 
     Raises:
         SessionsError: neither or both were given, or an id matches no conversation.
@@ -118,9 +131,10 @@ def select(
     found = rows(cwd, tag=tag, subfolders=subfolders)
     if not want:
         return found
+    named = ws.attach_rooms(found)
     picked: list[ws.Row] = []
     for i in want:
-        row = next((r for r in found if any(s.startswith(i) for s in r.ids)), None)
+        row = next((r for r in named if answers_to(r, i)), None)
         if row is None:
             raise SessionsError(f"no session {i} here")
         if row not in picked:

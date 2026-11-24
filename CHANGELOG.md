@@ -4,6 +4,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- Find a session by name: `sessions_list(query=...)`, `cabildo sessions list -q` and the workspace
+  `q:` filter now match the robot name (`tiny-dynamo-616b8`), the `@handle` and the session id.
+  `sessions_rename`, `sessions_tag`, `sessions_trash` and `sessions_read` accept a robot name or
+  an `@handle` in place of an id.
+
 - The workspace spend table has a `7d share` row: each model's part of the last week's priced
   cost, in percent. The table shows on a plan login with `[workspace] spend = "always"` in
   `~/.cabildo/config.toml`; the default `auto` shows it only on an API key.

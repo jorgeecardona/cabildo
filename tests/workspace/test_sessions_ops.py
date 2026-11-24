@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from lines import PROJECT, ai_title, assistant, user
 
+from cabildo import names, store
 from cabildo import sessions_ops as ops
 from cabildo.workspace import sessions
 from conftest import Transcript
@@ -16,6 +17,54 @@ from conftest import Transcript
 def _two(transcript: Transcript) -> None:
     transcript("aaaa1111", user("plan the trip"), assistant("Booked."), ai_title("Trip"), mtime=100)
     transcript("bbbb2222", user("fix the bug"), assistant("Fixed."), ai_title("Bug"), mtime=200)
+
+
+def _ids(rows: list[sessions.Row]) -> list[str]:
+    return [r.chain[0].session_id for r in rows]
+
+
+def test_query_finds_a_session_by_robot_name_handle_and_id(
+    transcript: Transcript, bus_home: Path
+) -> None:
+    _two(transcript)
+    conn = store.connect()
+    store.register_session(conn, "aaaa1111", cwd=PROJECT, project=PROJECT, project_name="trip")
+    store.set_handle(conn, "aaaa1111", "Planner")
+    conn.close()
+    robot = names.robot_name("aaaa1111")
+    assert _ids(ops.rows(PROJECT, query=robot)) == ["aaaa1111"]
+    assert _ids(ops.rows(PROJECT, query=robot.upper())) == ["aaaa1111"]
+    assert _ids(ops.rows(PROJECT, query="@planner")) == ["aaaa1111"]
+    assert _ids(ops.rows(PROJECT, query="planner")) == ["aaaa1111"]
+    assert _ids(ops.rows(PROJECT, query="bbbb22")) == ["bbbb2222"]
+    assert ops.rows(PROJECT, query="@nobody") == []
+
+
+def test_select_takes_a_robot_name_or_a_handle(transcript: Transcript, bus_home: Path) -> None:
+    _two(transcript)
+    conn = store.connect()
+    store.register_session(conn, "bbbb2222", cwd=PROJECT, project=PROJECT, project_name="bug")
+    store.set_handle(conn, "bbbb2222", "fixer")
+    conn.close()
+    assert _ids(ops.select(PROJECT, ids=[names.robot_name("aaaa1111")])) == ["aaaa1111"]
+    assert _ids(ops.select(PROJECT, ids=["@Fixer"])) == ["bbbb2222"]
+    assert _ids(ops.select(PROJECT, ids=["aaaa", "@fixer"])) == ["aaaa1111", "bbbb2222"]
+    with pytest.raises(ops.SessionsError):
+        ops.select(PROJECT, ids=["@ghost"])
+
+
+def test_the_workspace_q_filter_matches_robot_name_and_handle(
+    transcript: Transcript, bus_home: Path
+) -> None:
+    _two(transcript)
+    conn = store.connect()
+    store.register_session(conn, "aaaa1111", cwd=PROJECT, project=PROJECT, project_name="trip")
+    store.set_handle(conn, "aaaa1111", "planner")
+    conn.close()
+    robot = names.robot_name("aaaa1111")
+    for word in (robot, "@planner"):
+        rows = sessions.build_rows(PROJECT, only=sessions.Filter(titles=(word,)))
+        assert _ids(rows) == ["aaaa1111"], word
 
 
 def test_tag_then_list_by_tag(transcript: Transcript) -> None:

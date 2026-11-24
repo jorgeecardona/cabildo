@@ -2767,7 +2767,11 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--all", action="store_true", help="every folder, not only --dir")
         sp.add_argument("-t", "--tag", help="select by tag")
         if name == "list":
-            sp.add_argument("-q", "--query", help="match title, label, first prompt")
+            sp.add_argument(
+                "-q",
+                "--query",
+                help="match title, label, first prompt, robot name, @handle, session id",
+            )
             sp.add_argument("-c", "--contains", help="match any user or assistant text")
         elif name == "rename":
             sp.add_argument("id", help="session id or 8-char prefix")

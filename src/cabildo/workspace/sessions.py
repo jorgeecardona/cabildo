@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from cabildo import names
 from cabildo.workspace import notes, rooms, xdgdirs
 from cabildo.workspace.notes import Note
 from cabildo.workspace.rooms import NO_ROOMS, Rooms
@@ -314,8 +315,12 @@ class Row:
 
     @property
     def titles(self) -> str:
-        """Every name the conversation answers to: your label, then Claude's title."""
-        return f"{self.meta.label}\n{self.title}"
+        """Every name the conversation answers to: your label, Claude's title, the robot name
+        of each of its sessions, and the ``@handle`` once ``attach_rooms`` has read it.
+        """
+        robots = " ".join(names.robot_name(i) for i in self.ids)
+        handle = f"@{self.rooms.handle}" if self.rooms.handle else ""
+        return f"{self.meta.label}\n{self.title}\n{robots}\n{handle}"
 
     @property
     def cwd(self) -> str:
@@ -753,13 +758,13 @@ def build_rows(
     ``subfolders``, of it and every directory inside it) that `only` matches.
     """
     meta = load_meta()
-    rows: list[Row] = []
+    found: list[Row] = []
     for chain in chains(scan(cwd, cancelled, subfolders)):
         key = next((s.session_id for s in chain if s.session_id in meta), chain[0].session_id)
-        row_meta = meta.get(key, Meta())
-        row = Row(chain=chain, meta=row_meta, meta_key=key)
-        if only.matches(row_meta, row.titles):
-            rows.append(row)
+        found.append(Row(chain=chain, meta=meta.get(key, Meta()), meta_key=key))
+    if only.titles:
+        found = attach_rooms(found)  # a title word may be an @handle, which only the bus knows
+    rows = [r for r in found if only.matches(r.meta, r.titles)]
     # group together, ungrouped last, then newest-first inside each group
     rows.sort(key=lambda r: (r.meta.group == "", r.meta.group, -r.mtime))
     return rows
