@@ -541,6 +541,19 @@ def gateway_table() -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# [jupyter] and [jupyter.runners.<name>] -- runners that run code as you
+# --------------------------------------------------------------------------- #
+def jupyter_table() -> dict[str, Any]:
+    """``[jupyter]`` of the machine-wide config, as a dict.
+
+    A repo's config is never read: a runner runs code as you, and a committed file could
+    otherwise pick its packages, environment and startup code.
+    """
+    table = _read(_global_path()).get("jupyter")
+    return dict(table) if isinstance(table, dict) else {}
+
+
+# --------------------------------------------------------------------------- #
 # [browser.login.<site>] -- 1Password references for browser_login
 # --------------------------------------------------------------------------- #
 def browser_login_tables() -> dict[str, Any]:

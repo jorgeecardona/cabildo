@@ -90,6 +90,9 @@ cabildo viewer                  # read-only web view on http://127.0.0.1:8787
   isolated Chrome that agents browse with. See [docs/browser.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/browser.md).
 - **Gateway** (`cabildo gateway status | use | enable | disable`): runs in the daemon. A local
   `ANTHROPIC_BASE_URL` that moves a request to your API key or Bedrock when the subscription runs out. See [docs/gateway.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/gateway.md).
+- **Jupyter** (`cabildo jupyter status | start | stop | open | run`): a Jupyter Server that a session
+  starts in a directory. Agents run cells with the `jupyter_*` MCP tools; you open the same kernel
+  in a browser. See [docs/jupyter.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/jupyter.md).
 - **Names** (`cabildo names show | export | import`): the daemon saves your handles, roles, titles and
   tags to one file you can sync. See [docs/names.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/names.md).
 - **Platforms**: Linux and macOS, Python 3.12+. Memory-pressure stall detection (PSI) is

@@ -56,6 +56,7 @@ plugins:
           - roles.md
           - browser.md
           - gateway.md
+          - jupyter.md
           - names.md
           - crons.md
           - design/broker-service.md
@@ -70,6 +71,7 @@ nav:
   - Browser: browser.md
   - Session host: session-host.md
   - Gateway: gateway.md
+  - Jupyter runners: jupyter.md
   - Names: names.md
   - Crons: crons.md
   - Changelog: changelog.md

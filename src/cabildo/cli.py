@@ -1706,6 +1706,42 @@ def cmd_session_ops(args) -> int:
     return 0
 
 
+def cmd_jupyter(args) -> int:
+    """``cabildo jupyter start|stop|status|open|run``: Jupyter runners agents can run cells on."""
+    from . import jupyter
+
+    try:
+        if args.action == "status":
+            rows = jupyter.statuses()
+            for r in rows:
+                state = f"running on port {r['port']}" if r["running"] else "stopped"
+                print(f"{r['name']:<16} {state:<24} {r['cwd']}")
+            if not rows:
+                print("no runner: `cabildo jupyter start NAME --cwd DIR` makes one")
+            return 0
+        if not args.name:
+            print(f"cabildo jupyter {args.action}: a runner NAME is needed", file=sys.stderr)
+            return 2
+        if args.action == "start":
+            state = jupyter.start(jupyter.resolve(args.name, args.cwd))
+            print(f"{args.name}: running on port {state.port} in {state.cwd}")
+        elif args.action == "stop":
+            print("stopped" if jupyter.stop(args.name) else "was not running")
+        elif args.action == "open":
+            found = jupyter.open_link(args.name, args.code, launch=not args.print_only)
+            print(f"{found['url']}\n{found['link']}")
+        else:  # run
+            result = jupyter.run(args.name, args.code or sys.stdin.read(), args.timeout)
+            print(result.text, end="")
+            if result.error:
+                print(result.error, file=sys.stderr)
+            return 0 if result.status == "ok" else 1
+    except jupyter.RunnerError as e:
+        print(f"cabildo jupyter: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_gateway(args) -> int:
     """``cabildo gateway serve|status|use|enable|disable``: the gateway Claude Code can talk to."""
     import json as _json
@@ -2817,6 +2853,30 @@ def main(argv: list[str] | None = None) -> int:
         if name == "trash":
             sp.add_argument("--force", action="store_true", help="skip the made-from check")
         sp.set_defaults(fn=cmd_session_ops)
+
+    jp = sub.add_parser(
+        "jupyter",
+        help="Jupyter runners: start one in a directory, run cells on it, open it in a browser",
+    )
+    jp.add_argument(
+        "action",
+        nargs="?",
+        default="status",
+        choices=["status", "start", "stop", "open", "run"],
+        help="status (default), start, stop, open (in your browser) or run (one cell)",
+    )
+    jp.add_argument("name", nargs="?", help="the runner's name (a-z 0-9 _ -)")
+    jp.add_argument(
+        "code",
+        nargs="?",
+        help="run: the code (default: read stdin). open: a notebook path in the runner's directory",
+    )
+    jp.add_argument(
+        "--print", dest="print_only", action="store_true", help="open: only print the link"
+    )
+    jp.add_argument("--cwd", help="start: the directory the runner works in (default: here)")
+    jp.add_argument("--timeout", type=float, default=30.0, help="run: seconds to wait (30)")
+    jp.set_defaults(fn=cmd_jupyter)
 
     gw = sub.add_parser(
         "gateway",

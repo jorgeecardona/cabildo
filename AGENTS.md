@@ -17,6 +17,10 @@ Two cross-machine transports exist, both peer-to-peer: LAN pairing (`request("pa
 local subnet) and `cabildo wan` (`wan.py`: message sync with explicit remote peers over a tunnel);
 messages carry a global `guid` for cross-machine dedup.
 
+`cabildo jupyter` (`jupyter.py`, `wsclient.py`) starts detached Jupyter Servers with `uv run` (no
+Jupyter dependency in cabildo) and runs cells over the server's kernel WebSocket; the MCP tools are
+`jupyter_*`. State is in `~/.cabildo/jupyter/<name>/`.
+
 `cabildo gateway` (`gateway.py`) is a local HTTP proxy for `ANTHROPIC_BASE_URL` that fails over
 between upstreams; it runs as a service of the daemon (`gateway.start_service`, like LAN and WAN;
 on reload it hands its listening socket to the new process) and is the only part that sends model

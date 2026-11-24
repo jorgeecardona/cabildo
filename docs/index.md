@@ -43,6 +43,7 @@ Start with [Use cabildo well](using-cabildo.md). An agent gets the same page fro
 - [Browser](browser.md): the visible Chrome that agents use, and logins from 1Password.
 - [Crons](crons.md): `/loop` jobs that every agent can see.
 - [Gateway](gateway.md): keep Claude Code working when the subscription runs out.
+- [Jupyter runners](jupyter.md): start a Jupyter Server in a directory, run cells from an agent, open it in a browser.
 - [Names](names.md): keep your session names when the machine is lost.
 - [Changelog](changelog.md): release notes.
 

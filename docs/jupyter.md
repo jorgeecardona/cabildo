@@ -1,0 +1,90 @@
+# Jupyter runners
+
+A runner is a Jupyter Server that a session starts in a directory. Agents run cells on it with MCP
+tools. You open the same kernel in your browser.
+
+## Start one and run a cell
+
+1. Start a runner in a directory:
+
+   ```bash
+   cabildo jupyter start analysis --cwd ~/stuff/projects/crm
+   ```
+
+2. Run a cell:
+
+   ```bash
+   cabildo jupyter run analysis "x = 6 * 7; print(x)"
+   ```
+
+3. Open it in your browser (JupyterLab, or one notebook):
+
+   ```bash
+   cabildo jupyter open analysis
+   cabildo jupyter open analysis notebooks/plots.ipynb
+   ```
+
+`cabildo jupyter status` lists the runners. `cabildo jupyter stop analysis` ends one with its
+kernel.
+
+An agent does the same with the MCP tools `jupyter_start`, `jupyter_run`, `jupyter_open`,
+`jupyter_list` and `jupyter_stop`. The session chooses `cwd`. Without it, the runner starts in
+the project root.
+
+## What starts
+
+`cabildo` runs `uv run --no-project --with jupyter-server --with ipykernel python -m
+jupyter_server` in a detached process. Cabildo itself gets no Jupyter dependency. The first start
+resolves packages and can take a minute. `uv` must be on `PATH`.
+
+The runner outlives the session that started it and a daemon reload. A reboot ends it.
+
+## Configure
+
+Runners are set in `~/.cabildo/config.toml`. A repo's config is never read, because a runner runs
+code as you.
+
+```toml
+[jupyter]                      # defaults for every runner
+python = "3.12"                # uv --python: a version or an interpreter path
+packages = ["numpy", "pandas"] # added to the environment
+
+[jupyter.runners.analysis]     # one named runner
+cwd = "~/stuff/projects/crm"   # a session's cwd wins over this
+packages = ["polars"]          # replaces the default list for this runner
+kernelspec = "python3"
+startup = "import numpy as np" # run once each time the runner makes its kernel
+port = 8899                    # 0 (default): a free port
+
+[jupyter.runners.analysis.env] # set in the server, so every kernel has it
+DATABASE_URL = "postgresql:///crm"
+```
+
+A name that is not in the config gets the `[jupyter]` defaults.
+
+## Cells
+
+- One cell runs at a time per runner. A second call waits.
+- After `timeout` seconds (default 30) the cell is interrupted and the result has
+  `status = "timeout"` with the output so far.
+- Output over 8000 characters is cut in the middle.
+- An image output is counted in `images` and not returned yet.
+- The kernel keeps its variables between calls. A notebook that you open in the browser on the
+  same kernel sees them. Cells that an agent runs do not appear in an open notebook.
+
+## The link and the token
+
+Each runner has a token. It is stored in `~/.cabildo/jupyter/<name>/token` (mode 600). It is not in
+a command line, a log or a message.
+
+`cabildo jupyter open` and the `jupyter_open` tool give two things:
+
+- `link`: a `file://` page that redirects to the runner with the token. Click it, or open it.
+- `url`: the server address without the token, for reference.
+
+The server listens on `127.0.0.1` only.
+
+## Risk
+
+`jupyter_run` runs Python as you. It skips the checks that cabildo applies to the `Bash` tool.
+There is no sandbox. A runner that you do not need should be stopped.

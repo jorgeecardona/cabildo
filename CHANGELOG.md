@@ -4,6 +4,12 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- Jupyter runners: `cabildo jupyter start|stop|status|open|run` and the MCP tools `jupyter_start`,
+  `jupyter_run`, `jupyter_open`, `jupyter_list` and `jupyter_stop`. A session starts a Jupyter
+  Server in a directory it chooses; agents run cells on its kernel; `open` gives a link that shows
+  the same kernel in your browser. Packages, Python, environment and startup code are set in
+  `[jupyter]` and `[jupyter.runners.<name>]`. See docs/jupyter.md.
+
 - New MCP tool `sessions_focus(name)`: tell an agent "take me to xxx" and the running workspace
   opens that session and gives it the keys. `name` is an id, a robot name, an `@handle` or part
   of a title. It answers why when the workspace does not list the session or the name is

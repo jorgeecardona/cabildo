@@ -1742,6 +1742,97 @@ def _sessions_select(
     return sid, root, sessions_ops.select(root, ids=ids or (), tag=tag)
 
 
+def _jupyter_cwd(cwd: str | None) -> str:
+    """The directory a runner starts in: ``cwd`` as the session gave it, else its project."""
+    from pathlib import Path
+
+    if cwd:
+        return str(Path(cwd).expanduser())
+    _sid, root = _sessions_scope(False)
+    return root or str(Path.cwd())
+
+
+@mcp.tool()
+def jupyter_start(runner: str, cwd: str | None = None) -> dict[str, Any]:
+    """Start a Jupyter runner in a directory, or return it when it already runs.
+
+    ``runner`` names it (a-z, 0-9, ``_``, ``-``). ``cwd`` is the directory its kernel works in
+    (default: this project's root). Packages, Python version, environment and startup code come
+    from ``[jupyter]`` and ``[jupyter.runners.<runner>]`` in ``~/.cabildo/config.toml``. The
+    first start can take a minute while uv builds the environment. Run cells with
+    ``jupyter_run``. Give the user a link with ``jupyter_open``.
+    """
+    from . import jupyter
+
+    try:
+        state = jupyter.start(jupyter.resolve(runner, _jupyter_cwd(cwd)))
+    except jupyter.RunnerError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "runner": runner, "port": state.port, "cwd": state.cwd}
+
+
+@mcp.tool()
+def jupyter_run(runner: str, code: str, timeout: float = 30.0) -> dict[str, Any]:
+    """Run Python code on a running Jupyter runner and return what it printed.
+
+    The kernel keeps its variables between calls and shares them with a browser that opened the
+    runner. One cell runs at a time per runner: a second call waits. After ``timeout`` seconds
+    the cell is interrupted and ``status`` is ``timeout``. Text over 8000 characters is cut in
+    the middle. This runs code as the user, with no sandbox.
+    """
+    from . import jupyter
+
+    try:
+        r = jupyter.run(runner, code, timeout)
+    except jupyter.RunnerError as e:
+        return {"ok": False, "error": str(e)}
+    return {
+        "ok": r.status == "ok",
+        "status": r.status,
+        "text": r.text,
+        "error": r.error,
+        "images": r.images,
+        "truncated": r.truncated,
+    }
+
+
+@mcp.tool()
+def jupyter_open(runner: str, notebook: str | None = None, launch: bool = False) -> dict[str, Any]:
+    """Give the user a link to see a runner in a browser: JupyterLab, or one notebook.
+
+    ``notebook`` is a path inside the runner's directory (``analysis/plots.ipynb``). The reply
+    has ``link``, a ``file://`` page that opens the runner with its token, and ``url``, the
+    server address. Show the user ``link``. The token is not in either, so it stays out of the
+    chat. ``launch`` also opens ``link`` in the user's own browser; leave it off unless they
+    asked to see it now.
+    """
+    from . import jupyter
+
+    try:
+        return {"ok": True, **jupyter.open_link(runner, notebook, launch=launch)}
+    except jupyter.RunnerError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@mcp.tool()
+def jupyter_stop(runner: str) -> dict[str, Any]:
+    """Stop a Jupyter runner and its kernel. Variables in the kernel are lost."""
+    from . import jupyter
+
+    try:
+        return {"ok": True, "stopped": jupyter.stop(runner)}
+    except jupyter.RunnerError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@mcp.tool()
+def jupyter_list() -> dict[str, Any]:
+    """The Jupyter runners: name, whether it runs, its port and directory."""
+    from . import jupyter
+
+    return {"runners": jupyter.statuses()}
+
+
 @mcp.tool()
 def sessions_focus(name: str) -> dict[str, Any]:
     """Make the cabildo workspace show a session: "take me to xxx".

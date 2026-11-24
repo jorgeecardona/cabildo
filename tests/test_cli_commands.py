@@ -23,6 +23,7 @@ COMMANDS = [
     "install",
     "plugin",
     "sessions",
+    "jupyter",
     "gateway",
     "host",
     "attach",

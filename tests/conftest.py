@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from cabildo import host, store
+from tests.wsserver import serve  # noqa: F401  (a fixture: a fake WebSocket server)
 
 
 @pytest.fixture(autouse=True)
