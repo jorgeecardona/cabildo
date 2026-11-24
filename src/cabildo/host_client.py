@@ -63,6 +63,7 @@ def ensure_running(timeout: float = 5.0) -> None:
     if is_running():
         return
     log = store.home() / "host.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("ab") as out:
         subprocess.Popen(
             [sys.executable, "-m", "cabildo.cli", "host"],
@@ -171,8 +172,12 @@ def kill_session(host_id: str) -> None:
 
 
 def attach_command(host_id: str) -> tuple[str, ...]:
-    """The command a terminal pane runs to show the hosted session ``host_id``."""
-    return (sys.executable, "-m", "cabildo.cli", "attach", host_id)
+    """The command a terminal pane runs to show the hosted session ``host_id``.
+
+    It names the socket, so the viewer reaches the host this process uses even when its own
+    environment differs (a terminal library that copied the environment earlier).
+    """
+    return (sys.executable, "-m", "cabildo.cli", "attach", "--socket", host.socket_path(), host_id)
 
 
 def attach(host_id: str) -> int:

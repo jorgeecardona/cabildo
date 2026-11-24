@@ -204,3 +204,8 @@ def test_attach_command_relays_a_terminal(session_host, tmp_path):
     assert b"got-q" in read_until(b"got-q")
     assert proc.wait(10) == 0
     os.close(master)
+
+
+def test_the_attach_command_names_the_socket(session_host):
+    command = host_client.attach_command("abc")
+    assert command[-3:] == ("--socket", session_host.path, "abc")

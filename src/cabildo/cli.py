@@ -2645,6 +2645,8 @@ def cmd_attach(args) -> int:
     """Show a hosted session in this terminal."""
     from . import host_client
 
+    if args.socket:
+        os.environ["CABILDO_HOST_SOCKET"] = args.socket
     return host_client.attach(args.id)
 
 
@@ -2856,6 +2858,7 @@ def main(argv: list[str] | None = None) -> int:
     ho_kill.set_defaults(fn=cmd_host)
 
     at = sub.add_parser("attach", help="show a session the host owns in this terminal")
+    at.add_argument("--socket", help="the host's socket (default: the one cabildo uses)")
     at.add_argument("id", help="the id `cabildo host list` prints")
     at.set_defaults(fn=cmd_attach)
 

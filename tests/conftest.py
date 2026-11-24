@@ -106,14 +106,8 @@ def make_session(
 
 
 @pytest.fixture
-def session_host(tmp_path_factory, monkeypatch) -> Iterator[host.Host]:
-    """A session host on a socket whose path is the same in every test of the run.
-
-    The workspace panes run ``cabildo attach`` in a child whose environment textual-tty copies
-    once, in the first test. A path that changed per test would leave later children looking
-    for the first test's socket.
-    """
-    path = str(tmp_path_factory.getbasetemp() / "host.sock")
+def session_host(tmp_path, monkeypatch) -> Iterator[host.Host]:
+    path = str(tmp_path / "h.sock")
     monkeypatch.setenv("CABILDO_HOST_SOCKET", path)
     h = host.Host(path)
     thread = threading.Thread(target=h.serve, daemon=True)
