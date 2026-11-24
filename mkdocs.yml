@@ -68,6 +68,7 @@ nav:
   - Channels and tags: channels.md
   - Roles: roles.md
   - Browser: browser.md
+  - Session host: session-host.md
   - Gateway: gateway.md
   - Names: names.md
   - Crons: crons.md

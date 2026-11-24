@@ -53,8 +53,8 @@ FORMAT = 1
 class Handed:
     """One pane as it crosses the restart."""
 
-    fd: int  # the inherited pseudo-terminal master
-    pid: int  # the Claude it belongs to, still a child of this process id
+    fd: int  # the inherited pseudo-terminal master; -1 when the session host owns it
+    pid: int  # the Claude it belongs to; a child of this process id unless the host owns it
     pane_id: str
     session_id: str
     cwd: str
@@ -62,6 +62,8 @@ class Handed:
     title: str
     rows: int
     cols: int
+    host_id: str = ""  # the session host's id for it; the new pane attaches to that
+    host_pid: int = 0  # Claude's pid when the host owns it (``pid`` is then the viewer's)
 
 
 def keep_across_exec(fd: int) -> int:
@@ -134,6 +136,8 @@ def _usable(pane: Handed) -> bool:
     the restart is dropped here, and its descriptor closed, rather than attached to a
     terminal nobody is on the other end of.
     """
+    if pane.host_id:  # nothing inherited: the pane attaches to the host's session
+        return alive(pane.host_pid)
     try:
         os.fstat(pane.fd)
     except OSError:

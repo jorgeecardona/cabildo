@@ -16,6 +16,10 @@ DISABLE_TELEMETRY = "1"
 model = "claude-opus-5-5[1m]"
 permission-mode = "plan"
 
+[sessions]
+owner = "host"              # "app" (the default): this program owns each Claude's terminal;
+                            # "host": the session host does, so a Claude outlives this program
+
 [keys]
 leader = ["ctrl+]"]         # the default; then one key, e.g. s for the list
 modifier = "ctrl"           # direct chords ctrl+s and ctrl+z; or set each action:
@@ -95,6 +99,8 @@ class Launch:
 
 PLAIN = Launch()
 
+OWNERS = ("app", "host")
+
 
 @dataclass(frozen=True)
 class Config:
@@ -103,6 +109,7 @@ class Config:
     launch: Launch = PLAIN
     groups: dict[str, Launch] = field(default_factory=dict)
     keys: keys.Keymap = field(default_factory=keys.default)
+    owner: str = "app"  # who owns a new Claude's terminal: "app" or "host" (host.py)
 
     def launch_for(self, group: str) -> Launch:
         """The default, with the group's own values over it."""
@@ -138,7 +145,7 @@ def load(path: Path | None = None) -> Config:
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"{path}: {exc}") from exc
     try:
-        _known(data, {"launch", "groups", "keys"}, "")
+        _known(data, {"launch", "groups", "keys", "sessions"}, "")
         groups = _table(data.get("groups", {}), "groups")
         by_group: dict[str, Launch] = {}
         for name, table in groups.items():
@@ -149,6 +156,7 @@ def load(path: Path | None = None) -> Config:
             launch=_launch(data.get("launch", {}), "launch"),
             groups=by_group,
             keys=_keys(data.get("keys", {})),
+            owner=_owner(data.get("sessions", {})),
         )
     except ConfigError as exc:
         raise ConfigError(f"{path}: {exc}") from None
@@ -181,6 +189,16 @@ def _launch(raw: object, where: str) -> Launch:
     if not all(isinstance(v, str) for v in env.values()):
         raise ConfigError(f"{where}.env values must be strings")
     return Launch(**values, env=tuple(env.items()))  # type: ignore[arg-type]
+
+
+def _owner(raw: object) -> str:
+    """``[sessions] owner``: ``app`` or ``host``."""
+    table = _table(raw, "sessions")
+    _known(table, {"owner"}, "sessions.")
+    owner = table.get("owner", "app")
+    if owner not in OWNERS:
+        raise ConfigError(f"sessions.owner is not one of {', '.join(OWNERS)}")
+    return str(owner)
 
 
 def _keys(raw: object) -> keys.Keymap:

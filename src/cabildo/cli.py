@@ -2617,6 +2617,37 @@ def cmd_doctor(args) -> int:
     return 0
 
 
+def cmd_host(args) -> int:
+    """Run the session host, or list, start, and hang up the sessions it owns."""
+    from . import host, host_client
+
+    if args.host_cmd in (None, "serve"):
+        return host.serve_forever()
+    try:
+        if args.host_cmd == "list":
+            for r in host_client.list_sessions():
+                print(f"{r.id}  {r.pid:>7}  {r.cwd}  {' '.join(r.command)}")
+        elif args.host_cmd == "new":
+            command = args.command or ["claude"]
+            record = host_client.start_session(
+                command, cwd=os.path.abspath(args.cwd), group=args.group
+            )
+            print(record.id)
+        elif args.host_cmd == "kill":
+            host_client.kill_session(args.id)
+    except host_client.ClientError as exc:
+        print(f"cabildo host: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_attach(args) -> int:
+    """Show a hosted session in this terminal."""
+    from . import host_client
+
+    return host_client.attach(args.id)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     # bare `cabildo` and `cabildo workspace ...` open the workspace; textual loads only here
@@ -2806,6 +2837,27 @@ def main(argv: list[str] | None = None) -> int:
         "--force", action="store_true", help="enable: write the setting although no gateway answers"
     )
     gw.set_defaults(fn=cmd_gateway)
+
+    ho = sub.add_parser(
+        "host",
+        help="the process that owns Claude sessions in pseudo-terminals, so a viewer can close",
+    )
+    ho.set_defaults(fn=cmd_host, host_cmd=None)
+    ho_sub = ho.add_subparsers(dest="host_cmd")
+    ho_sub.add_parser("serve", help="run the host (the default)").set_defaults(fn=cmd_host)
+    ho_sub.add_parser("list", help="the sessions it owns").set_defaults(fn=cmd_host)
+    ho_new = ho_sub.add_parser("new", help="start a session in it and print its id")
+    ho_new.add_argument("--cwd", default=".", help="where it starts (default: here)")
+    ho_new.add_argument("--group", default="", help="the workspace group it joins")
+    ho_new.add_argument("command", nargs="*", help="what to run (default: claude)")
+    ho_new.set_defaults(fn=cmd_host)
+    ho_kill = ho_sub.add_parser("kill", help="hang a session up")
+    ho_kill.add_argument("id")
+    ho_kill.set_defaults(fn=cmd_host)
+
+    at = sub.add_parser("attach", help="show a session the host owns in this terminal")
+    at.add_argument("id", help="the id `cabildo host list` prints")
+    at.set_defaults(fn=cmd_attach)
 
     nm = sub.add_parser(
         "names",

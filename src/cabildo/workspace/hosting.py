@@ -43,6 +43,16 @@ _OSC9_PROGRESS = re.compile(r"^4;[0-9;]*$")
 _HELD: list = []
 
 
+def _end_hosted(host_id: str) -> None:
+    """Hang a hosted session up. The host being gone already is not an error."""
+    from cabildo import host_client
+
+    try:
+        host_client.kill_session(host_id)
+    except (host_client.ClientError, OSError):
+        pass
+
+
 @dataclass(frozen=True)
 class Target:
     """One conversation to put in the main pane."""
@@ -52,6 +62,8 @@ class Target:
     command: tuple[str, ...]  # claude --resume <id> | claude attach <id> | claude
     cwd: str | None = None  # where Claude starts; None: where the app runs
     group: str = ""  # a new conversation joins this group once its session id is known
+    host_id: str = ""  # the session host owns this Claude; ``command`` attaches to it
+    host_pid: int = 0  # that Claude's pid (the pane's process is only the viewer)
 
 
 class ClaudePane(Terminal):
@@ -98,6 +110,8 @@ class ClaudePane(Terminal):
         self.title_seen = ""  # the name in the last title, no spinner glyph
         self.title_at = 0.0  # time.monotonic() when it arrived
         self.title_matched = False  # the app has matched it to a session
+        self.host_id = target.host_id
+        self.host_pid = target.host_pid
         self.exited = False
         self.closing = False  # the app is ending it (quit, delete, x)
         self._last_cell: Offset | None = None  # the cursor cell last reported
@@ -250,17 +264,28 @@ class ClaudePane(Terminal):
             title=self.title_seen,
             rows=max(2, self.size.height),
             cols=max(2, self.size.width),
+            host_id=self.host_id,
+            host_pid=self.host_pid,
         )
 
     @property
     def pid(self) -> int | None:
-        """Claude's process id while it runs."""
+        """Claude's process id while it runs (not the viewer's, when the host owns it)."""
         process = self.board.process  # bittty drops it when the child is reaped
-        return process.pid if process is not None and not self.exited else None
+        if process is None or self.exited:
+            return None
+        return self.host_pid or process.pid
 
-    def close(self) -> None:
-        """End Claude now (the pseudo-terminal closes); the app removes the widget."""
+    def close(self, *, end_session: bool = True) -> None:
+        """Close the pane; the app removes the widget.
+
+        Claude ends with it (the pseudo-terminal closes), unless the session host owns it:
+        then only this viewer ends, and the session ends too when ``end_session`` is true.
+        """
         self.closing = True
+        if self.host_id and end_session:
+            host_id = self.host_id
+            threading.Thread(target=_end_hosted, args=(host_id,), daemon=True).start()
         process = self.board.process
         self.board.stop_process()
         if process is not None:  # reap it off the UI thread, so no zombie stays

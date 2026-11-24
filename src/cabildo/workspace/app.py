@@ -14,6 +14,7 @@ import argparse
 import datetime as dt
 import os
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
@@ -36,7 +37,7 @@ from textual.timer import Timer
 from textual.widgets import ContentSwitcher, DataTable, Input, Label, Static
 from textual.worker import get_current_worker
 
-from cabildo import __version__, cloud, config, names, sessions_ops, store
+from cabildo import __version__, cloud, config, host_client, names, sessions_ops, store
 from cabildo import usage as usage_tokens
 from cabildo.workspace import (
     agents,
@@ -92,6 +93,14 @@ class LiveState:
     agents: dict[str, AgentState] = field(default_factory=dict)
     loaded: bool = False  # False until the first poll returns
     taken_at: float = 0.0  # time.monotonic() when the poll started
+
+
+def _tag_hosted(host_id: str, session_id: str, group: str) -> None:
+    """Record on the session host which Claude session ``host_id`` runs. Best effort."""
+    try:
+        host_client.tag_session(host_id, session_id=session_id, group=group or None)
+    except (host_client.ClientError, OSError):
+        pass
 
 
 def short_path(path: str, width: int) -> str:
@@ -997,6 +1006,7 @@ class SwitcherApp(App[None]):
         pane.title_matched = True
         if seen != pane.session_id:
             pane.session_id = seen
+            self._tag_host(pane)
             if not any(seen in r.ids for r in self.rows) and seen not in self._rescanned:
                 self._rescanned.add(seen)  # e.g. ← made a continuation: its transcript is new
                 self.reload()
@@ -1350,6 +1360,7 @@ class SwitcherApp(App[None]):
         for pane in self._panes():
             if not pane.session_id and pane.pid is not None and (sid := by_pid.get(pane.pid)):
                 pane.session_id = sid  # a new conversation: Claude lists its process and id
+                self._tag_host(pane)
                 if pane.new_group:
                     self._join_group(sid, pane.new_group)
             self._retag(pane)  # a continuation made by ← may only now be listed
@@ -1561,12 +1572,66 @@ class SwitcherApp(App[None]):
             )
         if not here and cwd is None:
             return None
-        return Target(
-            session_ids=r.ids,
-            session_id=s.session_id,
-            command=self.config.launch_for(r.meta.group).command(CLAUDE, "--resume", s.session_id),
-            cwd=cwd,
+        owned = next((h for h in host_client.list_sessions() if h.session_id in r.ids), None)
+        if owned is not None:  # the session host already runs it: show that one
+            return Target(
+                session_ids=r.ids,
+                session_id=s.session_id,
+                command=host_client.attach_command(owned.id),
+                cwd=cwd,
+                host_id=owned.id,
+                host_pid=owned.pid,
+            )
+        return self._hosted(
+            Target(
+                session_ids=r.ids,
+                session_id=s.session_id,
+                command=self.config.launch_for(r.meta.group).command(
+                    CLAUDE, "--resume", s.session_id
+                ),
+                cwd=cwd,
+            )
         )
+
+    def _hosted(self, target: Target) -> Target:
+        """With ``[sessions] owner = "host"``, run the target's Claude in the session host.
+
+        Returns a target whose command attaches to it. Anything that goes wrong keeps the
+        target as it was, so Claude runs in this app, as it does without the option.
+        """
+        if self.config.owner != "host" or not target.command or target.host_id:
+            return target
+        if target.command[:2] == (CLAUDE, "attach"):  # a background session: nothing to own
+            return target
+        size = self.query_one("#main").size
+        try:
+            record = host_client.start_session(
+                target.command,
+                cwd=target.cwd or os.getcwd(),
+                rows=max(2, size.height),
+                cols=max(2, size.width),
+                group=target.group,
+                session_id=target.session_id,
+            )
+        except (host_client.ClientError, OSError) as exc:
+            self.notify(f"Session host: {exc}. Claude runs in this app.", severity="warning")
+            return target
+        return replace(
+            target,
+            command=host_client.attach_command(record.id),
+            host_id=record.id,
+            host_pid=record.pid,
+        )
+
+    def _tag_host(self, pane: ClaudePane) -> None:
+        """Tell the session host which Claude session a hosted pane shows, so any viewer finds it."""
+        if not (pane.host_id and pane.session_id):
+            return
+        threading.Thread(
+            target=_tag_hosted,
+            args=(pane.host_id, pane.session_id, pane.new_group),
+            daemon=True,
+        ).start()
 
     def _join_group(self, session_id: str, group: str) -> None:
         """Put a new conversation in ``group``, unless it got one meanwhile (``g``)."""
@@ -1615,7 +1680,7 @@ class SwitcherApp(App[None]):
         # a filter on one group: the new conversation joins it, so it stays in the list
         group = self.filter.groups[0] if len(self.filter.groups) == 1 else ""
         command = self.config.launch_for(group).command(CLAUDE)
-        target = Target(session_ids=(), session_id="", command=command, group=group)
+        target = self._hosted(Target(session_ids=(), session_id="", command=command, group=group))
         self._show(await self._mount(target))
         self.set_timer(NEW_POLL_SECONDS, self.refresh_live)
 
@@ -1633,22 +1698,27 @@ class SwitcherApp(App[None]):
         worse than the hangup a plain quit would have given it.
         """
         for handed in attach.take():
+            owned_by_host = handed.fd < 0  # the host took it: a new viewer, nothing inherited
             target = Target(
                 session_ids=(handed.session_id,) if handed.session_id else (),
                 session_id=handed.session_id,
-                command=(),  # nothing is spawned: this pane attaches
+                command=host_client.attach_command(handed.host_id) if owned_by_host else (),
                 cwd=handed.cwd or None,
                 group=handed.group,
+                host_id=handed.host_id,
+                host_pid=handed.host_pid,
             )
             try:
-                pane = await self._mount(target, handed)
+                pane = await self._mount(target, None if owned_by_host else handed)
             except Exception:  # one bad pane must not cost the others
-                attach.discard(handed.fd)
-                attach.hangup(handed.pid)
+                if not owned_by_host:
+                    attach.discard(handed.fd)
+                    attach.hangup(handed.pid)
                 continue
             pane.title_seen = handed.title
             self._show(pane, focus=True)
-            pane.repaint_child()
+            if not owned_by_host:
+                pane.repaint_child()
 
     def _show(self, pane: ClaudePane, focus: bool = True) -> None:
         self.query_one("#main", ContentSwitcher).current = pane.id
@@ -1897,11 +1967,38 @@ class SwitcherApp(App[None]):
             # A reload re-execs this very process, which keeps its children and its open
             # descriptors. So the panes are handed over rather than closed, and the
             # Claudes never learn the program around them was replaced.
-            attach.put([h for pane in self._panes() if (h := pane.detach()) is not None])
+            handed = [h for pane in self._panes() if (h := pane.detach()) is not None]
+            if self.config.owner == "host":  # the host takes the Claudes this app owns
+                handed = [self._to_host(h) for h in handed]
+            attach.put(handed)
         else:
             for pane in self._panes():
-                pane.close()
+                pane.close(end_session=False)  # a hosted Claude keeps running without its viewer
         self.exit()
+
+    def _to_host(self, handed: attach.Handed) -> attach.Handed:
+        """Give a detached pane's Claude to the session host; the pane then attaches to it.
+
+        The host receives its own copy of the pseudo-terminal descriptor, so this one is
+        closed without hanging Claude up. If the host cannot take it, the pane is handed over
+        through ``exec`` as it is without the option.
+        """
+        if handed.host_id:
+            return handed
+        try:
+            record = host_client.adopt_session(
+                handed.fd,
+                handed.pid,
+                cwd=handed.cwd,
+                rows=handed.rows,
+                cols=handed.cols,
+                group=handed.group,
+                session_id=handed.session_id,
+            )
+        except (host_client.ClientError, OSError):
+            return handed
+        attach.discard(handed.fd)
+        return replace(handed, fd=-1, host_id=record.id, host_pid=handed.pid)
 
     # --- close -----------------------------------------------------------
 

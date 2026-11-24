@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
+import signal
 import subprocess
+import threading
+import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-from cabildo import store
+from cabildo import host, store
 
 
 @pytest.fixture(autouse=True)
@@ -98,3 +103,27 @@ def make_session(
     if wrote:
         store.mark_wrote(conn, session_id)
     return session_id
+
+
+@pytest.fixture
+def session_host(tmp_path_factory, monkeypatch) -> Iterator[host.Host]:
+    """A session host on a socket whose path is the same in every test of the run.
+
+    The workspace panes run ``cabildo attach`` in a child whose environment textual-tty copies
+    once, in the first test. A path that changed per test would leave later children looking
+    for the first test's socket.
+    """
+    path = str(tmp_path_factory.getbasetemp() / "host.sock")
+    monkeypatch.setenv("CABILDO_HOST_SOCKET", path)
+    h = host.Host(path)
+    thread = threading.Thread(target=h.serve, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 5
+    while not os.path.exists(path) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    yield h
+    for record in h.records():
+        with contextlib.suppress(OSError):
+            os.killpg(os.getpgid(record.pid), signal.SIGKILL)
+    h.stop()
+    thread.join(5)

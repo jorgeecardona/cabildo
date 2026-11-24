@@ -1,8 +1,8 @@
 ---
 title: Claude sessions have no owner process, so only the TUI can show them live
-status: open
+status: in-progress
 scope: L
-owner: null
+owner: cute-baymax-2219f
 filed: 2026-11-23
 area: daemon
 verify: probe
@@ -93,6 +93,22 @@ notes) do not change.
 4. A test covers attach, detach, and resize on a fake child process.
 5. Two sessions with different `cwd` each read the `CLAUDE.md` of their own folder.
 6. The TUI shows a session the daemon started, and a TUI reload does not interrupt it. `workspace/attach.py` is deleted.
+
+## First slice (done, 24-11-2026)
+
+Decided: the owner is a separate process, `cabildo host` (`src/cabildo/host.py`), not a thread of
+the daemon. A daemon restart would close every master descriptor. Clients start it on demand.
+
+- Done: `host.py` (socket server, frames, start, adopt by `SCM_RIGHTS`, tag, kill),
+  `host_client.py`, `cabildo host`, `cabildo attach`, and the workspace option
+  `[sessions] owner = "host"` (new, resume, quit leaves sessions running, reload adopts the
+  Claudes the app owns). Tests: `tests/test_host.py`, `tests/workspace/test_hosted.py`.
+- Environment: the client sends its environment with `start`, so `SSH_AUTH_SOCK` and the rest
+  reach Claude.
+- Not done: a screen buffer (a new viewer sees a repaint, not the scrollback), a systemd unit
+  for the host, the `KillMode` and crash checks, a detach key for `cabildo attach`, the
+  start-folder limit, `sessions_ops.create` in the host, deleting `workspace/attach.py`.
+- Probe still missing: the option has not been run against a real `claude` session.
 
 ## Not doing here
 

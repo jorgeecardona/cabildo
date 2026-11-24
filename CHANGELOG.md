@@ -14,6 +14,12 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   `sessions_rename`, `sessions_tag`, `sessions_trash` and `sessions_read` accept a robot name or
   an `@handle` in place of an id.
 
+- `[sessions] owner = "host"` in the workspace config makes a separate process, the session
+  host, own each Claude's terminal. Quitting the workspace leaves the sessions running, a
+  reload gives the ones it owns to the host without restarting them, and `cabildo attach <id>`
+  shows one in any terminal. New commands: `cabildo host` (`list`, `new`, `kill`) and
+  `cabildo attach`. See `docs/session-host.md`.
+
 - The workspace spend table has a `7d share` row: each model's part of the last week's priced
   cost, in percent. The table shows on a plan login with `[workspace] spend = "always"` in
   `~/.cabildo/config.toml`; the default `auto` shows it only on an API key.
