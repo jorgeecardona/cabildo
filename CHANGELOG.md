@@ -4,6 +4,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- Jupyter runners can be paused: `cabildo jupyter pause|resume NAME` and the `jupyter_pause` tool
+  stop a runner and its kernels using the CPU and keep their memory. The workspace shows a
+  `runners` group in the left panel (CPU and memory per runner) and a runners screen on `J` with
+  stop, pause or resume, and open.
+
 - Jupyter runners: `cabildo jupyter start|stop|status|open|run` and the MCP tools `jupyter_start`,
   `jupyter_run`, `jupyter_open`, `jupyter_list` and `jupyter_stop`. A session starts a Jupyter
   Server in a directory it chooses; agents run cells on its kernel; `open` gives a link that shows

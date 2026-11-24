@@ -37,7 +37,7 @@ from textual.timer import Timer
 from textual.widgets import ContentSwitcher, DataTable, Input, Label, Static
 from textual.worker import get_current_worker
 
-from cabildo import __version__, cloud, config, host_client, names, sessions_ops, store
+from cabildo import __version__, cloud, config, host_client, jupyter, names, sessions_ops, store
 from cabildo import usage as usage_tokens
 from cabildo.workspace import (
     agents,
@@ -223,6 +223,8 @@ INTENT_LINES = (
     7  # the intents group never takes more rows than this: the screen height is the limit
 )
 INTENT_POLL_SECONDS = 3.0
+RUNNER_POLL_SECONDS = 3.0  # how often to look at the Jupyter runners
+RUNNER_LINES = 4  # the runners group never takes more rows than this
 FOCUS_POLL_SECONDS = 0.5  # how often to look for a sessions_focus request
 INTENT_FAILED = ("failed", "rejected", "expired")
 
@@ -268,6 +270,26 @@ def fmt_intents(items: tuple[intents.Intent, ...], now: float) -> list[tuple[str
         shown += 1
     if shown < len(items):
         out.append((f"+{len(items) - shown} more", "dim"))
+    return out
+
+
+def fmt_runners(
+    runners: tuple[jupyter.RunnerRow, ...], uses: dict[int, Use]
+) -> list[tuple[str, str]]:
+    """The Jupyter runners group, one row each: a mark (``●`` running, ``‖`` paused), the name,
+    then CPU and memory of the server with its kernels. Empty when no runner runs.
+    """
+    live = [r for r in runners if r.running]
+    if not live:
+        return []
+    out: list[tuple[str, str]] = [(grid("runners", "cpu", "mem"), "")]
+    for r in live[:RUNNER_LINES]:
+        use = uses.get(r.pid) if r.pid else None
+        mark = "‖" if r.paused else "●"
+        cpu, mem = (fmt_cpu(use.cpu), fmt_mb(use.mem_mb)) if use else ("…", "…")
+        out.append((grid(f"{mark} {r.name[:8]}", cpu, mem), "dim" if r.paused else ""))
+    if len(live) > RUNNER_LINES:
+        out.append((f"+{len(live) - RUNNER_LINES} more", "dim"))
     return out
 
 
@@ -632,6 +654,70 @@ class TopScreen(ModalScreen[None]):
         self.dismiss(None)
 
 
+class RunnersScreen(ModalScreen[None]):
+    """`J`: the Jupyter runners with the CPU and memory of each one's server and kernels.
+    `k` stops the selected one, `p` pauses it (or resumes it), `o` opens it in a browser.
+    """
+
+    BINDINGS = [
+        Binding("escape,q,J", "close", "Close"),
+        Binding("k", "act('stop')", "Stop"),
+        Binding("p", "act('pause')", "Pause / resume"),
+        Binding("o,enter", "act('open')", "Open"),
+    ]
+
+    def __init__(self, lines: list[tuple[str, tuple[Text, str, str, str, str]]]) -> None:
+        super().__init__()
+        self._lines = lines
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="top"):
+            yield Static(
+                "Jupyter runners · CPU: % of one core, server and kernels · k stops · "
+                "p pauses or resumes · o opens in the browser · q closes",
+                id="top-title",
+            )
+            yield DataTable(id="top-table", cursor_type="row", zebra_stripes=False)
+
+    def on_mount(self) -> None:
+        table = self.query_one(DataTable)
+        for label, width in (
+            ("Runner", 16),
+            ("State", 9),
+            ("Directory", 40),
+            ("CPU", 7),
+            ("Mem", 7),
+        ):
+            table.add_column(label, width=width)
+        self.show(self._lines)
+        table.focus()
+
+    def show(self, lines: list[tuple[str, tuple[Text, str, str, str, str]]]) -> None:
+        """Redraw the rows, keeping the cursor on the same row number."""
+        table = self.query_one(DataTable)
+        row = table.cursor_row
+        table.clear()
+        for name, cells in lines:
+            table.add_row(*cells, key=name)
+        self._lines = lines
+        if lines:
+            table.move_cursor(row=min(row, len(lines) - 1))
+        else:
+            self.query_one("#top-title", Static).update(
+                "No runner yet: `cabildo jupyter start NAME --cwd DIR`, or an agent's jupyter_start"
+            )
+
+    def action_act(self, action: str) -> None:
+        table = self.query_one(DataTable)
+        app = self.app
+        if table.row_count and isinstance(app, SwitcherApp):
+            key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+            app.runner_do(action, str(key.value))
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
 class SwitcherApp(App[None]):
     """The list on the right, the hosted Claude sessions on the left."""
 
@@ -677,7 +763,7 @@ class SwitcherApp(App[None]):
     }
     EditScreen { background: transparent; }
     KeysScreen { align: center middle; background: transparent; }
-    TopScreen { align: center middle; background: transparent; }
+    TopScreen, RunnersScreen { align: center middle; background: transparent; }
     #top { width: 80%; height: 80%; border: round $accent; background: $panel; padding: 0 1; }
     #top-title { color: $text-muted; height: 1; }
     #top-table { height: 1fr; background: $panel; }
@@ -726,6 +812,7 @@ class SwitcherApp(App[None]):
         Binding("question_mark", "toggle_keys", "Keys"),
         Binding("T", "top", "Top"),
         Binding("A", "activity", "Activity"),
+        Binding("J", "runners", "Runners"),
         Binding("j", "cursor_down", show=False),
         Binding("k", "cursor_up", show=False),
     ]
@@ -764,6 +851,7 @@ class SwitcherApp(App[None]):
         self._cwd_key = cloud.project_key(cwd)  # what the intents of "here" are matched on
         self.intents: tuple[intents.Intent, ...] = ()  # the push queue and its latest results
         self._intents_seen = False  # the bus has been read once: show the group, even if empty
+        self.runners: tuple[jupyter.RunnerRow, ...] = ()  # the Jupyter runners, polled
         self._modeline_text: Text | None = None  # what the mode line shows now
         self._columns_all: Scope | None = None  # the scope the header was made for
         self.live = LiveState()
@@ -830,6 +918,8 @@ class SwitcherApp(App[None]):
         self._spend_start()
         self._intents_tick()
         self.set_interval(INTENT_POLL_SECONDS, self._intents_tick)
+        self._runners_tick()
+        self.set_interval(RUNNER_POLL_SECONDS, self._runners_tick)
         self._focus_dir = focus.register()
         self.set_interval(FOCUS_POLL_SECONDS, self._focus_tick)
 
@@ -858,6 +948,60 @@ class SwitcherApp(App[None]):
         await self._open(row)
         self._restore_cursor(row.head.session_id)
         focus.answer(folder, request, ok=True, message=f"showing {row.display_title!r}")
+
+    def _runners_tick(self) -> None:
+        self.run_worker(self._runners_fetch, thread=True, group="runners", exclusive=True)
+
+    def _runners_fetch(self) -> None:
+        self._to_ui(self._runners_got, tuple(jupyter.statuses()))
+
+    def _runners_got(self, found: tuple[jupyter.RunnerRow, ...]) -> None:
+        if found == self.runners:
+            return
+        self.runners = found
+        screen = self.screen
+        if isinstance(screen, RunnersScreen):
+            screen.show(self._runner_lines())
+        self._modeline()
+
+    def _runner_lines(self) -> list[tuple[str, tuple[Text, str, str, str, str]]]:
+        """Rows of the runners screen: (name, (runner, state, directory, CPU, memory))."""
+        lines = []
+        for r in self.runners:
+            use = self.uses.get(r.pid) if r.pid else None
+            state = "paused" if r.paused else "running" if r.running else "stopped"
+            style = "dim" if not r.running or r.paused else "bold"
+            cpu = fmt_cpu(use.cpu) if use else ""
+            mem = fmt_mb(use.mem_mb) if use else ""
+            cwd = short_path(r.cwd, 40)
+            lines.append((r.name, (Text(r.name, style=style), state, cwd, cpu, mem)))
+        return lines
+
+    def runner_do(self, action: str, name: str) -> None:
+        """`k`, `p`, `o` on the runners screen: stop, pause or resume, open in the browser.
+        Runs on a worker (stopping waits for the process), then reads the runners again.
+        """
+
+        def work() -> None:
+            try:
+                if action == "stop":
+                    jupyter.stop(name)
+                elif action == "pause":
+                    row = next((r for r in jupyter.statuses() if r.name == name), None)
+                    (jupyter.resume if row and row.paused else jupyter.pause)(name)
+                elif action == "open":
+                    jupyter.open_link(name, launch=True)
+            except jupyter.RunnerError as exc:
+                self._to_ui(self.notify, f"{name}: {exc}", severity="warning")
+            self._to_ui(self._runners_tick)
+
+        self.run_worker(work, thread=True, group="runner-action")
+
+    def action_runners(self) -> None:
+        """`J`: the Jupyter runners, with `k` stop, `p` pause or resume, `o` open."""
+        self.push_screen(RunnersScreen(self._runner_lines()))
+        self._runners_tick()
+        self.call_later(lambda: self._sample_tick(force=True))
 
     def _intents_tick(self) -> None:
         self.run_worker(self._intents_fetch, thread=True, group="intents", exclusive=True)
@@ -1157,6 +1301,8 @@ class SwitcherApp(App[None]):
                     intents.in_scope(self.intents, self.scope, self.cwd, self._cwd_key), time.time()
                 )
             )
+        if live_runners := fmt_runners(self.runners, self.uses):
+            groups.append(live_runners)
         if usage.available():
             this = fmt_use("this one", use, self._row_first_mb(row) if row else None)
             everyone, me = self._usage_lines()
@@ -1382,6 +1528,7 @@ class SwitcherApp(App[None]):
             for st in self.live.agents.values()
             if st.pid and (everything or st.session_id in listed)
         }
+        roots |= {r.pid: True for r in self.runners if r.pid and r.running}
         roots[os.getpid()] = False
         return roots
 
@@ -1390,7 +1537,7 @@ class SwitcherApp(App[None]):
         shows (an interval timer), every TOP_SAMPLE_SECONDS after the last sample while
         the top view is open (`_sampled` sets the next timer), never while hidden.
         """
-        top = isinstance(self.screen, TopScreen)
+        top = isinstance(self.screen, (TopScreen, RunnersScreen))
         if self._sampling:
             return
         if not force and time.monotonic() - self._sampled_at < SAMPLE_SECONDS - 0.2:
@@ -1419,8 +1566,12 @@ class SwitcherApp(App[None]):
         self._sampling = False
         self._sampled_at = at
         self._refresh_use()
-        if isinstance(self.screen, TopScreen):
-            self.screen.show(self._top_lines())
+        screen = self.screen
+        if isinstance(screen, (TopScreen, RunnersScreen)):
+            if isinstance(screen, TopScreen):
+                screen.show(self._top_lines())
+            else:
+                screen.show(self._runner_lines())
             wait = TOP_SAMPLE_SECONDS if done.uses else TOP_FIRST_SECONDS
             self.set_timer(wait, lambda: self._sample_tick(force=True))
 

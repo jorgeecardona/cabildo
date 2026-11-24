@@ -48,6 +48,7 @@ from .wsclient import WebSocket, WebSocketError
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 START_SECONDS = 180.0  # the first start resolves packages with uv
 TEXT_LIMIT = 8000
+CHANNEL_SECONDS = 90.0  # the channel answers once the kernel is up: a new kernel is slow
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
@@ -79,6 +80,19 @@ class RunnerState:
     cwd: str
     started_at: float
     kernel_id: str = ""
+    paused: bool = False  # stopped with SIGSTOP: it answers nothing until resumed
+
+
+@dataclass(frozen=True)
+class RunnerRow:
+    """One line of ``statuses``: a runner that is configured or has run before."""
+
+    name: str
+    running: bool
+    paused: bool
+    pid: int | None  # the server's process; the root of the tree to measure
+    port: int | None
+    cwd: str
 
 
 @dataclass(frozen=True)
@@ -229,6 +243,8 @@ def running(name: str) -> RunnerState | None:
     if state is None:
         return None
     if _alive(state.pid):
+        if state.paused:
+            return state  # a stopped server cannot answer the check
         try:
             _http(state, "GET", "/api/status", timeout=3.0)
         except (RunnerError, OSError):
@@ -246,7 +262,7 @@ def _free_port() -> int:
 
 def command(spec: RunnerSpec, port: int) -> list[str]:
     """The command that starts the server: ``uv run`` with its own environment."""
-    cmd = ["uv", "run", "--no-project", "--with", "jupyter-server", "--with", "ipykernel"]
+    cmd = ["uv", "run", "--no-project", "--with", "jupyterlab", "--with", "ipykernel"]
     for package in spec.packages:
         cmd += ["--with", package]
     if spec.python:
@@ -316,6 +332,7 @@ def stop(name: str) -> bool:
     (runner_dir(name) / "state.json").unlink(missing_ok=True)
     if state is None or not _alive(state.pid):
         return False
+    _signal_tree(state.pid, signal.SIGCONT)  # a stopped process holds a SIGTERM until it runs
     with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(state.pid, signal.SIGTERM)  # the server is its own session leader
     for _ in range(50):
@@ -327,18 +344,64 @@ def stop(name: str) -> bool:
     return True
 
 
-def statuses() -> list[dict[str, Any]]:
-    """One row per runner that is configured or has a folder: name, running, port, cwd."""
+def _descendants(pid: int) -> list[int]:
+    """Every process below ``pid``, from ``/proc`` (empty where there is none)."""
+    out: list[int] = []
+    todo = [pid]
+    while todo:
+        top = todo.pop()
+        for tid in Path(f"/proc/{top}/task").glob("*"):
+            with contextlib.suppress(OSError, ValueError):
+                kids = [int(k) for k in (tid / "children").read_text().split()]
+                out += kids
+                todo += kids
+    return out
+
+
+def _signal_tree(pid: int, sig: signal.Signals) -> None:
+    """Send ``sig`` to the server, its group and every process below it."""
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(pid, sig)
+    for child in _descendants(pid):  # a kernel that left the group
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.kill(child, sig)
+
+
+def pause(name: str) -> bool:
+    """Stop runner ``name`` and its kernels from using the CPU, keeping their memory.
+
+    Returns False when it was not running or already paused. ``resume`` continues it.
+    """
+    state = running(name)
+    if state is None or state.paused:
+        return False
+    _signal_tree(state.pid, signal.SIGSTOP)
+    _write_state(replace(state, paused=True))
+    return True
+
+
+def resume(name: str) -> bool:
+    """Continue a paused runner. False when it was not paused."""
+    state = _read_state(name)
+    if state is None or not state.paused or not _alive(state.pid):
+        return False
+    _signal_tree(state.pid, signal.SIGCONT)
+    _write_state(replace(state, paused=False))
+    return True
+
+
+def statuses() -> list[RunnerRow]:
+    """One row per runner that is configured or has a folder, sorted by name."""
     names = set(named_runners())
     if root().is_dir():
         names |= {p.name for p in root().iterdir() if NAME_RE.match(p.name)}
-    rows: list[dict[str, Any]] = []
+    rows: list[RunnerRow] = []
     for name in sorted(names):
         state = running(name)
-        rows.append(
-            {"name": name, "running": state is not None, "port": state.port if state else None,
-             "cwd": state.cwd if state else str(resolve(name).cwd)}
-        )  # fmt: skip
+        if state is None:
+            rows.append(RunnerRow(name, False, False, None, None, str(resolve(name).cwd)))
+        else:
+            rows.append(RunnerRow(name, True, state.paused, state.pid, state.port, state.cwd))
     return rows
 
 
@@ -448,8 +511,9 @@ def _execute(state: RunnerState, code: str, timeout: float) -> RunResult:
         ws = WebSocket.connect(
             f"ws://127.0.0.1:{state.port}/api/kernels/{state.kernel_id}/channels",
             headers={"Authorization": f"token {_token(state.name)}"},
+            timeout=CHANNEL_SECONDS,
         )
-    except WebSocketError as exc:
+    except (WebSocketError, TimeoutError) as exc:
         raise RunnerError(f"cannot open the kernel channel: {exc}") from exc
     parts: list[str] = []
     error, images = "", 0
@@ -506,6 +570,8 @@ def run(name: str, code: str, timeout: float = 30.0) -> RunResult:
     state = running(name)
     if state is None:
         raise RunnerError(f"runner {name!r} is not running: start it first")
+    if state.paused:
+        raise RunnerError(f"runner {name!r} is paused: resume it first")
     spec = resolve(name, state.cwd)
     folder = runner_dir(name)
     with (folder / "run.lock").open("w") as lock:

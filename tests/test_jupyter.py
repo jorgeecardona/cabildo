@@ -9,6 +9,7 @@ import socket
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -63,6 +64,7 @@ def test_command_builds_a_uv_environment_with_the_spec(tmp_path: Path) -> None:
     spec = jupyter.RunnerSpec("a", tmp_path, python="3.13", packages=("polars",))
     cmd = jupyter.command(spec, 4321)
     assert cmd[:3] == ["uv", "run", "--no-project"]
+    assert "jupyterlab" in cmd  # the browser link is JupyterLab at /lab
     assert cmd[cmd.index("polars") - 1 : cmd.index("polars") + 1] == ["--with", "polars"]
     assert cmd[cmd.index("--python") + 1] == "3.13"
     assert "--port=4321" in cmd and f"--ServerApp.root_dir={tmp_path}" in cmd
@@ -199,3 +201,50 @@ def test_a_real_runner_runs_cells_and_keeps_variables(tmp_path: Path) -> None:
         assert jupyter.run("real", "import os; print(os.getcwd())").text.strip() == str(tmp_path)
     finally:
         jupyter.stop("real")
+
+
+def _proc_state(pid: int) -> str:
+    return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+
+
+@pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="needs Linux /proc")
+def test_pause_stops_the_tree_and_resume_runs_it_again(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = jupyter.runner_dir("nap")
+    folder.mkdir(parents=True)
+    (folder / "token").write_text("tok")
+    shell = subprocess.Popen(
+        ["sh", "-c", "sleep 60 & wait"], start_new_session=True
+    )  # a server with a child
+    try:
+        jupyter._write_state(jupyter.RunnerState("nap", shell.pid, 1, str(home), 0.0))
+        monkeypatch.setattr(jupyter, "_http", lambda *a, **k: {})  # the server "answers"
+        child = None
+        for _ in range(50):
+            kids = jupyter._descendants(shell.pid)
+            if kids:
+                child = kids[0]
+                break
+            time.sleep(0.05)
+        assert child is not None
+        assert jupyter.pause("nap") is True and jupyter.pause("nap") is False
+        for _ in range(50):
+            if _proc_state(shell.pid) == "T" and _proc_state(child) == "T":
+                break
+            time.sleep(0.05)
+        assert (_proc_state(shell.pid), _proc_state(child)) == ("T", "T")
+        monkeypatch.setattr(jupyter, "_http", lambda *a, **k: (_ for _ in ()).throw(OSError()))
+        assert jupyter.running("nap") is not None  # a stopped server cannot answer: still listed
+        assert [r.paused for r in jupyter.statuses() if r.name == "nap"] == [True]
+        with pytest.raises(jupyter.RunnerError, match="paused"):
+            jupyter.run("nap", "1")
+        assert jupyter.resume("nap") is True and jupyter.resume("nap") is False
+        for _ in range(50):
+            if _proc_state(shell.pid) != "T":
+                break
+            time.sleep(0.05)
+        assert _proc_state(shell.pid) != "T"
+    finally:
+        jupyter.stop("nap")
+        shell.wait(timeout=5)

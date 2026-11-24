@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+import threading
 
 import pytest
 
@@ -41,13 +42,16 @@ def test_a_long_message_and_a_split_message_arrive_whole(serve) -> None:
 
 def test_a_ping_is_answered_and_skipped(serve) -> None:
     got: list[tuple[int, bytes]] = []
+    answered = threading.Event()
 
     def server(conn: socket.socket, headers: dict[str, str]) -> None:
         conn.sendall(frame(0x9, b"hi") + frame(0x1, b"after"))
         got.append(read_frame(conn))
+        answered.set()
 
     ws = WebSocket.connect(serve(server))
     assert ws.recv() == "after"
+    assert answered.wait(5)  # the server thread has read the pong
     ws.close()
     assert got == [(0xA, b"hi")]
 

@@ -1714,8 +1714,12 @@ def cmd_jupyter(args) -> int:
         if args.action == "status":
             rows = jupyter.statuses()
             for r in rows:
-                state = f"running on port {r['port']}" if r["running"] else "stopped"
-                print(f"{r['name']:<16} {state:<24} {r['cwd']}")
+                state = (
+                    ("paused" if r.paused else "running") + f" on port {r.port}"
+                    if r.running
+                    else "stopped"
+                )
+                print(f"{r.name:<16} {state:<24} {r.cwd}")
             if not rows:
                 print("no runner: `cabildo jupyter start NAME --cwd DIR` makes one")
             return 0
@@ -1727,6 +1731,9 @@ def cmd_jupyter(args) -> int:
             print(f"{args.name}: running on port {state.port} in {state.cwd}")
         elif args.action == "stop":
             print("stopped" if jupyter.stop(args.name) else "was not running")
+        elif args.action in ("pause", "resume"):
+            act = jupyter.pause if args.action == "pause" else jupyter.resume
+            print("done" if act(args.name) else f"nothing to {args.action}")
         elif args.action == "open":
             found = jupyter.open_link(args.name, args.code, launch=not args.print_only)
             print(f"{found['url']}\n{found['link']}")
@@ -2862,8 +2869,9 @@ def main(argv: list[str] | None = None) -> int:
         "action",
         nargs="?",
         default="status",
-        choices=["status", "start", "stop", "open", "run"],
-        help="status (default), start, stop, open (in your browser) or run (one cell)",
+        choices=["status", "start", "stop", "pause", "resume", "open", "run"],
+        help="status (default), start, stop, pause or resume (stop it using the CPU), "
+        "open (in your browser) or run (one cell)",
     )
     jp.add_argument("name", nargs="?", help="the runner's name (a-z 0-9 _ -)")
     jp.add_argument(

@@ -25,15 +25,29 @@ tools. You open the same kernel in your browser.
    ```
 
 `cabildo jupyter status` lists the runners. `cabildo jupyter stop analysis` ends one with its
-kernel.
+kernel. `cabildo jupyter pause analysis` stops it using the CPU and keeps its memory (the kernel
+and its variables stay); `cabildo jupyter resume analysis` continues it. A paused runner refuses
+cells.
+
+## In the workspace
+
+The left panel has a `runners` group while a runner runs: `●` running, `‖` paused, then the CPU
+and memory of the server with its kernels. Press `J` for the runners screen:
+
+| Key | Does |
+|---|---|
+| `k` | stop the selected runner |
+| `p` | pause it, or resume it when paused |
+| `o` or Enter | open it in your browser |
+| `q` or Esc | close the screen |
 
 An agent does the same with the MCP tools `jupyter_start`, `jupyter_run`, `jupyter_open`,
-`jupyter_list` and `jupyter_stop`. The session chooses `cwd`. Without it, the runner starts in
+`jupyter_list`, `jupyter_pause` and `jupyter_stop`. The session chooses `cwd`. Without it, the runner starts in
 the project root.
 
 ## What starts
 
-`cabildo` runs `uv run --no-project --with jupyter-server --with ipykernel python -m
+`cabildo` runs `uv run --no-project --with jupyterlab --with ipykernel python -m
 jupyter_server` in a detached process. Cabildo itself gets no Jupyter dependency. The first start
 resolves packages and can take a minute. `uv` must be on `PATH`.
 

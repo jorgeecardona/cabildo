@@ -842,3 +842,55 @@ def test_the_keys_screen_shows_the_version(transcript, monkeypatch) -> None:
 
     drive(monkeypatch, scenario)
     assert f"workspace {__version__}" in seen[0]
+
+
+def test_the_runners_screen_lists_runners_and_the_mode_line_has_a_group(
+    transcript, monkeypatch
+) -> None:
+    from cabildo import jupyter
+    from cabildo.workspace import app as app_mod
+
+    rows = (
+        jupyter.RunnerRow("lab", True, False, 4242, 8888, "/work/lab"),
+        jupyter.RunnerRow("old", True, True, 4243, 8889, "/work/old"),
+        jupyter.RunnerRow("off", False, False, None, None, "/work/off"),
+    )
+    monkeypatch.setattr(jupyter, "statuses", lambda: list(rows))
+    seen: dict[str, object] = {}
+
+    async def scenario(app, pilot) -> None:
+        await settle(app, pilot)
+        seen["group"] = app_mod.fmt_runners(app.runners, {})
+        await pilot.press("J")
+        await settle(app, pilot)
+        table = app.screen.query_one(app_mod.DataTable)
+        seen["screen"] = type(app.screen).__name__
+        seen["rows"] = [str(table.get_row_at(i)[0]) for i in range(table.row_count)]
+        await pilot.press("escape")
+
+    drive(monkeypatch, scenario)
+    assert [line for line, _ in seen["group"]][1:] == [  # type: ignore[union-attr]
+        "● lab               …         …",
+        "‖ old               …         …",
+    ]
+    assert seen["screen"] == "RunnersScreen" and seen["rows"] == ["lab", "old", "off"]
+
+
+def test_runner_actions_call_the_jupyter_module(monkeypatch) -> None:
+    from cabildo import jupyter
+
+    done: list[tuple[str, str]] = []
+    monkeypatch.setattr(jupyter, "stop", lambda n: done.append(("stop", n)) or True)
+    monkeypatch.setattr(jupyter, "pause", lambda n: done.append(("pause", n)) or True)
+    monkeypatch.setattr(jupyter, "resume", lambda n: done.append(("resume", n)) or True)
+    monkeypatch.setattr(
+        jupyter, "statuses", lambda: [jupyter.RunnerRow("lab", True, True, 1, 1, "/w")]
+    )
+
+    async def scenario(app, pilot) -> None:
+        app.runner_do("stop", "lab")
+        app.runner_do("pause", "lab")  # it is paused: this resumes it
+        await settle(app, pilot)
+
+    drive(monkeypatch, scenario)
+    assert sorted(done) == [("resume", "lab"), ("stop", "lab")]

@@ -1815,6 +1815,18 @@ def jupyter_open(runner: str, notebook: str | None = None, launch: bool = False)
 
 
 @mcp.tool()
+def jupyter_pause(runner: str, paused: bool = True) -> dict[str, Any]:
+    """Pause a Jupyter runner (no CPU, memory kept), or resume it with ``paused=False``."""
+    from . import jupyter
+
+    try:
+        act = jupyter.pause if paused else jupyter.resume
+        return {"ok": True, "changed": act(runner)}
+    except jupyter.RunnerError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@mcp.tool()
 def jupyter_stop(runner: str) -> dict[str, Any]:
     """Stop a Jupyter runner and its kernel. Variables in the kernel are lost."""
     from . import jupyter
@@ -1828,9 +1840,11 @@ def jupyter_stop(runner: str) -> dict[str, Any]:
 @mcp.tool()
 def jupyter_list() -> dict[str, Any]:
     """The Jupyter runners: name, whether it runs, its port and directory."""
+    from dataclasses import asdict
+
     from . import jupyter
 
-    return {"runners": jupyter.statuses()}
+    return {"runners": [asdict(r) for r in jupyter.statuses()]}
 
 
 @mcp.tool()
