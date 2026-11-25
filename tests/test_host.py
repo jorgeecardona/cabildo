@@ -8,6 +8,7 @@ import select
 import socket
 import subprocess
 import sys
+import termios
 import time
 
 import pytest
@@ -197,6 +198,9 @@ def test_attach_command_relays_a_terminal(session_host, tmp_path):
 
     deadline = time.monotonic() + 10  # attached before the session prints anything
     while not session_host.sessions[record.id].viewers and time.monotonic() < deadline:
+        time.sleep(0.02)
+    # the viewer registers before `tty.setraw` flushes its input: typing earlier is lost
+    while termios.tcgetattr(master)[3] & termios.ICANON and time.monotonic() < deadline:
         time.sleep(0.02)
     os.write(master, b"go\n")
     assert b"ready" in read_until(b"ready")
