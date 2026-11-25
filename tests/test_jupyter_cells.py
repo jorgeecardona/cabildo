@@ -32,14 +32,17 @@ class Contents:
         if method == "GET":
             if name not in self.files:
                 raise jupyter.RunnerError(f"GET {path}: HTTP 404")
-            model = {"last_modified": self.stamp[name].isoformat().replace("+00:00", "Z")}
+            model: dict[str, Any] = {
+                "last_modified": self.stamp[name].isoformat().replace("+00:00", "Z")
+            }
             if "content=1" in query:
                 model["content"] = copy.deepcopy(self.files[name])
             if self.on_get:
                 self.on_get(self)
             return model
         if method == "PUT":
-            content = body["content"] if body["type"] == "notebook" else None
+            sent: dict[str, Any] = body or {}
+            content = sent["content"] if sent["type"] == "notebook" else None
             self.files[name] = copy.deepcopy(content) if content is not None else {}
             self.stamp[name] = datetime.now(UTC) - timedelta(seconds=60)
             return {}
