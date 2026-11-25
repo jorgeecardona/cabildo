@@ -1733,7 +1733,8 @@ def cmd_jupyter(args) -> int:
                     if r.running
                     else "stopped"
                 )
-                print(f"{r.name:<16} {state:<24} {r.cwd}")
+                auto = "  (autostart)" if r.autostart else ""
+                print(f"{r.name:<16} {state:<24} {r.cwd}{auto}")
             if not rows:
                 print("no runner: `cabildo jupyter start NAME --cwd DIR` makes one")
             return 0

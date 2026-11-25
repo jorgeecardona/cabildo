@@ -78,6 +78,8 @@ packages = ["polars"]          # replaces the default list for this runner
 kernelspec = "python3"
 startup = "import numpy as np" # run once each time the runner makes its kernel
 port = 8899                    # 0 (default): a free port
+autostart = true               # the daemon starts it and starts it again when it ends
+memory_max = "6G"              # the daemon pauses it above this much memory (server and kernels)
 
 [jupyter.runners.analysis.env] # set in the server, so every kernel has it
 DATABASE_URL = "postgresql:///crm"
@@ -88,6 +90,23 @@ A name that is not in the config gets the `[jupyter]` defaults.
 `project` makes the kernel run in a uv project's own locked environment (`uv run --project`), so
 `import` finds the project's packages and its versions. `packages` are added on top. The folder
 needs a `pyproject.toml`.
+
+## The daemon keeps your runners
+
+The daemon (`cabildo service install`) checks the runners in `[jupyter.runners.<name>]` every 15
+seconds:
+
+- `autostart = true`: it starts the runner when it is not running. This brings it back after a
+  crash, and after a reboot, because the daemon starts at login. Kernel variables are lost.
+- A runner that you stopped (`cabildo jupyter stop`, `jupyter_stop`, `k` on the runners screen)
+  stays stopped until you start it again.
+- A runner that ends 5 times in an hour is left alone, with a line in the daemon log.
+- `memory_max`: above this limit the runner is paused, with a line in the daemon log. Restart the
+  kernel (`cabildo jupyter restart NAME`) to free the memory, then `resume`.
+- A runner that a session starts on the fly, with no table in the config, is not supervised.
+
+The runners are separate processes. A daemon reload or restart does not end them. Turn this off
+with `python -m cabildo.daemon --no-jupyter`.
 
 ## Cells
 

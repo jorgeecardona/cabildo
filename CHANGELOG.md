@@ -4,6 +4,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- The daemon supervises Jupyter runners: `autostart = true` in `[jupyter.runners.<name>]` starts
+  the runner and starts it again when it ends or after a reboot, a runner you stopped stays
+  stopped, one that ends 5 times in an hour is left alone, and `memory_max = "6G"` pauses a
+  runner over that memory. `python -m cabildo.daemon --no-jupyter` turns it off.
+
 - `jupyter_run` returns plots as files: `images` lists each saved PNG with its path and size (an
   agent reads it with `Read`), `html` lists plotly figures, `full_text` is a file with the whole
   text when it was cut, and `execution_count` is the kernel's `In [n]`. New `jupyter_interrupt`

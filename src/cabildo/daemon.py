@@ -38,6 +38,7 @@ from . import (
     gitlab,
     grant_prompt,
     improve,
+    jupyter,
     lan,
     monitor,
     names,
@@ -56,6 +57,7 @@ WORKER_JOIN_TIMEOUT = 30.0
 #: ``main`` returns this after SIGHUP, once no intent is running: ``run`` then re-executes the
 #: daemon with the same arguments, so the same process id carries new code (``cabildo service reload``).
 RELOAD_EXIT = 75
+JUPYTER_EVERY = 15.0  # seconds between passes over the configured Jupyter runners
 GATEWAY_DRAIN = gateway.DRAIN_S  # how long a reload waits for open gateway requests
 RELOAD_LOG_EVERY = 60.0  # how often a draining daemon says what it waits for
 # How often the poll loop sweeps for sessions whose owning claude died without
@@ -466,6 +468,13 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
         "(default on; --no-gateway to disable)",
     )
     p.add_argument(
+        "--jupyter",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="start the Jupyter runners with autostart in the config, start them again when "
+        "they end, and pause one over its memory_max (default on; --no-jupyter to disable)",
+    )
+    p.add_argument(
         "--broker-socket",
         default=broker.socket_path(),
         help="unix socket path for the broker (default: <home>/bus.sock)",
@@ -567,6 +576,9 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
     last_ci = 0.0
     last_improve = 0.0
     last_names = 0.0
+    last_jupyter = 0.0
+    jupyter_supervisor = jupyter.Supervisor(_log)
+    jupyter_thread: threading.Thread | None = None
     shown_proposals: set[int] = set()
     ci_every = 0.0 if args.once else config.ci_poll()
     ci_thread: threading.Thread | None = None
@@ -643,6 +655,17 @@ def main(argv: list[str] | None = None, *, stop: threading.Event | None = None) 
             if not args.once and now - last_names >= NAMES_EVERY:
                 last_names = now
                 names_file.sync(conn, _log)
+            # starting a runner can take minutes (uv builds its environment): not in this loop
+            if (
+                args.jupyter
+                and not args.once
+                and not reloading.is_set()
+                and now - last_jupyter >= JUPYTER_EVERY
+                and not (jupyter_thread and jupyter_thread.is_alive())
+            ):
+                last_jupyter = now
+                jupyter_thread = threading.Thread(target=jupyter_supervisor.tick, daemon=True)
+                jupyter_thread.start()
             if ctx.save_messages and now - last_record >= RECORD_MESSAGES_EVERY:
                 last_record = now
                 record.ingest(conn, log=_log)

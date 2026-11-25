@@ -19,7 +19,9 @@ messages carry a global `guid` for cross-machine dedup.
 
 `cabildo jupyter` (`jupyter.py`, `wsclient.py`) starts detached Jupyter Servers with `uv run` (no
 Jupyter dependency in cabildo) and runs cells over the server's kernel WebSocket; the MCP tools are
-`jupyter_*`. State is in `~/.cabildo/jupyter/<name>/`.
+`jupyter_*`. State is in `~/.cabildo/jupyter/<name>/`. The daemon runs `jupyter.Supervisor.tick`
+every 15 s: it starts `autostart` runners, starts them again when they end, and pauses one over
+`memory_max`.
 
 `cabildo gateway` (`gateway.py`) is a local HTTP proxy for `ANTHROPIC_BASE_URL` that fails over
 between upstreams; it runs as a service of the daemon (`gateway.start_service`, like LAN and WAN;

@@ -387,3 +387,94 @@ def test_interrupt_and_restart_target_the_runners_or_the_notebooks_kernel(
     assert ("POST", "/api/kernels/k-nb/restart", None) in server.calls
     assert ran == [("k-nb", "import math")]  # startup runs again after a restart
     assert jupyter.restart("r8", notebook="other.ipynb") is False  # no session yet
+
+
+def _supervised(home: Path, body: str) -> jupyter.Supervisor:
+    (home / "config.toml").write_text(body)
+    logged: list[str] = []
+    sup = jupyter.Supervisor(logged.append)
+    sup.logged = logged  # type: ignore[attr-defined]
+    return sup
+
+
+def test_the_supervisor_starts_an_autostart_runner_once_and_not_after_a_stop(
+    home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sup = _supervised(
+        home, f'[jupyter.runners.a]\ncwd = "{tmp_path}"\nautostart = true\n[jupyter.runners.b]\n'
+    )
+    started: list[str] = []
+
+    def fake_start(spec: jupyter.RunnerSpec, timeout: float = 0) -> jupyter.RunnerState:
+        started.append(spec.name)
+        return jupyter.RunnerState(spec.name, os.getpid(), 1, str(spec.cwd), 0.0)
+
+    monkeypatch.setattr(jupyter, "start", fake_start)
+    sup.tick(now=1000.0)
+    assert started == ["a"]  # b has no autostart
+    jupyter.runner_dir("a").mkdir(parents=True, exist_ok=True)
+    jupyter.stop("a")  # the user stops it: the marker stays until a start
+    sup.tick(now=1020.0)
+    assert started == ["a"]
+    (jupyter.runner_dir("a") / "stopped").unlink()
+    sup.tick(now=1040.0)
+    assert started == ["a", "a"]
+
+
+def test_the_supervisor_gives_up_on_a_runner_that_keeps_ending(
+    home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sup = _supervised(home, f'[jupyter.runners.a]\ncwd = "{tmp_path}"\nautostart = true\n')
+    started: list[float] = []
+    monkeypatch.setattr(
+        jupyter,
+        "start",
+        lambda spec, timeout=0: (
+            started.append(1.0) or jupyter.RunnerState(spec.name, 1, 1, "", 0.0)
+        ),
+    )
+    for i in range(8):
+        sup.tick(now=1000.0 + i)
+    assert len(started) == jupyter.RESTARTS_PER_HOUR
+    assert sum("not starting" in line for line in sup.logged) == 1  # type: ignore[attr-defined]
+    sup.tick(now=1000.0 + 4000)  # an hour later it tries again
+    assert len(started) == jupyter.RESTARTS_PER_HOUR + 1
+
+
+def test_the_supervisor_pauses_a_runner_over_its_memory_limit(
+    home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sup = _supervised(home, f'[jupyter.runners.m]\ncwd = "{tmp_path}"\nmemory_max = "1G"\n')
+    jupyter.runner_dir("m").mkdir(parents=True)
+    (jupyter.runner_dir("m") / "token").write_text("t")
+    jupyter._write_state(jupyter.RunnerState("m", os.getpid(), 1, str(tmp_path), 0.0))
+    monkeypatch.setattr(jupyter, "_http", lambda *a, **k: {})
+    paused: list[str] = []
+    monkeypatch.setattr(jupyter, "pause", lambda name: paused.append(name) or True)
+    monkeypatch.setattr(jupyter, "_rss_mb", lambda pid: 900.0)
+    sup.tick(now=1.0)
+    assert paused == []
+    monkeypatch.setattr(jupyter, "_rss_mb", lambda pid: 1500.0)
+    sup.tick(now=2.0)
+    assert paused == ["m"] and "over memory_max 1024 MB" in sup.logged[-1]  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("value", "mb"),
+    [("4G", 4096), ("512M", 512), ("1.5G", 1536), (2048, 2048), ("x", 0), (None, 0)],
+)
+def test_memory_max_reads_sizes(value: object, mb: int) -> None:
+    assert jupyter._megabytes(value) == mb
+
+
+def test_an_ended_server_is_collected_and_not_taken_for_alive(home: Path) -> None:
+    jupyter.runner_dir("z").mkdir(parents=True)
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    jupyter._children["z"] = proc
+    jupyter._write_state(jupyter.RunnerState("z", proc.pid, 1, "/var/empty", 0.0))
+    for _ in range(100):
+        if Path(f"/proc/{proc.pid}/stat").exists() and jupyter._alive(proc.pid) is False:
+            break
+        time.sleep(0.05)
+    assert jupyter._alive(proc.pid) is False  # a zombie until its parent waits
+    assert jupyter.running("z") is None and "z" not in jupyter._children

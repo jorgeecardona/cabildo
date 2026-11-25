@@ -38,6 +38,7 @@ import urllib.error
 import urllib.request
 import uuid
 import webbrowser
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -73,6 +74,8 @@ class RunnerSpec:
     env: tuple[tuple[str, str], ...] = ()  # set in the server, so every kernel has them
     startup: str = ""  # code run once each time the runner makes its kernel
     port: int = 0  # 0: a free port
+    autostart: bool = False  # the daemon starts it, and starts it again when it ends
+    memory_max_mb: int = 0  # the daemon pauses the runner above this much memory; 0: no limit
 
 
 @dataclass(frozen=True)
@@ -98,6 +101,7 @@ class RunnerRow:
     pid: int | None  # the server's process; the root of the tree to measure
     port: int | None
     cwd: str
+    autostart: bool = False  # the config says the daemon keeps it running
 
 
 @dataclass(frozen=True)
@@ -154,6 +158,17 @@ def _private(path: Path, text: str) -> None:
 # --------------------------------------------------------------------------- #
 # Config: [jupyter] and [jupyter.runners.<name>]
 # --------------------------------------------------------------------------- #
+def _megabytes(value: object) -> int:
+    """``"4G"``, ``"512M"`` or a number of megabytes as megabytes; 0 for anything else."""
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return max(int(value), 0)
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([MG]?)B?\s*", str(value or ""), re.IGNORECASE)
+    if not match:
+        return 0
+    size = float(match.group(1)) * (1024 if match.group(2).upper() == "G" else 1)
+    return int(size)
+
+
 def _spec_from(
     name: str, table: dict[str, Any], base: dict[str, Any], cwd: str | None
 ) -> RunnerSpec:
@@ -175,6 +190,8 @@ def _spec_from(
         env=env_pairs,
         startup=str(merged.get("startup") or ""),
         port=port if isinstance(port, int) else 0,
+        autostart=merged.get("autostart") is True,
+        memory_max_mb=_megabytes(merged.get("memory_max")),
     )
 
 
@@ -214,13 +231,18 @@ def _write_state(state: RunnerState) -> None:
 
 
 def _alive(pid: int) -> bool:
+    """Whether ``pid`` runs. A zombie (ended, not yet collected by its parent) does not."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
-    return True
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return True  # no /proc (macOS): the signal check is all there is
+    return stat.rsplit(")", 1)[1].split()[0] != "Z"
 
 
 def _token(name: str) -> str:
@@ -255,6 +277,9 @@ def _http(
     return json.loads(raw) if raw else ""
 
 
+_children: dict[str, subprocess.Popen[bytes]] = {}  # servers this process started
+
+
 def running(name: str) -> RunnerState | None:
     """The state of runner ``name`` when its server answers; None when it is not running.
 
@@ -263,6 +288,8 @@ def running(name: str) -> RunnerState | None:
     state = _read_state(name)
     if state is None:
         return None
+    if (child := _children.get(name)) is not None and child.poll() is not None:
+        del _children[name]  # collected: it had ended
     if _alive(state.pid):
         if state.paused:
             return state  # a stopped server cannot answer the check
@@ -330,11 +357,13 @@ def start(spec: RunnerSpec, timeout: float = START_SECONDS) -> RunnerState:
         "JUPYTER_TOKEN": token,
         "JUPYTER_RUNTIME_DIR": str(folder / "runtime"),
     }
+    (folder / "stopped").unlink(missing_ok=True)  # a start undoes an earlier stop
     with (folder / "server.log").open("ab") as log:
         proc = subprocess.Popen(
             command(spec, port), cwd=spec.cwd, env=env, stdin=subprocess.DEVNULL,
             stdout=log, stderr=log, start_new_session=True,
         )  # fmt: skip
+    _children[spec.name] = proc  # kept so the server is collected, not left a zombie, when it ends
     state = RunnerState(spec.name, proc.pid, port, str(spec.cwd), time.time())
     _write_state(state)
     deadline = time.monotonic() + timeout
@@ -353,9 +382,15 @@ def start(spec: RunnerSpec, timeout: float = START_SECONDS) -> RunnerState:
 
 
 def stop(name: str) -> bool:
-    """Stop runner ``name`` and everything it started. False when it was not running."""
+    """Stop runner ``name`` and everything it started. False when it was not running.
+
+    A ``stopped`` marker tells the daemon not to start an ``autostart`` runner again.
+    """
     state = _read_state(name)
-    (runner_dir(name) / "state.json").unlink(missing_ok=True)
+    folder = runner_dir(name)
+    if folder.is_dir():
+        _private(folder / "stopped", "")
+    (folder / "state.json").unlink(missing_ok=True)
     if state is None or not _alive(state.pid):
         return False
     _signal_tree(state.pid, signal.SIGCONT)  # a stopped process holds a SIGTERM until it runs
@@ -425,10 +460,91 @@ def statuses() -> list[RunnerRow]:
     for name in sorted(names):
         state = running(name)
         if state is None:
-            rows.append(RunnerRow(name, False, False, None, None, str(resolve(name).cwd)))
+            spec = resolve(name)
+            rows.append(RunnerRow(name, False, False, None, None, str(spec.cwd), spec.autostart))
         else:
-            rows.append(RunnerRow(name, True, state.paused, state.pid, state.port, state.cwd))
+            auto = resolve(name, state.cwd).autostart
+            rows.append(RunnerRow(name, True, state.paused, state.pid, state.port, state.cwd, auto))
     return rows
+
+
+# --------------------------------------------------------------------------- #
+# Supervision, by the daemon
+# --------------------------------------------------------------------------- #
+RESTARTS_PER_HOUR = 5  # the daemon gives up on a runner that ends this often
+
+
+def _rss_mb(pid: int) -> float:
+    """Resident memory of ``pid`` and everything below it, in megabytes (0 without /proc)."""
+    total = 0
+    for p in [pid, *_descendants(pid)]:
+        with contextlib.suppress(OSError, ValueError, IndexError):
+            for line in Path(f"/proc/{p}/status").read_text().splitlines():
+                if line.startswith("VmRSS:"):
+                    total += int(line.split()[1])  # kB
+    return total / 1024
+
+
+class Supervisor:
+    """Keeps the configured runners the way the config says. The daemon calls ``tick``.
+
+    - ``autostart = true``: start the runner when it is not running, which also brings it back
+      after a reboot (the daemon starts at login). A runner you stopped (``stopped`` marker) stays
+      stopped until you start it. One that keeps ending is left alone after
+      ``RESTARTS_PER_HOUR`` starts in an hour.
+    - ``memory_max``: pause a runner whose server and kernels use more than that.
+
+    A runner that a session started on the fly, with no config table, is not supervised.
+    """
+
+    def __init__(self, log: Callable[[str], None] = print) -> None:
+        self._log = log
+        self._starts: dict[str, list[float]] = {}
+        self._gave_up: set[str] = set()
+
+    def tick(self, now: float | None = None) -> None:
+        """One pass over the configured runners. Never raises: a bad runner is logged."""
+        when = time.time() if now is None else now
+        for name in named_runners():
+            try:
+                self._one(resolve(name), when)
+            except (RunnerError, OSError) as exc:
+                self._log(f"jupyter {name}: {exc}")
+
+    def _one(self, spec: RunnerSpec, now: float) -> None:
+        state = running(spec.name)
+        if state is not None:
+            self._gave_up.discard(spec.name)
+            self._limit(spec, state)
+            return
+        marker = _read_state(spec.name)
+        if marker is not None and _alive(marker.pid):
+            return  # starting, or too busy to answer: not for us to restart
+        if not spec.autostart or (runner_dir(spec.name) / "stopped").exists():
+            return
+        recent = [t for t in self._starts.get(spec.name, []) if now - t < 3600]
+        if len(recent) >= RESTARTS_PER_HOUR:
+            if spec.name not in self._gave_up:
+                self._gave_up.add(spec.name)
+                self._log(
+                    f"jupyter {spec.name}: ended {len(recent)} times in an hour, not starting"
+                )
+            return
+        self._starts[spec.name] = [*recent, now]
+        self._log(f"jupyter {spec.name}: starting in {spec.cwd}")
+        started = start(spec)
+        self._log(f"jupyter {spec.name}: running on port {started.port}")
+
+    def _limit(self, spec: RunnerSpec, state: RunnerState) -> None:
+        if not spec.memory_max_mb or state.paused:
+            return
+        used = _rss_mb(state.pid)
+        if used > spec.memory_max_mb:
+            pause(spec.name)
+            self._log(
+                f"jupyter {spec.name}: paused, {used:.0f} MB is over memory_max "
+                f"{spec.memory_max_mb} MB; `cabildo jupyter restart {spec.name}` frees it"
+            )
 
 
 # --------------------------------------------------------------------------- #
