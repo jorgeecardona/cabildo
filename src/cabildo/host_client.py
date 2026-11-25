@@ -22,6 +22,30 @@ from collections.abc import Mapping, Sequence
 
 from . import host, store
 
+#: Variables a running Claude sets for the processes it starts. They name that Claude's own
+#: session, channel and token. A Claude started with them thinks it is a child of the first one:
+#: it turns transcript saving off ("inherited CLAUDE_CODE_CHILD_SESSION marker") and could talk
+#: on the first one's channel. Settings the user chose (``CLAUDE_CONFIG_DIR``, the model, the
+#: provider flags) are not on this list.
+SESSION_VARS = (
+    "CLAUDECODE",
+    "CLAUDE_PID",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_CHILD_NOTES_DIR",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+)
+
+
+def clean_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """``env`` (default: this process's) without the variables of the Claude that runs it."""
+    source = os.environ if env is None else env
+    return {k: v for k, v in source.items() if k not in SESSION_VARS}
+
 
 class ClientError(Exception):
     """The host refused the request, or none could be started."""
@@ -118,12 +142,16 @@ def start_session(
     group: str = "",
     session_id: str = "",
 ) -> host.Record:
-    """Run ``command`` in ``cwd`` under the host, with ``env`` (default: this process's)."""
+    """Run ``command`` in ``cwd`` under the host, with ``env`` (default: this process's).
+
+    The variables in ``SESSION_VARS`` are dropped from it, so a session started from inside
+    another Claude is not taken for a child of that one.
+    """
     reply = request(
         "start",
         command=list(command),
         cwd=cwd,
-        env=dict(os.environ if env is None else env),
+        env=clean_env(env),
         rows=rows,
         cols=cols,
         group=group,

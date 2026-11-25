@@ -4,6 +4,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- A session started in the session host no longer inherits the variables of the Claude that
+  started it (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ID` and the
+  channel and token ones). Before, a session started from inside another Claude turned its
+  transcript saving off and never showed in the list.
+
 - New MCP tool `about`: the version of the server, the installed one, the daemon's and the
   session host's builds, the paths and sockets, how many sessions the host owns, the help
   topics, and a `restart` list with the command for each process that runs older than the

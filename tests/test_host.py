@@ -235,3 +235,31 @@ def test_a_host_whose_socket_file_is_gone_stops(tmp_path):
     os.unlink(path)  # as a deleted test directory would
     thread.join(5)
     assert not thread.is_alive()
+
+
+def test_a_hosted_session_does_not_inherit_the_starting_claudes_markers(session_host, tmp_path):
+    env = {
+        **os.environ,
+        "CLAUDE_CODE_CHILD_SESSION": "1",
+        "CLAUDECODE": "1",
+        "CLAUDE_CONFIG_DIR": "/keep/me",
+    }
+    record = host_client.start_session(
+        [
+            "sh",
+            "-c",
+            'echo "[$CLAUDE_CODE_CHILD_SESSION][$CLAUDECODE][$CLAUDE_CONFIG_DIR]"; read x',
+        ],
+        cwd=str(tmp_path),
+        env=env,
+    )
+    sock = _viewer(session_host.path, record.id)
+    seen, _ = _read_until(sock, b"[/keep/me]")
+    assert b"[][][/keep/me]" in seen
+
+
+def test_clean_env_drops_only_the_session_markers():
+    got = host_client.clean_env(
+        {"CLAUDE_CODE_SESSION_ID": "x", "CLAUDE_CODE_USE_BEDROCK": "1", "A": "b"}
+    )
+    assert got == {"CLAUDE_CODE_USE_BEDROCK": "1", "A": "b"}
