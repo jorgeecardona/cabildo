@@ -128,7 +128,10 @@ def request(op: str, *, fds: Sequence[int] = (), start: bool = True, **params: o
             sock.sendall(line)
         reply = _read_line(sock)
     if not reply.get("ok"):
-        raise ClientError(str(reply.get("error") or "the host refused the request"))
+        error = str(reply.get("error") or "the host refused the request")
+        if error.startswith("unknown op"):
+            error += " (the host runs an older cabildo; `cabildo host stop` ends it)"
+        raise ClientError(error)
     return reply
 
 
@@ -141,6 +144,7 @@ def start_session(
     cols: int = 80,
     group: str = "",
     session_id: str = "",
+    parent: str = "",
 ) -> host.Record:
     """Run ``command`` in ``cwd`` under the host, with ``env`` (default: this process's).
 
@@ -156,6 +160,7 @@ def start_session(
         cols=cols,
         group=group,
         session_id=session_id,
+        parent=parent,
     )
     return host.Record.from_wire(reply["session"])
 
@@ -200,6 +205,16 @@ def list_sessions() -> list[host.Record]:
 def tag_session(host_id: str, *, session_id: str | None = None, group: str | None = None) -> None:
     """Record the Claude session id and group a viewer matched to a hosted session."""
     request("tag", id=host_id, session_id=session_id, group=group)
+
+
+def send_input(host_id: str, text: str, *, submit: bool = True) -> None:
+    """Type ``text`` into a hosted session; press Enter after it when ``submit`` is true."""
+    request("input", id=host_id, text=text, submit=submit, start=False)
+
+
+def stop_host(*, force: bool = False) -> int:
+    """Stop the host; the count of sessions it ended. Refused while sessions run, unless forced."""
+    return int(request("shutdown", force=force, start=False).get("stopped", 0))
 
 
 def kill_session(host_id: str) -> None:

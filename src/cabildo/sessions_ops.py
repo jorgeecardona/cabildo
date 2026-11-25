@@ -12,8 +12,10 @@ addressed by any id of its conversation (a chain of transcripts joined by
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
+import shutil
 import subprocess
 import time
 import uuid
@@ -291,6 +293,47 @@ def create(
         start_new_session=True,
     )
     return Created(sid, cwd)
+
+
+@dataclass(frozen=True)
+class Moved:
+    """A conversation moved to another folder."""
+
+    ids: tuple[str, ...]  # every session id of the conversation
+    to: str  # the folder it now belongs to
+    files: int  # transcripts moved
+
+
+def move(row: ws.Row, to_dir: str) -> Moved:
+    """Move a conversation to the project of ``to_dir``, so ``claude --resume`` finds it there.
+
+    Claude keeps a transcript in the folder named after the real path of the directory it
+    runs in. This moves every transcript of the conversation, with the folder of subagent
+    and tool output that sits beside it, into the folder of ``to_dir``. The transcript text is
+    not changed: the old messages keep the folder they were written in. The caller checks
+    that the conversation is not running.
+
+    Raises:
+        SessionsError: ``to_dir`` is not a directory, the conversation is already there, or a
+            transcript with the same id is already there.
+    """
+    dest = Path(to_dir).expanduser()
+    if not dest.is_dir():
+        raise SessionsError(f"no such directory: {to_dir}")
+    folder = ws.project_dir(os.path.realpath(dest))
+    pending = [s for s in row.chain if s.path.parent != folder]
+    if not pending:
+        raise SessionsError(f"already in {dest}")
+    for s in pending:
+        if (folder / s.path.name).exists():
+            raise SessionsError(f"{folder / s.path.name} already exists")
+    folder.mkdir(parents=True, exist_ok=True)
+    for s in pending:
+        shutil.move(str(s.path), str(folder / s.path.name))
+        beside = s.path.with_suffix("")  # <id>/ : subagents and large tool results
+        if beside.is_dir() and not (folder / beside.name).exists():
+            shutil.move(str(beside), str(folder / beside.name))
+    return Moved(tuple(row.ids), str(dest), len(pending))
 
 
 def _transcript_exists(session_id: str) -> bool:

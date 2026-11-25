@@ -314,6 +314,107 @@ def about() -> dict[str, Any]:
 
 
 @mcp.tool()
+def sibling_start(prompt: str = "", cwd: str = "", permission_mode: str = "") -> dict[str, Any]:
+    """Start another Claude next to you, owned by the session host, and return its host id.
+
+    `prompt` is its first message; it is told who you are and to answer you with `send`.
+    `cwd` is where it starts (default: your folder). `permission_mode` is passed to Claude
+    (`plan`, `acceptEdits`, ...): without one the sibling asks a person to approve each tool,
+    and only someone running `cabildo attach <id>` can answer. At most 4 siblings run at once,
+    and a sibling may start one more level, not a third.
+    """
+    from . import siblings as sib
+
+    with store.connect() as conn:
+        sid = _me(conn)
+        row = store.get_session(conn, sid)
+        handle = (row["handle"] if row else None) or ""
+    try:
+        record = sib.start(
+            parent_id=sid,
+            parent_handle=handle,
+            prompt=prompt,
+            cwd=cwd,
+            permission_mode=permission_mode,
+        )
+    except sib.SiblingError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "id": record.id, "pid": record.pid, "cwd": record.cwd}
+
+
+@mcp.tool()
+def sibling_send(id: str, text: str, submit: bool = True) -> dict[str, Any]:
+    """Type `text` into a sibling's terminal, as a person would, and press Enter after it
+    (set `submit` false to leave it in the input box). `id` is the host id `sibling_start` or
+    `siblings` gave. For a plain message to a session on the bus, use `send`.
+    """
+    from . import siblings as sib
+
+    try:
+        sib.send(id, text, submit=submit)
+    except sib.SiblingError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True}
+
+
+@mcp.tool()
+def sibling_kill(id: str) -> dict[str, Any]:
+    """Hang a hosted session up, as closing its terminal would. `id` is the host id from
+    `siblings`. Its transcript stays.
+    """
+    from . import host_client
+
+    try:
+        host_client.kill_session(id)
+    except host_client.ClientError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True}
+
+
+@mcp.tool()
+def host_stop(force: bool = False) -> dict[str, Any]:
+    """Stop the session host, for example after an upgrade (`about` lists a host that runs
+    older than the install). Refused while sessions run, because stopping it ends them;
+    `force` stops it anyway. The next `sibling_start` starts a new one.
+    """
+    from . import host_client
+
+    try:
+        ended = host_client.stop_host(force=force)
+    except host_client.ClientError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "ended": ended}
+
+
+@mcp.tool()
+def siblings() -> dict[str, Any]:
+    """The Claude sessions the session host owns: host id, folder, pid, the bus session that
+    started it (`parent`) and `mine`, true for the ones you started.
+    """
+    from . import host_client
+
+    with store.connect() as conn:
+        sid = _me(conn)
+        out = []
+        for r in host_client.list_sessions():
+            # the sibling's own hook registered it on the bus under its Claude's pid
+            row = conn.execute(
+                "SELECT session_id FROM sessions WHERE claude_pid = ?", (r.pid,)
+            ).fetchone()
+            out.append(
+                {
+                    "id": r.id,
+                    "cwd": r.cwd,
+                    "pid": r.pid,
+                    "parent": r.parent,
+                    "session_id": r.session_id or (row["session_id"] if row else ""),
+                    "mine": bool(r.parent) and r.parent == sid,
+                }
+            )
+    return {"sessions": out}
+
+
+@mcp.tool()
 def set_handle(handle: str) -> dict[str, Any]:
     """Set a friendly handle for this session (e.g. 'backend-refactor') so other
     agents can address and recognize you instead of a raw session id.
@@ -1972,6 +2073,30 @@ def sessions_rename(
     except sessions_ops.SessionsError as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, "title": shown}
+
+
+@mcp.tool()
+def sessions_move(id: str, to_dir: str) -> dict[str, Any]:
+    """Move a conversation to another folder, so `claude --resume <id>` finds it there.
+
+    `id` is an id, 8-char prefix, robot name or ``@handle``; `to_dir` is an existing
+    directory. Every transcript of the conversation moves; the messages are not changed.
+    Refused while a Claude is running it: stop that one first.
+    """
+    from . import sessions_ops
+    from .workspace import agents
+
+    try:
+        _sid, _root, rows = _sessions_select([id], None, True)
+        live = agents.live_agents()
+        if live is None:
+            return {"ok": False, "error": "`claude agents` failed, so I cannot tell if it runs"}
+        if any(i in live and live[i].pid for i in rows[0].ids):
+            return {"ok": False, "error": "a Claude is running it: stop that one first"}
+        moved = sessions_ops.move(rows[0], to_dir)
+    except sessions_ops.SessionsError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "to": moved.to, "files": moved.files, "ids": list(moved.ids)}
 
 
 @mcp.tool()

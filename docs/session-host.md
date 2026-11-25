@@ -49,6 +49,24 @@ cabildo host kill <id>
 
 Hangs the session up.
 
+## Use it from an agent
+
+An agent starts and drives other Claudes with these MCP tools:
+
+- `sibling_start(prompt, cwd, permission_mode)`: starts a Claude in the host and returns its id.
+  The prompt is its first message. It is told who started it and to answer with `send`.
+- `sibling_send(id, text)`: types the text into it and presses Enter.
+- `siblings()`: lists the hosted sessions, with `mine` for the ones you started.
+- `sibling_kill(id)`: hangs one up.
+- `host_stop(force)`: stops the host. Refused while sessions run, unless `force`.
+
+Without `permission_mode`, a sibling asks for approval of each tool in its terminal, and only
+someone running `cabildo attach <id>` can answer. At most 4 siblings run at once. A sibling can
+start one more level of siblings, not a third.
+
+`about` shows the build of the host and of the daemon next to the installed one, and says what
+to restart.
+
 ## What it does not do
 
 - Output printed before you attach is not kept. Claude redraws its screen when you attach, so

@@ -2679,6 +2679,8 @@ def cmd_host(args) -> int:
             print(record.id)
         elif args.host_cmd == "kill":
             host_client.kill_session(args.id)
+        elif args.host_cmd == "stop":
+            print(f"stopped; {host_client.stop_host(force=args.force)} session(s) ended")
     except host_client.ClientError as exc:
         print(f"cabildo host: {exc}", file=sys.stderr)
         return 1
@@ -2923,6 +2925,9 @@ def main(argv: list[str] | None = None) -> int:
     ho_new.add_argument("--group", default="", help="the workspace group it joins")
     ho_new.add_argument("command", nargs="*", help="what to run (default: claude)")
     ho_new.set_defaults(fn=cmd_host)
+    ho_stop = ho_sub.add_parser("stop", help="stop the host (refused while sessions run)")
+    ho_stop.add_argument("--force", action="store_true", help="stop it and end its sessions")
+    ho_stop.set_defaults(fn=cmd_host)
     ho_kill = ho_sub.add_parser("kill", help="hang a session up")
     ho_kill.add_argument("id")
     ho_kill.set_defaults(fn=cmd_host)

@@ -58,6 +58,7 @@ _WRAPPER = (
     "os.execvp(sys.argv[1], sys.argv[1:])\n"
 )
 
+_SUBMIT_DELAY = 0.3  # seconds between typed text and its Enter
 _VIEWER_SEND_TIMEOUT = 5.0  # a viewer that cannot take output for this long is dropped
 _LINE_LIMIT = 1 << 20  # a request line longer than this is refused
 
@@ -89,6 +90,7 @@ class Record:
     group: str = ""
     session_id: str = ""  # Claude's own session id, once a viewer has matched it
     adopted: bool = False  # started by another process; the host is not its parent
+    parent: str = ""  # the bus session id of the agent that started it, if an agent did
 
     @staticmethod
     def from_wire(raw: dict) -> Record:
@@ -305,6 +307,7 @@ class Host:
             started_at=time.time(),
             group=str(req.get("group") or ""),
             session_id=str(req.get("session_id") or ""),
+            parent=str(req.get("parent") or ""),
         )
         self._add(_Session(record, master, proc))
         return record
@@ -342,6 +345,26 @@ class Host:
         changes = {k: str(req[k]) for k in ("session_id", "group") if req.get(k) is not None}
         session.record = replace(session.record, **changes)
         return session.record
+
+    def type_in(self, req: dict) -> None:
+        """Type text into a session as a person would, and press Enter unless told not to."""
+        session = self._get(str(req.get("id") or ""))
+        text = str(req.get("text") or "")
+        data = text.encode()
+        if "\n" in text:  # one paste, so the lines are not sent as separate messages
+            data = b"\x1b[200~" + data + b"\x1b[201~"
+        session.write(data)
+        if req.get("submit", True):
+            time.sleep(_SUBMIT_DELAY)  # text and Enter in one write read as a pasted newline
+            session.write(b"\r")
+
+    def shutdown(self, force: bool) -> dict:
+        """Stop serving. Refuses while sessions run, unless ``force``: stopping hangs them up."""
+        live = self.records()
+        if live and not force:
+            raise HostError(f"{len(live)} session(s) still run; stopping the host ends them")
+        self.stop()
+        return {"stopped": len(live)}
 
     def kill(self, req: dict) -> None:
         """Hang the session up, as closing its terminal would."""
@@ -435,6 +458,11 @@ class Host:
             return {"sessions": [asdict(r) for r in self.records()]}
         if op == "tag":
             return {"session": asdict(self.tag(req))}
+        if op == "shutdown":
+            return self.shutdown(bool(req.get("force")))
+        if op == "input":
+            self.type_in(req)
+            return {}
         if op == "kill":
             self.kill(req)
             return {}

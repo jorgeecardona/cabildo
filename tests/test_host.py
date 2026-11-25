@@ -263,3 +263,24 @@ def test_clean_env_drops_only_the_session_markers():
         {"CLAUDE_CODE_SESSION_ID": "x", "CLAUDE_CODE_USE_BEDROCK": "1", "A": "b"}
     )
     assert got == {"CLAUDE_CODE_USE_BEDROCK": "1", "A": "b"}
+
+
+def test_stop_is_refused_while_a_session_runs_unless_forced(session_host, tmp_path):
+    host_client.start_session(["sh", "-c", "read x"], cwd=str(tmp_path))
+    with pytest.raises(host_client.ClientError, match="still run"):
+        host_client.stop_host()
+    assert host_client.stop_host(force=True) == 1
+
+
+def test_stop_ends_an_idle_host(tmp_path, monkeypatch):
+    path = str(tmp_path / "idle.sock")
+    monkeypatch.setenv("CABILDO_HOST_SOCKET", path)
+    h = host.Host(path)
+    thread = threading.Thread(target=h.serve, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 5
+    while not os.path.exists(path) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert host_client.stop_host() == 0
+    thread.join(5)
+    assert not thread.is_alive()

@@ -4,6 +4,15 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- New MCP tools for an agent to run other Claudes: `sibling_start` (a first prompt, a folder, a
+  permission mode), `sibling_send` (type into it and press Enter), `siblings`, `sibling_kill` and
+  `host_stop`. The sibling is owned by the session host and is told who started it. At most 4
+  run at once, and a sibling can start one more level, not a third. `cabildo host stop` does
+  the same from the console.
+
+- New MCP tool `sessions_move(id, to_dir)`: moves a conversation to another folder, so
+  `claude --resume` finds it there. It refuses while a Claude runs it.
+
 - A session started in the session host no longer inherits the variables of the Claude that
   started it (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ID` and the
   channel and token ones). Before, a session started from inside another Claude turned its
