@@ -62,6 +62,7 @@ class RunnerSpec:
 
     name: str
     cwd: Path
+    project: Path | None = None  # a uv project: its locked environment is the kernel's
     python: str | None = None  # a uv ``--python`` request: "3.12" or a path; None = uv's default
     packages: tuple[str, ...] = ()  # extra packages for the environment (uv ``--with``)
     kernelspec: str = "python3"
@@ -145,9 +146,11 @@ def _spec_from(
     where = cwd or merged.get("cwd") or os.getcwd()
     port = merged.get("port", 0)
     python = merged.get("python")
+    project = merged.get("project")
     return RunnerSpec(
         name=name,
         cwd=Path(str(where)).expanduser().resolve(),
+        project=Path(str(project)).expanduser().resolve() if project else None,
         python=str(python) if python else None,
         packages=tuple(str(p) for p in packages) if isinstance(packages, list) else (),
         kernelspec=str(merged.get("kernelspec") or "python3"),
@@ -261,8 +264,11 @@ def _free_port() -> int:
 
 
 def command(spec: RunnerSpec, port: int) -> list[str]:
-    """The command that starts the server: ``uv run`` with its own environment."""
-    cmd = ["uv", "run", "--no-project", "--with", "jupyterlab", "--with", "ipykernel"]
+    """The command that starts the server: ``uv run``, in the project's environment when the
+    spec names a project (the packages are added on top), else in a throwaway one.
+    """
+    cmd = ["uv", "run", *(["--project", str(spec.project)] if spec.project else ["--no-project"])]
+    cmd += ["--with", "jupyterlab", "--with", "ipykernel"]
     for package in spec.packages:
         cmd += ["--with", package]
     if spec.python:
@@ -291,6 +297,8 @@ def start(spec: RunnerSpec, timeout: float = START_SECONDS) -> RunnerState:
         raise RunnerError("uv is not on PATH: cabildo starts runners with `uv run`")
     if not spec.cwd.is_dir():
         raise RunnerError(f"{spec.cwd} is not a directory")
+    if spec.project and not (spec.project / "pyproject.toml").is_file():
+        raise RunnerError(f"{spec.project} has no pyproject.toml: it is not a uv project")
     folder = runner_dir(spec.name)
     folder.mkdir(parents=True, exist_ok=True)
     folder.chmod(0o700)
@@ -474,6 +482,70 @@ def _message(code: str, session: str, msg_id: str) -> str:
     )  # fmt: skip
 
 
+def _startup(state: RunnerState, kernel_id: str, spec: RunnerSpec) -> None:
+    """Run the spec's ``startup`` code on a kernel that was just made."""
+    if not spec.startup:
+        return
+    result = _execute(state, kernel_id, spec.startup, timeout=60.0)
+    if result.status != "ok":
+        raise RunnerError(f"startup code failed: {result.error or result.status}")
+
+
+def _ensure_notebook(state: RunnerState, path: str) -> None:
+    """Make an empty notebook at ``path`` (inside the runner's directory) when it is not there."""
+    url = f"/api/contents/{quote(path)}"
+    try:
+        _http(state, "GET", f"{url}?content=0")
+    except RunnerError as exc:
+        if "404" not in str(exc):
+            raise
+        folder = ""
+        for part in path.split("/")[:-1]:  # the server does not make missing folders
+            folder = f"{folder}/{part}" if folder else part
+            with contextlib.suppress(RunnerError):
+                _http(state, "GET", f"/api/contents/{quote(folder)}?content=0")
+                continue
+            _http(state, "PUT", f"/api/contents/{quote(folder)}", {"type": "directory"})
+        empty = {"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}
+        _http(state, "PUT", url, {"type": "notebook", "format": "json", "content": empty})
+
+
+def notebook_path(notebook: str) -> str:
+    """``notebook`` as a path inside the runner's directory.
+
+    Raises:
+        RunnerError: it is not a relative ``.ipynb`` path that stays inside the directory.
+    """
+    parts = Path(notebook.strip().lstrip("/")).parts
+    if not parts or ".." in parts or not parts[-1].endswith(".ipynb"):
+        raise RunnerError(
+            f"{notebook!r}: use a path to an .ipynb file inside the runner's directory"
+        )
+    return "/".join(parts)
+
+
+def _notebook_kernel(state: RunnerState, spec: RunnerSpec, notebook: str) -> str:
+    """The id of the kernel of ``notebook``'s session: the one JupyterLab shows for it.
+
+    A notebook that has no session gets one (and an empty file when it does not exist), with
+    the spec's ``startup`` run once. A notebook the user opens later in JupyterLab joins this
+    session, so the agent and the user share the variables.
+    """
+    path = notebook_path(notebook)
+    _ensure_notebook(state, path)
+    for session in _http(state, "GET", "/api/sessions"):
+        if session.get("path") == path and session.get("kernel", {}).get("id"):
+            return str(session["kernel"]["id"])
+    body = {
+        "path": path, "name": Path(path).name, "type": "notebook",
+        "kernel": {"name": spec.kernelspec},
+    }  # fmt: skip
+    made = _http(state, "POST", "/api/sessions", body)
+    kernel_id = str(made["kernel"]["id"])
+    _startup(state, kernel_id, spec)
+    return kernel_id
+
+
 def _kernel(state: RunnerState, spec: RunnerSpec) -> RunnerState:
     """The state with a live kernel id; makes the kernel (and runs ``startup``) when needed."""
     if state.kernel_id:
@@ -486,9 +558,7 @@ def _kernel(state: RunnerState, spec: RunnerSpec) -> RunnerState:
     state = replace(state, kernel_id=str(made["id"]))
     _write_state(state)
     if spec.startup:
-        result = _execute(state, spec.startup, timeout=60.0)
-        if result.status != "ok":
-            raise RunnerError(f"startup code failed: {result.error or result.status}")
+        _startup(state, state.kernel_id, spec)
     return state
 
 
@@ -504,12 +574,12 @@ def _drain(ws: WebSocket, msg_id: str, seconds: float = 5.0) -> None:
                 return
 
 
-def _execute(state: RunnerState, code: str, timeout: float) -> RunResult:
-    """Send ``code`` on the runner's kernel and collect what it prints."""
+def _execute(state: RunnerState, kernel_id: str, code: str, timeout: float) -> RunResult:
+    """Send ``code`` on kernel ``kernel_id`` and collect what it prints."""
     msg_id, session = uuid.uuid4().hex, uuid.uuid4().hex
     try:
         ws = WebSocket.connect(
-            f"ws://127.0.0.1:{state.port}/api/kernels/{state.kernel_id}/channels",
+            f"ws://127.0.0.1:{state.port}/api/kernels/{kernel_id}/channels",
             headers={"Authorization": f"token {_token(state.name)}"},
             timeout=CHANNEL_SECONDS,
         )
@@ -551,7 +621,7 @@ def _execute(state: RunnerState, code: str, timeout: float) -> RunResult:
     except TimeoutError:
         status = "timeout"
         with contextlib.suppress(RunnerError):
-            _http(state, "POST", f"/api/kernels/{state.kernel_id}/interrupt")
+            _http(state, "POST", f"/api/kernels/{kernel_id}/interrupt")
         _drain(ws, msg_id)  # a cell sent before the interrupt ends is aborted by the kernel
     except WebSocketError as exc:
         raise RunnerError(f"the kernel channel broke: {exc}") from exc
@@ -561,8 +631,11 @@ def _execute(state: RunnerState, code: str, timeout: float) -> RunResult:
     return RunResult(status=status, text=text, error=error, images=images, truncated=cut)
 
 
-def run(name: str, code: str, timeout: float = 30.0) -> RunResult:
+def run(name: str, code: str, timeout: float = 30.0, notebook: str | None = None) -> RunResult:
     """Run ``code`` on runner ``name``'s kernel. One cell at a time per runner.
+
+    With ``notebook`` (a path inside the runner's directory) the kernel is that notebook's
+    session, the one JupyterLab opens for it. Without it, the runner's own kernel.
 
     Raises:
         RunnerError: the runner is not running, or the server answered wrongly.
@@ -576,8 +649,10 @@ def run(name: str, code: str, timeout: float = 30.0) -> RunResult:
     folder = runner_dir(name)
     with (folder / "run.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)  # a kernel runs one cell at a time: wait for the other
+        if notebook:
+            return _execute(state, _notebook_kernel(state, spec, notebook), code, timeout)
         state = _kernel(state, spec)
-        return _execute(state, code, timeout)
+        return _execute(state, state.kernel_id, code, timeout)
 
 
 def main() -> int:  # pragma: no cover (a manual probe)

@@ -4,6 +4,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- A runner can use a uv project's environment: `project = "~/dir"` in `[jupyter.runners.<name>]`
+  runs the kernel with the project's locked packages. `jupyter_run(notebook="a/b.ipynb")` and
+  `cabildo jupyter run --notebook` run on that notebook's kernel session, so the notebook you open
+  in JupyterLab shares the agent's variables. The notebook file is made when it is missing.
+
 - Jupyter runners can be paused: `cabildo jupyter pause|resume NAME` and the `jupyter_pause` tool
   stop a runner and its kernels using the CPU and keep their memory. The workspace shows a
   `runners` group in the left panel (CPU and memory per runner) and a runners screen on `J` with

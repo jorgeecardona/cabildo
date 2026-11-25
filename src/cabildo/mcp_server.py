@@ -1772,18 +1772,23 @@ def jupyter_start(runner: str, cwd: str | None = None) -> dict[str, Any]:
 
 
 @mcp.tool()
-def jupyter_run(runner: str, code: str, timeout: float = 30.0) -> dict[str, Any]:
+def jupyter_run(
+    runner: str, code: str, timeout: float = 30.0, notebook: str | None = None
+) -> dict[str, Any]:
     """Run Python code on a running Jupyter runner and return what it printed.
 
-    The kernel keeps its variables between calls and shares them with a browser that opened the
-    runner. One cell runs at a time per runner: a second call waits. After ``timeout`` seconds
+    Without ``notebook`` the code runs on the runner's own kernel. With ``notebook`` (a path
+    inside the runner's directory, such as ``analysis/plots.ipynb``) it runs on that notebook's
+    kernel: the file is made when missing, and the user who opens it with ``jupyter_open``
+    shares the variables. The kernel keeps its variables between calls. One cell runs at a time
+    per runner: a second call waits. After ``timeout`` seconds
     the cell is interrupted and ``status`` is ``timeout``. Text over 8000 characters is cut in
     the middle. This runs code as the user, with no sandbox.
     """
     from . import jupyter
 
     try:
-        r = jupyter.run(runner, code, timeout)
+        r = jupyter.run(runner, code, timeout, notebook)
     except jupyter.RunnerError as e:
         return {"ok": False, "error": str(e)}
     return {

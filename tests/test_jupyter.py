@@ -248,3 +248,74 @@ def test_pause_stops_the_tree_and_resume_runs_it_again(
     finally:
         jupyter.stop("nap")
         shell.wait(timeout=5)
+
+
+def test_a_project_runner_uses_the_projects_environment(home: Path, tmp_path: Path) -> None:
+    (home / "config.toml").write_text(f'[jupyter.runners.p]\nproject = "{tmp_path}"\n')
+    spec = jupyter.resolve("p", str(tmp_path))
+    assert spec.project == tmp_path.resolve()
+    cmd = jupyter.command(spec, 1)
+    assert cmd[:4] == ["uv", "run", "--project", str(tmp_path.resolve())]
+    assert "--no-project" not in cmd and "jupyterlab" in cmd
+    with pytest.raises(jupyter.RunnerError, match="not a uv project"):
+        jupyter.start(spec)
+
+
+@pytest.mark.parametrize("bad", ["", "a.py", "../x.ipynb", "a/../../x.ipynb"])
+def test_a_notebook_path_must_stay_inside_the_directory(bad: str) -> None:
+    with pytest.raises(jupyter.RunnerError, match="inside the runner's directory"):
+        jupyter.notebook_path(bad)
+    assert jupyter.notebook_path("/sub/a.ipynb") == "sub/a.ipynb"
+
+
+class FakeServer:
+    """Scripted answers for the runner's HTTP calls; records what was asked."""
+
+    def __init__(self, sessions: list[dict], missing: bool = False) -> None:
+        self.sessions, self.missing, self.calls = sessions, missing, []
+
+    def __call__(self, _state, method, path, body=None, timeout=10.0):
+        self.calls.append((method, path, body))
+        if method == "GET" and path.startswith("/api/contents/") and self.missing:
+            raise jupyter.RunnerError(f"{method} {path}: HTTP 404")
+        if method == "GET" and path == "/api/sessions":
+            return self.sessions
+        if method == "POST" and path == "/api/sessions":
+            return {"kernel": {"id": "k-new"}}
+        return {}
+
+
+def test_a_notebook_with_a_session_runs_on_that_sessions_kernel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    server = FakeServer([{"path": "a/n.ipynb", "kernel": {"id": "k-lab"}}])
+    monkeypatch.setattr(jupyter, "_http", server)
+    state = jupyter.RunnerState("r", 1, 1, str(tmp_path), 0.0)
+    spec = jupyter.RunnerSpec("r", tmp_path)
+    assert jupyter._notebook_kernel(state, spec, "a/n.ipynb") == "k-lab"
+    assert not [c for c in server.calls if c[0] in ("POST", "PUT")]  # nothing was made
+
+
+def test_a_new_notebook_gets_folders_a_file_a_session_and_the_startup_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    server = FakeServer([], missing=True)
+    ran: list[tuple[str, str]] = []
+    monkeypatch.setattr(jupyter, "_http", server)
+    monkeypatch.setattr(
+        jupyter,
+        "_execute",
+        lambda _s, kernel, code, timeout: ran.append((kernel, code)) or jupyter.RunResult("ok", ""),
+    )
+    state = jupyter.RunnerState("r", 1, 1, str(tmp_path), 0.0)
+    spec = jupyter.RunnerSpec("r", tmp_path, startup="import math")
+    assert jupyter._notebook_kernel(state, spec, "a/b/n.ipynb") == "k-new"
+    puts = [(c[1], (c[2] or {}).get("type")) for c in server.calls if c[0] == "PUT"]
+    assert puts == [
+        ("/api/contents/a", "directory"),
+        ("/api/contents/a/b", "directory"),
+        ("/api/contents/a/b/n.ipynb", "notebook"),
+    ]
+    posted = next(c for c in server.calls if c[0] == "POST")
+    assert posted[2]["path"] == "a/b/n.ipynb" and posted[2]["type"] == "notebook"
+    assert ran == [("k-new", "import math")]

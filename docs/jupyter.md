@@ -15,6 +15,7 @@ tools. You open the same kernel in your browser.
 
    ```bash
    cabildo jupyter run analysis "x = 6 * 7; print(x)"
+   cabildo jupyter run analysis "print(x)" --notebook notes/plots.ipynb
    ```
 
 3. Open it in your browser (JupyterLab, or one notebook):
@@ -62,6 +63,7 @@ code as you.
 [jupyter]                      # defaults for every runner
 python = "3.12"                # uv --python: a version or an interpreter path
 packages = ["numpy", "pandas"] # added to the environment
+project = "~/stuff/projects/crm" # a uv project: its locked environment is the kernel's
 
 [jupyter.runners.analysis]     # one named runner
 cwd = "~/stuff/projects/crm"   # a session's cwd wins over this
@@ -76,6 +78,10 @@ DATABASE_URL = "postgresql:///crm"
 
 A name that is not in the config gets the `[jupyter]` defaults.
 
+`project` makes the kernel run in a uv project's own locked environment (`uv run --project`), so
+`import` finds the project's packages and its versions. `packages` are added on top. The folder
+needs a `pyproject.toml`.
+
 ## Cells
 
 - One cell runs at a time per runner. A second call waits.
@@ -83,8 +89,13 @@ A name that is not in the config gets the `[jupyter]` defaults.
   `status = "timeout"` with the output so far.
 - Output over 8000 characters is cut in the middle.
 - An image output is counted in `images` and not returned yet.
-- The kernel keeps its variables between calls. A notebook that you open in the browser on the
-  same kernel sees them. Cells that an agent runs do not appear in an open notebook.
+- Without `notebook`, a cell runs on the runner's own kernel. It keeps its variables between
+  calls, and no notebook shows it.
+- With `notebook="analysis/plots.ipynb"` (a path inside the runner's directory), a cell runs on
+  that notebook's kernel session. The file and its folders are made when missing, and `startup`
+  runs once when the session is made. When you open that notebook with `cabildo jupyter open`
+  (or `jupyter_open`), JupyterLab joins the same session: you and the agent share the variables.
+  The cells an agent runs still do not appear in the open notebook.
 
 ## The link and the token
 

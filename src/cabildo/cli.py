@@ -1738,7 +1738,8 @@ def cmd_jupyter(args) -> int:
             found = jupyter.open_link(args.name, args.code, launch=not args.print_only)
             print(f"{found['url']}\n{found['link']}")
         else:  # run
-            result = jupyter.run(args.name, args.code or sys.stdin.read(), args.timeout)
+            code = args.code or sys.stdin.read()
+            result = jupyter.run(args.name, code, args.timeout, args.notebook)
             print(result.text, end="")
             if result.error:
                 print(result.error, file=sys.stderr)
@@ -2883,6 +2884,7 @@ def main(argv: list[str] | None = None) -> int:
         "--print", dest="print_only", action="store_true", help="open: only print the link"
     )
     jp.add_argument("--cwd", help="start: the directory the runner works in (default: here)")
+    jp.add_argument("--notebook", help="run: a .ipynb path in the runner's directory (its kernel)")
     jp.add_argument("--timeout", type=float, default=30.0, help="run: seconds to wait (30)")
     jp.set_defaults(fn=cmd_jupyter)
 
