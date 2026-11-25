@@ -365,6 +365,8 @@ class Host:
                 try:
                     conn, _ = srv.accept()
                 except TimeoutError:
+                    if not os.path.exists(self.path):  # unlinked: nobody can reach this host
+                        break
                     continue
                 except OSError:
                     break
@@ -437,7 +439,9 @@ class Host:
             self.kill(req)
             return {}
         if op == "ping":
-            return {}
+            from . import __version__
+
+            return {"version": __version__, "pid": os.getpid()}
         raise HostError(f"unknown op {op!r}")
 
     def _attach(self, conn: socket.socket, req: dict) -> None:

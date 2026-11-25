@@ -54,6 +54,14 @@ def is_running() -> bool:
     return bool(reply.get("ok"))
 
 
+def ping() -> dict | None:
+    """The host's answer (``version``, ``pid``), or None when none runs. Starts nothing."""
+    try:
+        return request("ping", start=False)
+    except (ClientError, OSError):
+        return None
+
+
 def ensure_running(timeout: float = 5.0) -> None:
     """Start the host detached if nothing listens, and wait until it answers.
 

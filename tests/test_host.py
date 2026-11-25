@@ -9,6 +9,7 @@ import socket
 import subprocess
 import sys
 import termios
+import threading
 import time
 
 import pytest
@@ -213,3 +214,24 @@ def test_attach_command_relays_a_terminal(session_host, tmp_path):
 def test_the_attach_command_names_the_socket(session_host):
     command = host_client.attach_command("abc")
     assert command[-3:] == ("--socket", session_host.path, "abc")
+
+
+def test_ping_reports_the_build(session_host):
+    from cabildo import __version__
+
+    reply = host_client.ping()
+    assert reply is not None
+    assert (reply["version"], reply["pid"]) == (__version__, os.getpid())
+
+
+def test_a_host_whose_socket_file_is_gone_stops(tmp_path):
+    path = str(tmp_path / "gone.sock")
+    h = host.Host(path)
+    thread = threading.Thread(target=h.serve, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 5
+    while not os.path.exists(path) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    os.unlink(path)  # as a deleted test directory would
+    thread.join(5)
+    assert not thread.is_alive()

@@ -4,6 +4,12 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- New MCP tool `about`: the version of the server, the installed one, the daemon's and the
+  session host's builds, the paths and sockets, how many sessions the host owns, the help
+  topics, and a `restart` list with the command for each process that runs older than the
+  install. It starts nothing. A session host that no longer has its socket file now stops
+  by itself, so a host left behind by a deleted directory does not run for ever.
+
 - A runner can use a uv project's environment: `project = "~/dir"` in `[jupyter.runners.<name>]`
   runs the kernel with the project's locked packages. `jupyter_run(notebook="a/b.ipynb")` and
   `cabildo jupyter run --notebook` run on that notebook's kernel session, so the notebook you open

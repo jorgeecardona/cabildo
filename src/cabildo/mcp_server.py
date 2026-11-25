@@ -302,6 +302,18 @@ def version() -> dict[str, Any]:
 
 
 @mcp.tool()
+def about() -> dict[str, Any]:
+    """What this cabildo is: the version of this server and the installed one, the daemon's and
+    the session host's builds, the paths and sockets, how many sessions the host owns, the help
+    topics, and `restart`: what runs older than what is installed, with the command that fixes it.
+    Read-only: it starts nothing.
+    """
+    from . import about as about_mod
+
+    return about_mod.as_dict(about_mod.gather())
+
+
+@mcp.tool()
 def set_handle(handle: str) -> dict[str, Any]:
     """Set a friendly handle for this session (e.g. 'backend-refactor') so other
     agents can address and recognize you instead of a raw session id.
