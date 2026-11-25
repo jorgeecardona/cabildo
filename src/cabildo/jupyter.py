@@ -19,6 +19,7 @@ repo's config is never read, because a runner runs code as you.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import fcntl
 import html
@@ -29,6 +30,7 @@ import secrets
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import time
@@ -48,6 +50,8 @@ from .wsclient import WebSocket, WebSocketError
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 START_SECONDS = 180.0  # the first start resolves packages with uv
 TEXT_LIMIT = 8000
+KEEP_RUNS = 200  # executions whose files a runner keeps
+_PNG = b"\x89PNG\r\n\x1a\n"
 CHANNEL_SECONDS = 90.0  # the channel answers once the kernel is up: a new kernel is slow
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
@@ -97,14 +101,28 @@ class RunnerRow:
 
 
 @dataclass(frozen=True)
+class OutFile:
+    """A rich output of a cell, saved as a file an agent can read (``Read`` shows an image)."""
+
+    path: str
+    mime: str
+    width: int = 0  # pixels, for a PNG
+    height: int = 0
+    kind: str = ""  # "plotly" for an HTML figure
+
+
+@dataclass(frozen=True)
 class RunResult:
     """What a cell printed and how it ended."""
 
     status: str  # ok | error | timeout
     text: str
     error: str = ""  # ``ename: evalue`` and the last traceback lines
-    images: int = 0  # how many image outputs the cell made (not returned yet)
+    images: tuple[OutFile, ...] = ()
+    html: tuple[OutFile, ...] = ()  # plotly figures; other HTML (dataframes) is left out
     truncated: bool = False
+    full_text: str = ""  # a file with the whole text, when ``text`` was cut
+    execution_count: int = 0  # the kernel's ``In [n]``; 0 when it did not say
 
 
 # --------------------------------------------------------------------------- #
@@ -463,6 +481,54 @@ def clip(text: str, limit: int = TEXT_LIMIT) -> tuple[str, bool]:
     return f"{text[:half]}\n... [{len(text) - limit} characters cut] ...\n{text[-half:]}", True
 
 
+class _Outputs:
+    """The files one cell makes, in ``<runner>/out/<time>-<id>/``. The folder is made on the
+    first file, so a cell that prints text leaves nothing behind.
+    """
+
+    def __init__(self, name: str, msg_id: str) -> None:
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        self.folder = runner_dir(name) / "out" / f"{stamp}-{msg_id[:6]}"
+        self.images: list[OutFile] = []
+        self.html: list[OutFile] = []
+
+    def _write(self, suffix: str, data: bytes) -> Path:
+        if not self.folder.exists():
+            self.folder.mkdir(parents=True)
+            _prune(self.folder.parent)
+        n = len(self.images) + len(self.html) + 1
+        path = self.folder / f"{n:02d}{suffix}"
+        path.write_bytes(data)
+        return path
+
+    def add(self, data: dict[str, Any]) -> bool:
+        """Save the image or plotly figure in a display ``data`` bundle; False when none."""
+        for mime, suffix in (("image/png", ".png"), ("image/jpeg", ".jpg")):
+            if isinstance(data.get(mime), str):
+                raw = base64.b64decode(data[mime])
+                w, h = struct.unpack(">II", raw[16:24]) if raw[:8] == _PNG else (0, 0)
+                self.images.append(OutFile(str(self._write(suffix, raw)), mime, w, h))
+                return True
+        if isinstance(data.get("image/svg+xml"), str):
+            path = self._write(".svg", data["image/svg+xml"].encode())
+            self.images.append(OutFile(str(path), "image/svg+xml"))
+            return True
+        page = data.get("text/html")
+        if isinstance(page, str) and "plotly" in page.lower():
+            self.html.append(
+                OutFile(str(self._write(".html", page.encode())), "text/html", kind="plotly")
+            )
+            return True
+        return False
+
+
+def _prune(out: Path, keep: int = KEEP_RUNS) -> None:
+    """Remove the oldest execution folders of ``out`` beyond ``keep``."""
+    old = sorted(p for p in out.iterdir() if p.is_dir())[:-keep]
+    for folder in old:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
 def _message(code: str, session: str, msg_id: str) -> str:
     return json.dumps(
         {
@@ -586,7 +652,8 @@ def _execute(state: RunnerState, kernel_id: str, code: str, timeout: float) -> R
     except (WebSocketError, TimeoutError) as exc:
         raise RunnerError(f"cannot open the kernel channel: {exc}") from exc
     parts: list[str] = []
-    error, images = "", 0
+    error, count = "", 0
+    outputs = _Outputs(state.name, msg_id)
     idle = replied = False
     status = "ok"
     deadline = time.monotonic() + timeout
@@ -605,8 +672,8 @@ def _execute(state: RunnerState, kernel_id: str, code: str, timeout: float) -> R
                 parts.append(content.get("text", ""))
             elif kind in ("execute_result", "display_data"):
                 data = content.get("data", {})
-                images += sum(1 for k in data if k.startswith("image/"))
-                if "text/plain" in data and not any(k.startswith("image/") for k in data):
+                made = outputs.add(data)
+                if "text/plain" in data and not made:
                     parts.append(str(data["text/plain"]) + "\n")
             elif kind == "error":
                 tail = "\n".join(content.get("traceback", [])[-20:])
@@ -616,6 +683,7 @@ def _execute(state: RunnerState, kernel_id: str, code: str, timeout: float) -> R
                 idle = True
             elif kind == "execute_reply":
                 replied = True
+                count = int(content.get("execution_count") or 0)
                 if content.get("status") == "aborted":
                     status, error = "error", "aborted: the kernel was interrupted"
     except TimeoutError:
@@ -627,8 +695,15 @@ def _execute(state: RunnerState, kernel_id: str, code: str, timeout: float) -> R
         raise RunnerError(f"the kernel channel broke: {exc}") from exc
     finally:
         ws.close()
-    text, cut = clip(_ANSI.sub("", "".join(parts)))
-    return RunResult(status=status, text=text, error=error, images=images, truncated=cut)
+    whole = _ANSI.sub("", "".join(parts))
+    text, cut = clip(whole)
+    full = ""
+    if cut:
+        full = str(outputs._write(".txt", whole.encode()))
+    return RunResult(
+        status=status, text=text, error=error, images=tuple(outputs.images),
+        html=tuple(outputs.html), truncated=cut, full_text=full, execution_count=count,
+    )  # fmt: skip
 
 
 def run(name: str, code: str, timeout: float = 30.0, notebook: str | None = None) -> RunResult:
@@ -653,6 +728,61 @@ def run(name: str, code: str, timeout: float = 30.0, notebook: str | None = None
             return _execute(state, _notebook_kernel(state, spec, notebook), code, timeout)
         state = _kernel(state, spec)
         return _execute(state, state.kernel_id, code, timeout)
+
+
+def _find_kernel(state: RunnerState, notebook: str | None) -> str:
+    """The kernel id to interrupt or restart: the notebook's session, else the runner's own.
+    Empty when there is none yet (nothing was run).
+    """
+    if not notebook:
+        return state.kernel_id
+    path = notebook_path(notebook)
+    for session in _http(state, "GET", "/api/sessions"):
+        if session.get("path") == path and session.get("kernel", {}).get("id"):
+            return str(session["kernel"]["id"])
+    return ""
+
+
+def interrupt(name: str, notebook: str | None = None) -> bool:
+    """Interrupt the cell that a runner's kernel (or a notebook's) is running.
+
+    It does not wait for the lock of ``run``: a hung cell holds it. False when there is no kernel.
+
+    Raises:
+        RunnerError: the runner is not running.
+    """
+    state = running(name)
+    if state is None:
+        raise RunnerError(f"runner {name!r} is not running")
+    kernel_id = _find_kernel(state, notebook)
+    if not kernel_id:
+        return False
+    _http(state, "POST", f"/api/kernels/{kernel_id}/interrupt")
+    return True
+
+
+def restart(name: str, notebook: str | None = None) -> bool:
+    """Restart a runner's kernel (or a notebook's): its variables are lost, ``startup`` runs again.
+
+    A cell that is running ends. False when there is no kernel yet.
+
+    Raises:
+        RunnerError: the runner is not running, or paused.
+    """
+    state = running(name)
+    if state is None:
+        raise RunnerError(f"runner {name!r} is not running")
+    if state.paused:
+        raise RunnerError(f"runner {name!r} is paused: resume it first")
+    kernel_id = _find_kernel(state, notebook)
+    if not kernel_id:
+        return False
+    _http(state, "POST", f"/api/kernels/{kernel_id}/restart", timeout=60.0)
+    spec = resolve(name, state.cwd)
+    with (runner_dir(name) / "run.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        _startup(state, kernel_id, spec)
+    return True
 
 
 def main() -> int:  # pragma: no cover (a manual probe)

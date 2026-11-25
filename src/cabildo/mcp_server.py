@@ -1911,10 +1911,16 @@ def jupyter_run(
     inside the runner's directory, such as ``analysis/plots.ipynb``) it runs on that notebook's
     kernel: the file is made when missing, and the user who opens it with ``jupyter_open``
     shares the variables. The kernel keeps its variables between calls. One cell runs at a time
-    per runner: a second call waits. After ``timeout`` seconds
-    the cell is interrupted and ``status`` is ``timeout``. Text over 8000 characters is cut in
-    the middle. This runs code as the user, with no sandbox.
+    per runner: a second call waits. After ``timeout`` seconds the cell is interrupted and
+    ``status`` is ``timeout``. This runs code as the user, with no sandbox.
+
+    Plots do not come back as pixels: each image is saved as a file and ``images`` lists its
+    ``path`` (call ``Read`` on a PNG to see it). ``html`` lists saved plotly figures. Text over
+    8000 characters is cut in the middle: ``full_text`` is a file with all of it.
+    ``execution_count`` is the kernel's ``In [n]``.
     """
+    from dataclasses import asdict
+
     from . import jupyter
 
     try:
@@ -1926,8 +1932,11 @@ def jupyter_run(
         "status": r.status,
         "text": r.text,
         "error": r.error,
-        "images": r.images,
+        "execution_count": r.execution_count,
+        "images": [asdict(i) for i in r.images],
+        "html": [asdict(h) for h in r.html],
         "truncated": r.truncated,
+        "full_text": r.full_text,
     }
 
 
@@ -1945,6 +1954,36 @@ def jupyter_open(runner: str, notebook: str | None = None, launch: bool = False)
 
     try:
         return {"ok": True, **jupyter.open_link(runner, notebook, launch=launch)}
+    except jupyter.RunnerError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@mcp.tool()
+def jupyter_interrupt(runner: str, notebook: str | None = None) -> dict[str, Any]:
+    """Interrupt the cell a Jupyter runner (or one notebook of it) is running, like Ctrl-C.
+
+    Use it for a cell that hangs or runs too long. It does not wait for the cell. Variables
+    stay. ``changed`` is false when the runner has no kernel yet.
+    """
+    from . import jupyter
+
+    try:
+        return {"ok": True, "changed": jupyter.interrupt(runner, notebook)}
+    except jupyter.RunnerError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@mcp.tool()
+def jupyter_restart(runner: str, notebook: str | None = None) -> dict[str, Any]:
+    """Restart the kernel of a Jupyter runner (or of one notebook): variables are lost.
+
+    The runner's ``startup`` code runs again. A running cell ends. Use it when the state is
+    broken, after installing a package, or to check that a notebook runs from the top.
+    """
+    from . import jupyter
+
+    try:
+        return {"ok": True, "changed": jupyter.restart(runner, notebook)}
     except jupyter.RunnerError as e:
         return {"ok": False, "error": str(e)}
 

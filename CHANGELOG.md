@@ -4,6 +4,12 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- `jupyter_run` returns plots as files: `images` lists each saved PNG with its path and size (an
+  agent reads it with `Read`), `html` lists plotly figures, `full_text` is a file with the whole
+  text when it was cut, and `execution_count` is the kernel's `In [n]`. New `jupyter_interrupt`
+  and `jupyter_restart` tools, `cabildo jupyter interrupt|restart`, and `r` and `i` on the
+  workspace runners screen.
+
 - New MCP tool `clipboard_copy(text)` and command `cabildo clip [TEXT]` copy text to the system
   clipboard on Linux (`xclip`, `xsel`, `wl-copy`) and macOS (`pbcopy`).
 

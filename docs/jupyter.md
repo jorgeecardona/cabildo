@@ -25,6 +25,11 @@ tools. You open the same kernel in your browser.
    cabildo jupyter open analysis notebooks/plots.ipynb
    ```
 
+`cabildo jupyter interrupt analysis` stops the running cell, like Ctrl-C, and keeps the variables.
+`cabildo jupyter restart analysis` restarts the kernel: variables are lost and `startup` runs
+again. Both take `--notebook PATH` for a notebook's kernel. The tools are `jupyter_interrupt` and
+`jupyter_restart`.
+
 `cabildo jupyter status` lists the runners. `cabildo jupyter stop analysis` ends one with its
 kernel. `cabildo jupyter pause analysis` stops it using the CPU and keeps its memory (the kernel
 and its variables stay); `cabildo jupyter resume analysis` continues it. A paused runner refuses
@@ -39,6 +44,8 @@ and memory of the server with its kernels. Press `J` for the runners screen:
 |---|---|
 | `k` | stop the selected runner |
 | `p` | pause it, or resume it when paused |
+| `r` | restart its kernel |
+| `i` | interrupt the running cell |
 | `o` or Enter | open it in your browser |
 | `q` or Esc | close the screen |
 
@@ -88,7 +95,12 @@ needs a `pyproject.toml`.
 - After `timeout` seconds (default 30) the cell is interrupted and the result has
   `status = "timeout"` with the output so far.
 - Output over 8000 characters is cut in the middle.
-- An image output is counted in `images` and not returned yet.
+- A plot is not returned as pixels. Each image is saved in
+  `~/.cabildo/jupyter/<runner>/out/<time>-<id>/01.png`, and `jupyter_run` lists it in `images` with
+  its `path`, `mime`, `width` and `height`. An agent calls `Read` on the PNG to see it. A plotly
+  figure is saved as HTML and listed in `html`. A dataframe comes back as its text.
+- When the text is cut, `full_text` is a file with all of it. `execution_count` is the kernel's
+  `In [n]`. A runner keeps the files of its last 200 executions.
 - Without `notebook`, a cell runs on the runner's own kernel. It keeps its variables between
   calls, and no notebook shows it.
 - With `notebook="analysis/plots.ipynb"` (a path inside the runner's directory), a cell runs on

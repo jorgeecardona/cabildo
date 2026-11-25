@@ -1745,6 +1745,9 @@ def cmd_jupyter(args) -> int:
             print(f"{args.name}: running on port {state.port} in {state.cwd}")
         elif args.action == "stop":
             print("stopped" if jupyter.stop(args.name) else "was not running")
+        elif args.action in ("restart", "interrupt"):
+            act = jupyter.restart if args.action == "restart" else jupyter.interrupt
+            print("done" if act(args.name, args.notebook) else "no kernel yet")
         elif args.action in ("pause", "resume"):
             act = jupyter.pause if args.action == "pause" else jupyter.resume
             print("done" if act(args.name) else f"nothing to {args.action}")
@@ -1755,6 +1758,10 @@ def cmd_jupyter(args) -> int:
             code = args.code or sys.stdin.read()
             result = jupyter.run(args.name, code, args.timeout, args.notebook)
             print(result.text, end="")
+            for out in (*result.images, *result.html):
+                print(f"[{out.mime}] {out.path}", file=sys.stderr)
+            if result.full_text:
+                print(f"[full text] {result.full_text}", file=sys.stderr)
             if result.error:
                 print(result.error, file=sys.stderr)
             return 0 if result.status == "ok" else 1
@@ -2890,9 +2897,19 @@ def main(argv: list[str] | None = None) -> int:
         "action",
         nargs="?",
         default="status",
-        choices=["status", "start", "stop", "pause", "resume", "open", "run"],
+        choices=[
+            "status",
+            "start",
+            "stop",
+            "pause",
+            "resume",
+            "restart",
+            "interrupt",
+            "open",
+            "run",
+        ],
         help="status (default), start, stop, pause or resume (stop it using the CPU), "
-        "open (in your browser) or run (one cell)",
+        "restart or interrupt its kernel, open (in your browser) or run (one cell)",
     )
     jp.add_argument("name", nargs="?", help="the runner's name (a-z 0-9 _ -)")
     jp.add_argument(
@@ -2904,7 +2921,7 @@ def main(argv: list[str] | None = None) -> int:
         "--print", dest="print_only", action="store_true", help="open: only print the link"
     )
     jp.add_argument("--cwd", help="start: the directory the runner works in (default: here)")
-    jp.add_argument("--notebook", help="run: a .ipynb path in the runner's directory (its kernel)")
+    jp.add_argument("--notebook", help="run, restart, interrupt: a .ipynb path (its kernel)")
     jp.add_argument("--timeout", type=float, default=30.0, help="run: seconds to wait (30)")
     jp.set_defaults(fn=cmd_jupyter)
 

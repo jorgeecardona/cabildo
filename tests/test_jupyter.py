@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import time
@@ -16,6 +18,11 @@ import pytest
 
 from cabildo import jupyter
 from tests.wsserver import frame, read_frame
+
+# a 3x2 PNG header followed by nothing: enough for the size and the bytes
+PNG_B64 = base64.b64encode(
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + struct.pack(">II", 3, 2) + b"\x08\x02\x00\x00\x00"
+).decode()
 
 CONFIG = """
 [jupyter]
@@ -151,14 +158,15 @@ def test_run_collects_stream_result_and_error(serve, monkeypatch: pytest.MonkeyP
         ("status", {"execution_state": "busy"}),
         ("stream", {"name": "stdout", "text": "hi\n"}),
         ("execute_result", {"data": {"text/plain": "42"}}),
-        ("display_data", {"data": {"image/png": "AAAA", "text/plain": "<Figure>"}}),
+        ("display_data", {"data": {"image/png": PNG_B64, "text/plain": "<Figure>"}}),
         ("error", {"ename": "ValueError", "evalue": "bad", "traceback": ["\x1b[31mTrace\x1b[0m", "last"]}),
-        ("execute_reply", {"status": "error"}),
+        ("execute_reply", {"status": "error", "execution_count": 7}),
         ("status", {"execution_state": "idle"}),
     ])  # fmt: skip
     state = _fake_running("r1", int(url.split(":")[2].split("/")[0]), monkeypatch)
     result = jupyter.run("r1", "code", timeout=5)
-    assert (result.status, result.text, result.images) == ("error", "hi\n42\n", 1)
+    assert (result.status, result.text, len(result.images)) == ("error", "hi\n42\n", 1)
+    assert result.images[0].mime == "image/png" and Path(result.images[0].path).read_bytes()
     assert result.error.startswith("ValueError: bad") and "\x1b" not in result.error
     assert state.kernel_id == "k1"
 
@@ -319,3 +327,63 @@ def test_a_new_notebook_gets_folders_a_file_a_session_and_the_startup_code(
     posted = next(c for c in server.calls if c[0] == "POST")
     assert posted[2]["path"] == "a/b/n.ipynb" and posted[2]["type"] == "notebook"
     assert ran == [("k-new", "import math")]
+
+
+def test_a_plot_is_saved_as_a_file_with_its_size(home: Path, monkeypatch) -> None:
+    jupyter.runner_dir("o").mkdir(parents=True)
+    out = jupyter._Outputs("o", "abcdef123")
+    assert out.add({"image/png": PNG_B64, "text/plain": "<Figure>"}) is True
+    assert out.add({"image/svg+xml": "<svg/>"}) is True
+    assert out.add({"text/html": "<script>Plotly.newPlot()</script>"}) is True
+    assert out.add({"text/html": "<table></table>", "text/plain": "df"}) is False  # a dataframe
+    assert out.add({"text/plain": "1"}) is False
+    png = out.images[0]
+    assert (png.mime, png.width, png.height) == ("image/png", 3, 2)
+    assert Path(png.path).name == "01.png" and Path(png.path).read_bytes()[:4] == b"\x89PNG"
+    assert [Path(i.path).name for i in out.images] == ["01.png", "02.svg"]
+    assert [(Path(h.path).name, h.kind) for h in out.html] == [("03.html", "plotly")]
+
+
+def test_a_cell_that_prints_text_leaves_no_folder(serve, monkeypatch: pytest.MonkeyPatch) -> None:
+    url = _kernel_server(serve, [
+        ("stream", {"name": "stdout", "text": "x" * 9000}),
+        ("execute_reply", {"status": "ok", "execution_count": 3}),
+        ("status", {"execution_state": "idle"}),
+    ])  # fmt: skip
+    _fake_running("r9", int(url.split(":")[2].split("/")[0]), monkeypatch)
+    r = jupyter.run("r9", "code", timeout=5)
+    assert (r.status, r.truncated, r.execution_count) == ("ok", True, 3)
+    assert len(r.text) < 9000 and Path(r.full_text).read_text() == "x" * 9000
+    assert Path(r.full_text).parent.parent.name == "out" and not r.images
+
+
+def test_old_executions_are_pruned(home: Path) -> None:
+    out = jupyter.runner_dir("p") / "out"
+    for i in range(7):
+        (out / f"20260101-00000{i}-aaaaaa").mkdir(parents=True)
+    jupyter._prune(out, keep=3)
+    assert sorted(p.name for p in out.iterdir()) == [
+        "20260101-000004-aaaaaa", "20260101-000005-aaaaaa", "20260101-000006-aaaaaa",
+    ]  # fmt: skip
+
+
+def test_interrupt_and_restart_target_the_runners_or_the_notebooks_kernel(
+    monkeypatch: pytest.MonkeyPatch, home: Path
+) -> None:
+    server = FakeServer([{"path": "a/n.ipynb", "kernel": {"id": "k-nb"}}])
+    monkeypatch.setattr(jupyter, "_http", server)
+    state = _fake_running("r8", 1, monkeypatch)  # replaces _http: put the server back
+    monkeypatch.setattr(jupyter, "_http", server)
+    ran: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        jupyter, "_execute",
+        lambda _s, kernel, code, timeout: ran.append((kernel, code)) or jupyter.RunResult("ok", ""),
+    )  # fmt: skip
+    (home / "config.toml").write_text('[jupyter.runners.r8]\nstartup = "import math"\n')
+    assert state.kernel_id == "k1"
+    assert jupyter.interrupt("r8") is True
+    assert ("POST", "/api/kernels/k1/interrupt", None) in server.calls
+    assert jupyter.restart("r8", notebook="a/n.ipynb") is True
+    assert ("POST", "/api/kernels/k-nb/restart", None) in server.calls
+    assert ran == [("k-nb", "import math")]  # startup runs again after a restart
+    assert jupyter.restart("r8", notebook="other.ipynb") is False  # no session yet

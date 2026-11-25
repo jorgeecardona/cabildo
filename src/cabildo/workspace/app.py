@@ -663,6 +663,8 @@ class RunnersScreen(ModalScreen[None]):
         Binding("escape,q,J", "close", "Close"),
         Binding("k", "act('stop')", "Stop"),
         Binding("p", "act('pause')", "Pause / resume"),
+        Binding("r", "act('restart')", "Restart kernel"),
+        Binding("i", "act('interrupt')", "Interrupt"),
         Binding("o,enter", "act('open')", "Open"),
     ]
 
@@ -674,7 +676,7 @@ class RunnersScreen(ModalScreen[None]):
         with Vertical(id="top"):
             yield Static(
                 "Jupyter runners · CPU: % of one core, server and kernels · k stops · "
-                "p pauses or resumes · o opens in the browser · q closes",
+                "p pauses or resumes · r restarts the kernel · i interrupts · o opens in the browser · q closes",
                 id="top-title",
             )
             yield DataTable(id="top-table", cursor_type="row", zebra_stripes=False)
@@ -986,6 +988,10 @@ class SwitcherApp(App[None]):
             try:
                 if action == "stop":
                     jupyter.stop(name)
+                elif action == "restart":
+                    jupyter.restart(name)
+                elif action == "interrupt":
+                    jupyter.interrupt(name)
                 elif action == "pause":
                     row = next((r for r in jupyter.statuses() if r.name == name), None)
                     (jupyter.resume if row and row.paused else jupyter.pause)(name)
