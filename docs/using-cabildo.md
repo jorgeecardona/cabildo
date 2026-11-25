@@ -65,6 +65,18 @@ Several agents often work in one folder. These rules keep their work apart.
 - `ci_run` (a new pipeline) and `ci_play` (a manual job, such as a deploy) need your human's
   approval in a popup.
 
+## Copy to the clipboard
+
+`clipboard_copy(text="...")` puts text on the user's clipboard, on Linux (Wayland or X11) and
+macOS. Ask an agent "copy that command" and it calls the tool. `cabildo clip TEXT` does the same
+from a shell, and reads stdin when it has no text.
+
+- It uses `xclip` or `xsel` when there is an X display, `wl-copy` under Wayland only, and `pbcopy`
+  on macOS. Install one of them if the tool says none is found.
+- The text goes to the clipboard of the machine the cabildo server runs on. Any program of the
+  user can read it, so agents must not copy secrets unless you ask.
+- Limit: 1 MB.
+
 ## Find old sessions
 
 `sessions_list(query="words")` searches the title, the label, the first prompt, the robot name

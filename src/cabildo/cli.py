@@ -1706,6 +1706,20 @@ def cmd_session_ops(args) -> int:
     return 0
 
 
+def cmd_clip(args) -> int:
+    """``cabildo clip [TEXT]``: copy TEXT (or stdin) to the clipboard."""
+    from . import clipboard
+
+    text = " ".join(args.text) if args.text else sys.stdin.read()
+    try:
+        used = clipboard.copy(text)
+    except clipboard.ClipboardError as e:
+        print(f"cabildo clip: {e}", file=sys.stderr)
+        return 1
+    print(f"copied {len(text)} characters with {used}")
+    return 0
+
+
 def cmd_jupyter(args) -> int:
     """``cabildo jupyter start|stop|status|open|run``: Jupyter runners agents can run cells on."""
     from . import jupyter
@@ -2863,6 +2877,10 @@ def main(argv: list[str] | None = None) -> int:
         if name == "trash":
             sp.add_argument("--force", action="store_true", help="skip the made-from check")
         sp.set_defaults(fn=cmd_session_ops)
+
+    clip = sub.add_parser("clip", help="copy text to the clipboard (Linux and macOS)")
+    clip.add_argument("text", nargs="*", help="the text (default: read stdin)")
+    clip.set_defaults(fn=cmd_clip)
 
     jp = sub.add_parser(
         "jupyter",

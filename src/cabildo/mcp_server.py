@@ -1866,6 +1866,23 @@ def _jupyter_cwd(cwd: str | None) -> str:
 
 
 @mcp.tool()
+def clipboard_copy(text: str) -> dict[str, Any]:
+    """Copy ``text`` to the user's clipboard (Linux Wayland or X11, and macOS).
+
+    Use it when the user asks to copy something: a command, a path, a link, a result. It goes
+    to the clipboard of the machine this server runs on, where any program of the user can
+    read it, so never copy a secret unless the user asked for that. Limit: 1 MB.
+    """
+    from . import clipboard
+
+    try:
+        used = clipboard.copy(text)
+    except clipboard.ClipboardError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "tool": used, "chars": len(text)}
+
+
+@mcp.tool()
 def jupyter_start(runner: str, cwd: str | None = None) -> dict[str, Any]:
     """Start a Jupyter runner in a directory, or return it when it already runs.
 

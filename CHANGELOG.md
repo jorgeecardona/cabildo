@@ -4,6 +4,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- New MCP tool `clipboard_copy(text)` and command `cabildo clip [TEXT]` copy text to the system
+  clipboard on Linux (`xclip`, `xsel`, `wl-copy`) and macOS (`pbcopy`).
+
 - New MCP tools for an agent to run other Claudes: `sibling_start` (a first prompt, a folder, a
   permission mode), `sibling_send` (type into it and press Enter), `siblings`, `sibling_kill` and
   `host_stop`. The sibling is owned by the session host and is told who started it. At most 4
