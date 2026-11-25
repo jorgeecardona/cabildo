@@ -79,6 +79,9 @@ PyPI, with its own version. Per the global rule, bump only the patch.
   running. Done-when 5 and 6 are covered with `sh` as the session, not a real `claude`.
 - Changed from the design: the terminal tab runs `cabildo attach <id>`. The extension does not
   implement the host's frames in a VS Code pseudo-terminal.
+- Probe with a real `claude` (25-11-2026): attach, type and read the reply worked. It found two
+  host bugs, fixed in `host.py`: a viewer was dropped 5 seconds after its last key, and a
+  second attach at the same size showed a blank screen.
 - Not done: sidebar tree, gutter markers, toasts, commands (send, release, mark read), starting a
   session from VS Code, the check across a daemon restart, Remote SSH, publishing.
 

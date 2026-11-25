@@ -59,6 +59,7 @@ _WRAPPER = (
 )
 
 _SUBMIT_DELAY = 0.3  # seconds between typed text and its Enter
+_REPAINT_DELAY = 0.3  # seconds a child keeps the smaller size, so that it reads it
 _VIEWER_SEND_TIMEOUT = 5.0  # a viewer that cannot take output for this long is dropped
 _LINE_LIMIT = 1 << 20  # a request line longer than this is refused
 
@@ -149,13 +150,24 @@ class _Viewer:
         self._lock = threading.Lock()
 
     def send(self, kind: int, payload: bytes) -> bool:
-        """Send one frame. False when the viewer is gone or too slow."""
+        """Send one frame. False when the viewer is gone or too slow.
+
+        The time limit is kept here and not with ``settimeout``: the same socket reads the
+        viewer's keys, and a socket timeout would drop a viewer that types nothing.
+        """
+        view = memoryview(pack_frame(kind, payload))
         with self._lock:
-            try:
-                self.conn.settimeout(_VIEWER_SEND_TIMEOUT)
-                self.conn.sendall(pack_frame(kind, payload))
-            except OSError:
-                return False
+            deadline = time.monotonic() + _VIEWER_SEND_TIMEOUT
+            while view:
+                left = max(0.0, deadline - time.monotonic())
+                try:
+                    if not select.select([], [self.conn], [], left)[1]:
+                        return False
+                    view = view[self.conn.send(view, socket.MSG_DONTWAIT) :]
+                except BlockingIOError:
+                    continue
+                except (OSError, ValueError):  # ValueError: another thread closed it
+                    return False
             return True
 
 
@@ -200,11 +212,15 @@ class _Session:
         self.record = replace(self.record, rows=rows, cols=cols)
 
     def repaint(self) -> None:
-        """Make the child redraw: change the size and put it back, so it gets SIGWINCH twice."""
-        rows, cols = self.record.rows, self.record.cols
+        """Make the child redraw: one row less, a pause, then the size again.
+
+        Without the pause the child reads only the final size, sees no change and draws nothing.
+        """
         with contextlib.suppress(OSError):
-            set_size(self.master, max(1, rows - 1), cols)
-            set_size(self.master, rows, cols)
+            set_size(self.master, max(1, self.record.rows - 1), self.record.cols)
+        if not self.ended.wait(_REPAINT_DELAY):  # an ended session's descriptor is closed
+            with contextlib.suppress(OSError):
+                set_size(self.master, self.record.rows, self.record.cols)
 
 
 class Host:
@@ -476,12 +492,12 @@ class Host:
         session = self._get(str(req.get("id") or ""))
         rows, cols = _size(req)
         _reply(conn, {"ok": True, "session": asdict(session.record)})
+        conn.settimeout(None)  # a viewer may stay silent for hours
         viewer = _Viewer(conn)
         with session.lock:
             session.viewers.append(viewer)
         session.resize(rows, cols)
         session.repaint()
-        conn.settimeout(None)
         try:
             while True:
                 frame = read_frame(conn)

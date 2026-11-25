@@ -50,6 +50,47 @@ def test_a_closed_viewer_leaves_the_session_running(session_host, tmp_path):
     assert b"back-again" in read_until(sock, b"back-again")[0]
 
 
+def test_a_viewer_that_types_nothing_for_a_while_stays_attached(
+    session_host, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(host, "_VIEWER_SEND_TIMEOUT", 0.2)
+    record = host_client.start_session(
+        ["sh", "-c", "read go; echo ready; read x; echo got-$x"], cwd=str(tmp_path)
+    )
+    sock = viewer(session_host.path, record.id)
+    type_in(sock, b"go\n")
+    assert b"ready" in read_until(sock, b"ready")[0]  # the host has sent output to this viewer
+    sock.sendall(host.pack_frame(host.RESIZE, host.pack_size(24, 80)))  # it reads again after that
+    time.sleep(0.6)
+    type_in(sock, b"late\n")
+    assert b"got-late" in read_until(sock, b"got-late")[0]
+
+
+def test_attaching_at_the_same_size_makes_the_child_redraw(session_host, tmp_path):
+    # Like Claude, the child redraws only when the size it reads differs from the one it drew.
+    child = (
+        "import os, pathlib, signal, time\n"
+        "drawn = os.get_terminal_size()\n"
+        "def resized(*_):\n"
+        "    global drawn\n"
+        "    size = os.get_terminal_size()\n"
+        "    if size != drawn:\n"
+        "        drawn = size\n"
+        "        print('redraw', flush=True)\n"
+        "signal.signal(signal.SIGWINCH, resized)\n"
+        "pathlib.Path('up').touch()\n"
+        "time.sleep(30)\n"
+    )
+    record = host_client.start_session(
+        [sys.executable, "-c", child], cwd=str(tmp_path), rows=24, cols=80
+    )
+    deadline = time.monotonic() + 10
+    while not (tmp_path / "up").exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    sock = viewer(session_host.path, record.id, rows=24, cols=80)
+    assert b"redraw" in read_until(sock, b"redraw")[0]
+
+
 def test_size_follows_theviewer(session_host, tmp_path):
     record = host_client.start_session(
         ["sh", "-c", "read x; stty size"], cwd=str(tmp_path), rows=30, cols=100

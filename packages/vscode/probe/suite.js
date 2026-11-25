@@ -43,6 +43,15 @@ exports.run = async () => {
     );
     assert.equal(result.sessionRead, "typed in vscode");
 
+    // A viewer must stay attached while nobody types.
+    await new Promise((resolve) => setTimeout(resolve, 8000));
+    assert.equal(terminal.exitStatus, undefined, "the tab closed while idle");
+    terminal.sendText("typed after a pause");
+    const later = path.join(dir, "got2");
+    result.readAfterPause = await until("the session to read the second line", () =>
+      fs.existsSync(later) ? fs.readFileSync(later, "utf8").trim() : "",
+    );
+
     terminal.dispose();
     await until("the tab to close", () => !vscode.window.terminals.includes(terminal));
     result.runningAfterClose = (await listSessions(socket)).some((s) => s.id === id);

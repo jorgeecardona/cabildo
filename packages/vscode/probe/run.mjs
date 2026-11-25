@@ -16,7 +16,7 @@ const cabildo = process.env.CABILDO_BIN ?? "cabildo";
 const env = { ...process.env, CABILDO_HOST_SOCKET: path.join(dir, "host.sock"), PROBE_DIR: dir };
 const host = (...args) => execFileSync(cabildo, ["host", ...args], { env, encoding: "utf8" });
 
-const script = 'echo ready; read line; echo "$line" > got; sleep 60';
+const script = 'echo ready; read line; echo "$line" > got; read line; echo "$line" > got2; sleep 60';
 let code = 1;
 try {
   const id = host("new", "--cwd", dir, "--", "sh", "-c", script).trim();

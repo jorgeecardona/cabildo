@@ -4,6 +4,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- Hosted sessions: a viewer (`cabildo attach`, a workspace pane, the VS Code tab) was
+  disconnected 5 seconds after its last key. It now stays attached. Attaching again at the same
+  window size showed a blank screen; Claude now redraws. Run `cabildo host stop` to start the new
+  host (it ends the hosted sessions).
+
 - A VS Code extension (`packages/vscode/`, not on a marketplace yet): the status bar shows the
   agent count and your unread count, and `Cabildo: Attach to Claude Session` opens a hosted
   session in a terminal tab. See `docs/vscode.md`.
