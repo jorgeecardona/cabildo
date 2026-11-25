@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import select
 import socket
@@ -16,78 +15,50 @@ import pytest
 
 from cabildo import host, host_client
 
-
-def _viewer(path: str, host_id: str, rows: int = 24, cols: int = 80) -> socket.socket:
-    sock = socket.socket(socket.AF_UNIX)
-    sock.settimeout(5)
-    sock.connect(path)
-    sock.sendall(
-        json.dumps({"op": "attach", "id": host_id, "rows": rows, "cols": cols}).encode() + b"\n"
-    )
-    assert host_client._read_line(sock)["ok"]
-    return sock
-
-
-def _read_until(sock: socket.socket, needle: bytes) -> tuple[bytes, int | None]:
-    """Terminal bytes until ``needle`` shows, and the exit code if the session ended first."""
-    seen = b""
-    while needle not in seen:
-        frame = host.read_frame(sock)
-        if frame is None:
-            return seen, None
-        kind, payload = frame
-        if kind == host.DATA:
-            seen += payload
-        elif kind == host.EXIT:
-            return seen, host.unpack_code(payload)
-    return seen, None
-
-
-def _type(sock: socket.socket, text: bytes) -> None:
-    sock.sendall(host.pack_frame(host.DATA, text))
+from .host_helpers import read_until, type_in, viewer
 
 
 def test_start_then_attach_types_into_the_session(session_host, tmp_path):
     record = host_client.start_session(
         ["sh", "-c", "echo ready; read x; echo got-$x"], cwd=str(tmp_path)
     )
-    sock = _viewer(session_host.path, record.id)
-    seen, _ = _read_until(sock, b"ready")
+    sock = viewer(session_host.path, record.id)
+    seen, _ = read_until(sock, b"ready")
     assert b"ready" in seen
-    _type(sock, b"hi\n")
-    seen, code = _read_until(sock, b"got-hi")
+    type_in(sock, b"hi\n")
+    seen, code = read_until(sock, b"got-hi")
     assert b"got-hi" in seen
-    _, code = _read_until(sock, b"never")
+    _, code = read_until(sock, b"never")
     assert code == 0
 
 
 def test_two_viewers_see_the_same_output(session_host, tmp_path):
     record = host_client.start_session(["sh", "-c", "read x; echo seen-$x"], cwd=str(tmp_path))
-    first, second = _viewer(session_host.path, record.id), _viewer(session_host.path, record.id)
-    _type(first, b"both\n")
-    assert b"seen-both" in _read_until(first, b"seen-both")[0]
-    assert b"seen-both" in _read_until(second, b"seen-both")[0]
+    first, second = viewer(session_host.path, record.id), viewer(session_host.path, record.id)
+    type_in(first, b"both\n")
+    assert b"seen-both" in read_until(first, b"seen-both")[0]
+    assert b"seen-both" in read_until(second, b"seen-both")[0]
 
 
 def test_a_closed_viewer_leaves_the_session_running(session_host, tmp_path):
     record = host_client.start_session(["sh", "-c", "read x; echo back-$x"], cwd=str(tmp_path))
-    _viewer(session_host.path, record.id).close()
+    viewer(session_host.path, record.id).close()
     time.sleep(0.2)
     assert [r.id for r in host_client.list_sessions()] == [record.id]
-    sock = _viewer(session_host.path, record.id)
-    _type(sock, b"again\n")
-    assert b"back-again" in _read_until(sock, b"back-again")[0]
+    sock = viewer(session_host.path, record.id)
+    type_in(sock, b"again\n")
+    assert b"back-again" in read_until(sock, b"back-again")[0]
 
 
-def test_size_follows_the_viewer(session_host, tmp_path):
+def test_size_follows_theviewer(session_host, tmp_path):
     record = host_client.start_session(
         ["sh", "-c", "read x; stty size"], cwd=str(tmp_path), rows=30, cols=100
     )
-    sock = _viewer(session_host.path, record.id, rows=40, cols=120)
+    sock = viewer(session_host.path, record.id, rows=40, cols=120)
     sock.sendall(host.pack_frame(host.RESIZE, host.pack_size(50, 132)))
     time.sleep(0.2)
-    _type(sock, b"\n")
-    assert b"50 132" in _read_until(sock, b"50 132")[0]
+    type_in(sock, b"\n")
+    assert b"50 132" in read_until(sock, b"50 132")[0]
 
 
 def test_the_environment_and_directory_are_the_requested_ones(session_host, tmp_path):
@@ -96,7 +67,7 @@ def test_the_environment_and_directory_are_the_requested_ones(session_host, tmp_
         cwd=str(tmp_path),
         env={**os.environ, "FROM_CLIENT": "yes"},
     )
-    seen, _ = _read_until(_viewer(session_host.path, record.id), f"yes {tmp_path}".encode())
+    seen, _ = read_until(viewer(session_host.path, record.id), f"yes {tmp_path}".encode())
     assert f"yes {tmp_path}".encode() in seen
 
 
@@ -113,9 +84,9 @@ def test_adopt_takes_over_a_running_terminal(session_host):
     record = host_client.adopt_session(master, proc.pid, cwd="/x")
     os.close(master)  # the host holds its own copy: this must not hang the child up
     assert record.adopted
-    sock = _viewer(session_host.path, record.id)
-    _type(sock, b"z\n")
-    assert b"adopted-z" in _read_until(sock, b"adopted-z")[0]
+    sock = viewer(session_host.path, record.id)
+    type_in(sock, b"z\n")
+    assert b"adopted-z" in read_until(sock, b"adopted-z")[0]
     proc.wait(5)
 
 
@@ -136,9 +107,9 @@ def test_tag_and_list(session_host, tmp_path):
 
 def test_kill_ends_the_session(session_host, tmp_path):
     record = host_client.start_session(["sh", "-c", "read x"], cwd=str(tmp_path))
-    sock = _viewer(session_host.path, record.id)
+    sock = viewer(session_host.path, record.id)
     host_client.kill_session(record.id)
-    _, code = _read_until(sock, b"never")
+    _, code = read_until(sock, b"never")
     assert code is not None
     deadline = time.monotonic() + 3
     while host_client.list_sessions() and time.monotonic() < deadline:
@@ -253,8 +224,8 @@ def test_a_hosted_session_does_not_inherit_the_starting_claudes_markers(session_
         cwd=str(tmp_path),
         env=env,
     )
-    sock = _viewer(session_host.path, record.id)
-    seen, _ = _read_until(sock, b"[/keep/me]")
+    sock = viewer(session_host.path, record.id)
+    seen, _ = read_until(sock, b"[/keep/me]")
     assert b"[][][/keep/me]" in seen
 
 

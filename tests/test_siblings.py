@@ -10,7 +10,8 @@ import pytest
 
 from cabildo import host, host_client, siblings, store
 from cabildo import mcp_server as srv
-from test_host import _read_until, _viewer
+
+from .host_helpers import read_until, viewer
 
 STAND_IN = """#!/bin/sh
 printf 'ARGS %s\\n' "$*"
@@ -38,25 +39,25 @@ def _no_submit_wait(monkeypatch) -> None:
 
 def test_input_types_into_the_session_and_presses_enter(session_host, tmp_path):
     record = host_client.start_session(["sh", "-c", "read x; echo got-$x"], cwd=str(tmp_path))
-    sock = _viewer(session_host.path, record.id)
+    sock = viewer(session_host.path, record.id)
     host_client.send_input(record.id, "hello")
-    assert b"got-hello" in _read_until(sock, b"got-hello")[0]
+    assert b"got-hello" in read_until(sock, b"got-hello")[0]
 
 
 def test_input_without_submit_leaves_the_text_unsent(session_host, tmp_path):
     record = host_client.start_session(["cat", "-v"], cwd=str(tmp_path))
-    sock = _viewer(session_host.path, record.id)
+    sock = viewer(session_host.path, record.id)
     host_client.send_input(record.id, "draft", submit=False)
-    seen, _ = _read_until(sock, b"draft")
+    seen, _ = read_until(sock, b"draft")
     time.sleep(0.2)
     assert b"draft" in seen
 
 
 def test_several_lines_go_in_as_one_paste(session_host, tmp_path):
     record = host_client.start_session(["cat", "-v"], cwd=str(tmp_path))
-    sock = _viewer(session_host.path, record.id)
+    sock = viewer(session_host.path, record.id)
     host_client.send_input(record.id, "a\nb", submit=False)
-    seen, _ = _read_until(sock, b"b")
+    seen, _ = read_until(sock, b"b")
     assert b"200~a" in seen  # the paste markers, shown by `cat -v`
 
 
@@ -72,8 +73,8 @@ def test_a_sibling_gets_the_brief_the_depth_and_a_clean_environment(
         parent_id="P1", parent_handle="alice", prompt="count the tests", cwd=str(tmp_path)
     )
     assert record.parent == "P1"
-    sock = _viewer(session_host.path, record.id)
-    seen, _ = _read_until(sock, b"CHILD [")
+    sock = viewer(session_host.path, record.id)
+    seen, _ = read_until(sock, b"CHILD [")
     text = seen.decode()
     assert "started by alice (session P1)" in text and "count the tests" in text
     assert "DEPTH 1 CHILD []" in text  # one level down; the caller's marker did not come along
@@ -81,7 +82,7 @@ def test_a_sibling_gets_the_brief_the_depth_and_a_clean_environment(
 
 def test_a_sibling_without_a_prompt_starts_empty(session_host, fake_claude, tmp_path):
     record = siblings.start(parent_id="P1", cwd=str(tmp_path), permission_mode="plan")
-    seen, _ = _read_until(_viewer(session_host.path, record.id), b"CHILD [")
+    seen, _ = read_until(viewer(session_host.path, record.id), b"CHILD [")
     assert b"ARGS --permission-mode plan\r\n" in seen
 
 
@@ -118,10 +119,10 @@ def agent(conn, monkeypatch):
 def test_the_tools_start_send_and_list(session_host, fake_claude, agent, tmp_path):
     started = srv.sibling_start(prompt="hello there", cwd=str(tmp_path))
     assert started["ok"] is True
-    sock = _viewer(session_host.path, started["id"])
-    assert b"started by alice (session A)" in _read_until(sock, b"hello there")[0]
+    sock = viewer(session_host.path, started["id"])
+    assert b"started by alice (session A)" in read_until(sock, b"hello there")[0]
     assert srv.sibling_send(started["id"], "next")["ok"] is True
-    assert b"next" in _read_until(sock, b"next")[0]
+    assert b"next" in read_until(sock, b"next")[0]
     (mine,) = srv.siblings()["sessions"]
     assert (mine["id"], mine["parent"], mine["mine"]) == (started["id"], "A", True)
 
