@@ -1,12 +1,12 @@
 ---
 title: No VS Code extension, so claims, inbox and live sessions are not visible in the editor
-status: open
+status: in-progress
 scope: L
-owner: null
+owner: cute-baymax-2219f
 filed: 2026-11-24
 area: vscode
 verify: probe
-blocked_by: daemon-hosts-claude-sessions-in-ptys-and-clients-attach-by-socket
+blocked_by: null
 fixed_in: null
 ---
 
@@ -69,6 +69,18 @@ PyPI, with its own version. Per the global rule, bump only the patch.
 5. After the blocking issue lands, the terminal tab shows a live session, and typing reaches
    Claude.
 6. A test runs the extension's client code against a fake broker socket.
+
+## First slice (done, 25-11-2026)
+
+- Done: `packages/vscode/` with the status bar (agent count, unread count, tooltip) and
+  `Cabildo: Attach to Claude Session`. See [the docs page](../vscode.md).
+- Probe: `pnpm run probe` in VS Code 1.143.1 read the real daemon, opened a hosted `sh` session
+  in a terminal tab, typed a line that the session read, and closed the tab. The session kept
+  running. Done-when 5 and 6 are covered with `sh` as the session, not a real `claude`.
+- Changed from the design: the terminal tab runs `cabildo attach <id>`. The extension does not
+  implement the host's frames in a VS Code pseudo-terminal.
+- Not done: sidebar tree, gutter markers, toasts, commands (send, release, mark read), starting a
+  session from VS Code, the check across a daemon restart, Remote SSH, publishing.
 
 ## Not doing here
 

@@ -19,3 +19,8 @@ logs/
 .ruff_cache/
 .claude/
 .vscode/
+
+# VS Code extension
+packages/vscode/node_modules/
+packages/vscode/out/
+*.vsix

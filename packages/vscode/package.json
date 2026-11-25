@@ -1,0 +1,85 @@
+{
+  "name": "cabildo",
+  "displayName": "cabildo",
+  "description": "Shows cabildo agents and your unread messages, and opens hosted Claude sessions in a terminal tab.",
+  "version": "0.0.1",
+  "publisher": "jorgeecardona",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://gitlab.com/cardona-oss/cabildo.git",
+    "directory": "packages/vscode"
+  },
+  "engines": {
+    "vscode": "^1.120.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": false
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/src/extension.js",
+  "files": [
+    "out/src",
+    "README.md",
+    "LICENSE"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "cabildo.attach",
+        "title": "Attach to Claude Session",
+        "category": "Cabildo"
+      },
+      {
+        "command": "cabildo.refresh",
+        "title": "Refresh Status",
+        "category": "Cabildo"
+      }
+    ],
+    "configuration": {
+      "title": "cabildo",
+      "properties": {
+        "cabildo.command": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Path of the `cabildo` program. Empty: use the Python that runs the cabildo daemon, else `cabildo` on `PATH`."
+        },
+        "cabildo.refreshSeconds": {
+          "type": "number",
+          "default": 10,
+          "minimum": 2,
+          "description": "Seconds between status bar updates."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "rm -rf out && tsc -p . && node --test \"out/test/*.test.js\"",
+    "package": "pnpm run test && vsce package --no-dependencies --out cabildo.vsix",
+    "probe": "pnpm run build && node probe/run.mjs"
+  },
+  "pnpm": {
+    "ignoredBuiltDependencies": [
+      "@vscode/vsce-sign"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "~22.20.7",
+    "@types/vscode": "~1.120.0",
+    "@vscode/vsce": "4.1.1",
+    "typescript": "7.0.2"
+  }
+}

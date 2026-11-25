@@ -29,3 +29,6 @@ fi
 
 echo "gate: $("$PY" --version) · $(git rev-parse --short HEAD)"
 "$PY" -m pytest -q
+
+# The VS Code extension: type check and tests. Its tests also compare its records with src/.
+(cd packages/vscode && pnpm install --frozen-lockfile --silent && pnpm test)

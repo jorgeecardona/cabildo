@@ -70,6 +70,7 @@ nav:
   - Roles: roles.md
   - Browser: browser.md
   - Session host: session-host.md
+  - VS Code extension: vscode.md
   - Gateway: gateway.md
   - Jupyter runners: jupyter.md
   - Names: names.md

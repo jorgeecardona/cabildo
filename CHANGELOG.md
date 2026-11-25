@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- A VS Code extension (`packages/vscode/`, not on a marketplace yet): the status bar shows the
+  agent count and your unread count, and `Cabildo: Attach to Claude Session` opens a hosted
+  session in a terminal tab. See `docs/vscode.md`.
+
 - Agents edit the cells of a notebook that you have open, and you see it live: new MCP tools
   `jupyter_cells`, `jupyter_edit_cell`, `jupyter_insert_cell`, `jupyter_delete_cell` and
   `jupyter_run_cell`, `jupyter_run(add_cell=True)`, and `cabildo jupyter cells`. Runners install

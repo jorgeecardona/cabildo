@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "module": "node16",
+    "moduleResolution": "node16",
+    "lib": ["es2023"],
+    "types": ["node", "vscode"],
+    "rootDir": ".",
+    "outDir": "out",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true
+  },
+  "include": ["src", "test"]
+}
