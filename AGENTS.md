@@ -19,7 +19,8 @@ messages carry a global `guid` for cross-machine dedup.
 
 `cabildo jupyter` (`jupyter.py`, `wsclient.py`) starts detached Jupyter Servers with `uv run` (no
 Jupyter dependency in cabildo) and runs cells over the server's kernel WebSocket; the MCP tools are
-`jupyter_*`. State is in `~/.cabildo/jupyter/<name>/`. The daemon runs `jupyter.Supervisor.tick`
+`jupyter_*`; `jupyter_cells.py` edits a served notebook's cells through the contents API, and
+`guard.deny_notebook_write` blocks direct writes to it. State is in `~/.cabildo/jupyter/<name>/`. The daemon runs `jupyter.Supervisor.tick`
 every 15 s: it starts `autostart` runners, starts them again when they end, and pauses one over
 `memory_max`.
 

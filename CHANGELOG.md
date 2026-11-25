@@ -4,6 +4,13 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- Agents edit the cells of a notebook that you have open, and you see it live: new MCP tools
+  `jupyter_cells`, `jupyter_edit_cell`, `jupyter_insert_cell`, `jupyter_delete_cell` and
+  `jupyter_run_cell`, `jupyter_run(add_cell=True)`, and `cabildo jupyter cells`. Runners install
+  `jupyter-collaboration` (turn off with `collaboration = false`). An edit waits until you stop
+  typing. The guard denies `Edit`, `Write` and `NotebookEdit` on a notebook that a live runner
+  serves (`[jupyter] guard = false` turns it off).
+
 - The daemon supervises Jupyter runners: `autostart = true` in `[jupyter.runners.<name>]` starts
   the runner and starts it again when it ends or after a reboot, a runner you stopped stays
   stopped, one that ends 5 times in an hour is left alone, and `memory_max = "6G"` pauses a

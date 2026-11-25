@@ -74,6 +74,7 @@ class RunnerSpec:
     env: tuple[tuple[str, str], ...] = ()  # set in the server, so every kernel has them
     startup: str = ""  # code run once each time the runner makes its kernel
     port: int = 0  # 0: a free port
+    collaboration: bool = True  # jupyter-collaboration: edits made through the API show live
     autostart: bool = False  # the daemon starts it, and starts it again when it ends
     memory_max_mb: int = 0  # the daemon pauses the runner above this much memory; 0: no limit
 
@@ -127,6 +128,7 @@ class RunResult:
     truncated: bool = False
     full_text: str = ""  # a file with the whole text, when ``text`` was cut
     execution_count: int = 0  # the kernel's ``In [n]``; 0 when it did not say
+    outputs: tuple[dict[str, Any], ...] = ()  # the cell's outputs as nbformat stores them
 
 
 # --------------------------------------------------------------------------- #
@@ -190,6 +192,7 @@ def _spec_from(
         env=env_pairs,
         startup=str(merged.get("startup") or ""),
         port=port if isinstance(port, int) else 0,
+        collaboration=merged.get("collaboration") is not False,
         autostart=merged.get("autostart") is True,
         memory_max_mb=_megabytes(merged.get("memory_max")),
     )
@@ -314,6 +317,8 @@ def command(spec: RunnerSpec, port: int) -> list[str]:
     """
     cmd = ["uv", "run", *(["--project", str(spec.project)] if spec.project else ["--no-project"])]
     cmd += ["--with", "jupyterlab", "--with", "ipykernel"]
+    if spec.collaboration:
+        cmd += ["--with", "jupyter-collaboration"]
     for package in spec.packages:
         cmd += ["--with", package]
     if spec.python:
@@ -449,6 +454,19 @@ def resume(name: str) -> bool:
     _signal_tree(state.pid, signal.SIGCONT)
     _write_state(replace(state, paused=False))
     return True
+
+
+def live_roots() -> list[tuple[str, Path]]:
+    """``(name, directory)`` of every runner whose server process is alive. Reads the state files
+    and checks the process, with no HTTP call, so the guard hook can ask on every tool call.
+    """
+    found: list[tuple[str, Path]] = []
+    if not root().is_dir():
+        return found
+    for folder in root().iterdir():
+        if NAME_RE.match(folder.name) and (state := _read_state(folder.name)) and _alive(state.pid):
+            found.append((state.name, Path(state.cwd)))
+    return found
 
 
 def statuses() -> list[RunnerRow]:
@@ -770,6 +788,7 @@ def _execute(state: RunnerState, kernel_id: str, code: str, timeout: float) -> R
     parts: list[str] = []
     error, count = "", 0
     outputs = _Outputs(state.name, msg_id)
+    nb_outputs: list[dict[str, Any]] = []  # what a notebook cell keeps
     idle = replied = False
     status = "ok"
     deadline = time.monotonic() + timeout
@@ -786,12 +805,30 @@ def _execute(state: RunnerState, kernel_id: str, code: str, timeout: float) -> R
             kind, content = msg["header"]["msg_type"], msg.get("content", {})
             if kind == "stream":
                 parts.append(content.get("text", ""))
+                last = nb_outputs[-1] if nb_outputs else None
+                if last and last["output_type"] == "stream" and last["name"] == content["name"]:
+                    last["text"] += content.get("text", "")
+                else:
+                    nb_outputs.append(
+                        {"output_type": "stream", "name": content["name"],
+                         "text": content.get("text", "")}
+                    )  # fmt: skip
             elif kind in ("execute_result", "display_data"):
                 data = content.get("data", {})
+                shown: dict[str, Any] = {"output_type": kind, "data": data}
+                shown["metadata"] = content.get("metadata", {})
+                if kind == "execute_result":
+                    shown["execution_count"] = content.get("execution_count")
+                nb_outputs.append(shown)
                 made = outputs.add(data)
                 if "text/plain" in data and not made:
                     parts.append(str(data["text/plain"]) + "\n")
             elif kind == "error":
+                nb_outputs.append(
+                    {"output_type": "error", "ename": content.get("ename", ""),
+                     "evalue": content.get("evalue", ""),
+                     "traceback": content.get("traceback", [])}
+                )  # fmt: skip
                 tail = "\n".join(content.get("traceback", [])[-20:])
                 error = _ANSI.sub("", f"{content.get('ename')}: {content.get('evalue')}\n{tail}")
                 status = "error"
@@ -819,6 +856,7 @@ def _execute(state: RunnerState, kernel_id: str, code: str, timeout: float) -> R
     return RunResult(
         status=status, text=text, error=error, images=tuple(outputs.images),
         html=tuple(outputs.html), truncated=cut, full_text=full, execution_count=count,
+        outputs=tuple(nb_outputs),
     )  # fmt: skip
 
 

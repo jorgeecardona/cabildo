@@ -50,6 +50,7 @@ import shlex
 import sqlite3
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from . import config, store
@@ -830,6 +831,32 @@ def _deny_commit_on_trunk(me: Actor, command: str) -> str | None:
     return None
 
 
+def deny_notebook_write(tool_input: dict[str, Any]) -> str | None:
+    """Deny a direct write to a notebook that a live Jupyter runner serves.
+
+    The user has the notebook open in JupyterLab. A write to the file replaces the shared
+    document and loses what they typed in the last second, so edits go through the cell tools.
+    ``[jupyter] guard = false`` in the machine-wide config turns this off.
+    """
+    path = str(tool_input.get("notebook_path") or tool_input.get("file_path") or "")
+    if not path.endswith(".ipynb"):
+        return None
+    if config.jupyter_table().get("guard") is False:
+        return None
+    from . import jupyter
+
+    target = Path(path).expanduser().resolve()
+    for name, cwd in jupyter.live_roots():
+        if target.is_relative_to(cwd):
+            return (
+                f"{target.name} is served by the Jupyter runner {name!r}: the user may have it "
+                "open, and writing the file would erase their last edits. Use jupyter_edit_cell, "
+                "jupyter_insert_cell, jupyter_delete_cell or jupyter_run_cell "
+                f"(runner={name!r}, notebook={str(target.relative_to(cwd))!r})."
+            )
+    return None
+
+
 def deny_reason(
     conn: sqlite3.Connection,
     session_id: str,
@@ -841,6 +868,8 @@ def deny_reason(
     gated now: file writes (Edit/Write/apply_patch) are coordinated by isolating
     agents in their own worktrees, not by a per-file lease.
     """
+    if tool_name in _WRITE_TOOLS and (reason := deny_notebook_write(tool_input)):
+        return reason
     row = store.get_session(conn, session_id)
     if row is None or not row["project"]:
         return None

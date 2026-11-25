@@ -1746,6 +1746,15 @@ def cmd_jupyter(args) -> int:
             print(f"{args.name}: running on port {state.port} in {state.cwd}")
         elif args.action == "stop":
             print("stopped" if jupyter.stop(args.name) else "was not running")
+        elif args.action == "cells":
+            from . import jupyter_cells
+
+            if not args.notebook:
+                print("cabildo jupyter cells: --notebook PATH is needed", file=sys.stderr)
+                return 2
+            for cell in jupyter_cells.cells(args.name, args.notebook):
+                first = cell.source.splitlines()[0] if cell.source else ""
+                print(f"{cell.index:>3} {cell.id:<9}{cell.cell_type:<9}{first[:70]}")
         elif args.action in ("restart", "interrupt"):
             act = jupyter.restart if args.action == "restart" else jupyter.interrupt
             print("done" if act(args.name, args.notebook) else "no kernel yet")
@@ -2907,10 +2916,12 @@ def main(argv: list[str] | None = None) -> int:
             "restart",
             "interrupt",
             "open",
+            "cells",
             "run",
         ],
         help="status (default), start, stop, pause or resume (stop it using the CPU), "
-        "restart or interrupt its kernel, open (in your browser) or run (one cell)",
+        "restart or interrupt its kernel, open (in your browser), cells (list a notebook's) or "
+        "run (one cell)",
     )
     jp.add_argument("name", nargs="?", help="the runner's name (a-z 0-9 _ -)")
     jp.add_argument(

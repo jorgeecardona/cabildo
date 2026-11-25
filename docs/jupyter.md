@@ -50,7 +50,7 @@ and memory of the server with its kernels. Press `J` for the runners screen:
 | `q` or Esc | close the screen |
 
 An agent does the same with the MCP tools `jupyter_start`, `jupyter_run`, `jupyter_open`,
-`jupyter_list`, `jupyter_pause` and `jupyter_stop`. The session chooses `cwd`. Without it, the runner starts in
+`jupyter_list`, `jupyter_pause` and `jupyter_stop`. The tools that edit cells are below. The session chooses `cwd`. Without it, the runner starts in
 the project root.
 
 ## What starts
@@ -90,6 +90,38 @@ A name that is not in the config gets the `[jupyter]` defaults.
 `project` makes the kernel run in a uv project's own locked environment (`uv run --project`), so
 `import` finds the project's packages and its versions. `packages` are added on top. The folder
 needs a `pyproject.toml`.
+
+## Edit a notebook that you have open
+
+An agent edits the cells of a notebook while you watch it in JupyterLab:
+
+| Tool | Does |
+|---|---|
+| `jupyter_cells` | list the cells: position, id, type, source, output |
+| `jupyter_edit_cell` | replace a cell's source (or its type) |
+| `jupyter_insert_cell` | add a cell at a position; makes the notebook when missing |
+| `jupyter_delete_cell` | remove a cell |
+| `jupyter_run_cell` | run a cell and store its outputs in it |
+| `jupyter_run` with `add_cell` | run code and add it, with its outputs, as a new cell |
+
+A cell is named by its id or its position (`"0"`, `"-1"`). `cabildo jupyter cells NAME --notebook
+PATH` lists them from a shell.
+
+Each edit reads the `.ipynb` through the server, changes it and writes it back. The runner
+installs `jupyter-collaboration`, which sees the new file within about a second and updates your
+open notebook, with no reload. Tested in a real browser: an inserted cell, an edited cell, and the
+outputs and `[1]` of a run all appeared.
+
+- **Your typing is protected.** JupyterLab saves your edits about a second after you stop typing.
+  An edit waits until the file has not changed for 2 seconds, and gives up after 10 seconds with
+  "someone is editing it". It also refuses when the file changed between its read and its write.
+- **The guard.** While a runner serves a notebook, `Edit`, `Write` and `NotebookEdit` on that
+  `.ipynb` are denied, and the message names the cell tools. A direct write would replace what you
+  typed in the last second. Turn the guard off with `[jupyter] guard = false`.
+- **Turn collaboration off** with `collaboration = false` on a runner. Then edits reach the file
+  but an open notebook shows them only after you reload it.
+- A cell that the agent runs with `jupyter_run_cell` runs the source that is in the file, not
+  what you have typed and not yet saved.
 
 ## The daemon keeps your runners
 

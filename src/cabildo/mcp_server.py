@@ -1901,43 +1901,55 @@ def jupyter_start(runner: str, cwd: str | None = None) -> dict[str, Any]:
     return {"ok": True, "runner": runner, "port": state.port, "cwd": state.cwd}
 
 
-@mcp.tool()
-def jupyter_run(
-    runner: str, code: str, timeout: float = 30.0, notebook: str | None = None
-) -> dict[str, Any]:
-    """Run Python code on a running Jupyter runner and return what it printed.
-
-    Without ``notebook`` the code runs on the runner's own kernel. With ``notebook`` (a path
-    inside the runner's directory, such as ``analysis/plots.ipynb``) it runs on that notebook's
-    kernel: the file is made when missing, and the user who opens it with ``jupyter_open``
-    shares the variables. The kernel keeps its variables between calls. One cell runs at a time
-    per runner: a second call waits. After ``timeout`` seconds the cell is interrupted and
-    ``status`` is ``timeout``. This runs code as the user, with no sandbox.
-
-    Plots do not come back as pixels: each image is saved as a file and ``images`` lists its
-    ``path`` (call ``Read`` on a PNG to see it). ``html`` lists saved plotly figures. Text over
-    8000 characters is cut in the middle: ``full_text`` is a file with all of it.
-    ``execution_count`` is the kernel's ``In [n]``.
-    """
-    from dataclasses import asdict
-
-    from . import jupyter
-
-    try:
-        r = jupyter.run(runner, code, timeout, notebook)
-    except jupyter.RunnerError as e:
-        return {"ok": False, "error": str(e)}
+def _run_reply(r: Any) -> dict[str, Any]:
+    """The reply of ``jupyter_run`` and ``jupyter_run_cell`` for a ``RunResult``."""
     return {
         "ok": r.status == "ok",
         "status": r.status,
         "text": r.text,
         "error": r.error,
         "execution_count": r.execution_count,
-        "images": [asdict(i) for i in r.images],
-        "html": [asdict(h) for h in r.html],
+        "images": [_as_dict(i) for i in r.images],
+        "html": [_as_dict(h) for h in r.html],
         "truncated": r.truncated,
         "full_text": r.full_text,
     }
+
+
+@mcp.tool()
+def jupyter_run(
+    runner: str,
+    code: str,
+    timeout: float = 30.0,
+    notebook: str | None = None,
+    add_cell: bool = False,
+) -> dict[str, Any]:
+    """Run Python code on a running Jupyter runner and return what it printed.
+
+    Without ``notebook`` the code runs on the runner's own kernel. With ``notebook`` (a path
+    inside the runner's directory, such as ``analysis/plots.ipynb``) it runs on that notebook's
+    kernel: the file is made when missing, and the user who opens it with ``jupyter_open``
+    shares the variables. With ``add_cell`` too, the code and its outputs are also added to the
+    notebook as a new cell at the end, which the user sees within a second. The kernel keeps its
+    variables between calls. One cell runs at a time per runner: a second call waits. After
+    ``timeout`` seconds the cell is interrupted and ``status`` is ``timeout``. This runs code as
+    the user, with no sandbox.
+
+    Plots do not come back as pixels: each image is saved as a file and ``images`` lists its
+    ``path`` (call ``Read`` on a PNG to see it). ``html`` lists saved plotly figures. Text over
+    8000 characters is cut in the middle: ``full_text`` is a file with all of it.
+    ``execution_count`` is the kernel's ``In [n]``.
+    """
+    from . import jupyter, jupyter_cells
+
+    try:
+        r = jupyter.run(runner, code, timeout, notebook)
+        cell = (
+            jupyter_cells.append_run(runner, notebook, code, r) if add_cell and notebook else None
+        )
+    except jupyter.RunnerError as e:
+        return {"ok": False, "error": str(e)}
+    return _run_reply(r) | ({"cell": _as_dict(cell)} if cell else {})
 
 
 @mcp.tool()
@@ -1956,6 +1968,94 @@ def jupyter_open(runner: str, notebook: str | None = None, launch: bool = False)
         return {"ok": True, **jupyter.open_link(runner, notebook, launch=launch)}
     except jupyter.RunnerError as e:
         return {"ok": False, "error": str(e)}
+
+
+def _as_dict(cell: Any) -> dict[str, Any]:
+    from dataclasses import asdict
+
+    return asdict(cell)
+
+
+@mcp.tool()
+def jupyter_cells(runner: str, notebook: str) -> dict[str, Any]:
+    """List the cells of a notebook that a Jupyter runner serves: position, id, type, source,
+    execution count and the start of the output. Source and output are cut to 300 characters.
+    """
+    from . import jupyter, jupyter_cells
+
+    try:
+        found = jupyter_cells.cells(runner, notebook)
+    except jupyter.RunnerError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "notebook": notebook, "cells": [_as_dict(c) for c in found]}
+
+
+@mcp.tool()
+def jupyter_edit_cell(
+    runner: str, notebook: str, cell: str, source: str, cell_type: str | None = None
+) -> dict[str, Any]:
+    """Replace the source of one cell. ``cell`` is its id or its position ("0", "-1").
+
+    Use this, never ``Edit``, ``Write`` or ``NotebookEdit``, on a notebook that a runner serves:
+    the user has it open in JupyterLab and sees the change within a second, and a write to the
+    file would overwrite what they have typed. It waits until the user stops typing. Outputs of
+    the cell stay until ``jupyter_run_cell`` runs it again. ``cell_type`` changes the type.
+    """
+    from . import jupyter, jupyter_cells
+
+    try:
+        done = jupyter_cells.edit(runner, notebook, cell, source, cell_type)
+    except jupyter.RunnerError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "cell": _as_dict(done)}
+
+
+@mcp.tool()
+def jupyter_insert_cell(
+    runner: str, notebook: str, source: str, position: int = -1, cell_type: str = "code"
+) -> dict[str, Any]:
+    """Add a cell to a notebook that a runner serves: ``position`` 0 is first, -1 (default) last.
+
+    ``cell_type`` is code, markdown or raw. The notebook is made when it does not exist. The user
+    sees the cell within a second. Run it with ``jupyter_run_cell``.
+    """
+    from . import jupyter, jupyter_cells
+
+    try:
+        done = jupyter_cells.insert(runner, notebook, source, position, cell_type)
+    except jupyter.RunnerError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "cell": _as_dict(done)}
+
+
+@mcp.tool()
+def jupyter_delete_cell(runner: str, notebook: str, cell: str) -> dict[str, Any]:
+    """Remove one cell (id or position) from a notebook that a runner serves."""
+    from . import jupyter, jupyter_cells
+
+    try:
+        gone = jupyter_cells.delete(runner, notebook, cell)
+    except jupyter.RunnerError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "deleted": _as_dict(gone)}
+
+
+@mcp.tool()
+def jupyter_run_cell(
+    runner: str, notebook: str, cell: str, timeout: float = 30.0
+) -> dict[str, Any]:
+    """Run one cell (id or position) on the notebook's kernel and store its outputs in the cell.
+
+    The user sees the outputs in the open notebook. The reply is the same as ``jupyter_run``'s
+    (plots are saved as files; ``Read`` a PNG to see it), plus the updated ``cell``.
+    """
+    from . import jupyter, jupyter_cells
+
+    try:
+        result, view = jupyter_cells.run_cell(runner, notebook, cell, timeout)
+    except jupyter.RunnerError as e:
+        return {"ok": False, "error": str(e)}
+    return _run_reply(result) | {"cell": _as_dict(view)}
 
 
 @mcp.tool()
