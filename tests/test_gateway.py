@@ -454,6 +454,29 @@ def test_the_status_endpoint_lists_the_upstreams_and_the_forced_one(fakes, run, 
     assert [u["forced"] for u in data["upstreams"]] == [False, True]
 
 
+def test_the_status_endpoint_says_which_upstream_served_each_session(fakes, run) -> None:
+    fakes["sub"].status = 429
+    gw = gateway.Gateway(settings(fakes), keys=gateway.Keys())
+    port = run(gw)
+    turn = {"model": "claude-opus-5-5", "tools": [{"name": "Read"}]}
+    auth = ("Authorization", "Bearer oauth")
+    post(port, turn, headers=[auth, ("X-Claude-Code-Session-Id", "abc-123")])
+    post(port, {"model": "claude-opus-5-5"}, headers=[auth, ("X-Claude-Code-Session-Id", "side")])
+    post(port, turn, headers=[auth, ("X-Claude-Code-Session-Id", "not an id")])
+    post(port, turn, headers=[auth])
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.request("GET", "/_cabildo/status")
+    assert json.loads(conn.getresponse().read())["sessions"] == {"abc-123": "bed"}
+
+
+def test_the_gateway_forgets_the_oldest_sessions(fakes, monkeypatch) -> None:
+    monkeypatch.setattr(gateway, "MAX_CONVERSATIONS", 2)
+    gw = gateway.Gateway(settings(fakes))
+    for sid in ("a", "b", "a", "c"):
+        gw.note_session(sid, "bed")
+    assert list(gw.sessions()) == ["a", "c"]
+
+
 def test_a_forced_upstream_goes_first_and_the_others_stay_as_fallbacks(
     fakes, run, tmp_path
 ) -> None:

@@ -49,6 +49,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,7 @@ BILLING_COOLDOWN_S = 3600.0
 UNREACHABLE_COOLDOWN_S = 30.0
 MAX_BODY = 64 * 1024 * 1024
 TOKEN_HEADER = "x-cabildo-gateway"  # noqa: S105
+SESSION_HEADER = "x-claude-code-session-id"  # Claude Code sends it with each request
 HANDOFF_ENV = "CABILDO_GATEWAY_FD"
 DRAIN_S = 120.0  # how long a reload waits for open requests before it cuts them
 BACKLOG = 128  # connections that queue while a reload swaps the process
@@ -96,6 +98,7 @@ _THINKING = ("thinking", "redacted_thinking")
 _SIGNATURE_ERROR = re.compile(rb"thinking.{0,12}(block|signature)|redacted_thinking", re.IGNORECASE)
 _AUTHS = ("x-api-key", "bearer", "both")
 _ID = re.compile(r"[A-Za-z0-9_.-]+")
+_SESSION = re.compile(r"[A-Za-z0-9_-]{1,100}")
 _DURATION = re.compile(r"(\d+)([smhd])")
 _UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
@@ -200,6 +203,7 @@ class Job:
     server_tool: bool = False
     stream: bool = False
     conversation: str | None = None  # a key for the conversation: see ``conversation_key``
+    tools: bool = False  # it offers tools, as the turns of a Claude Code session do
 
 
 @dataclass(frozen=True)
@@ -526,6 +530,7 @@ def inspect(path: str, body: bytes) -> Job:
         server_tool=server,
         stream=data.get("stream") is True,
         conversation=conversation_key(data),
+        tools=bool(tools),
     )
 
 
@@ -1025,6 +1030,7 @@ class Gateway:
     _active: int = field(default=0, init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _issued: OrderedDict[str, Conversation] = field(default_factory=OrderedDict, init=False)
+    _sessions: OrderedDict[str, str] = field(default_factory=OrderedDict, init=False)
 
     def __post_init__(self) -> None:
         self.router = Router(self.settings)
@@ -1045,6 +1051,21 @@ class Gateway:
             self._issued.move_to_end(key)
             while len(self._issued) > MAX_CONVERSATIONS:
                 self._issued.popitem(last=False)
+
+    def note_session(self, session_id: str, upstream: str) -> None:
+        """Note which upstream last served a Claude Code session. An odd id is ignored."""
+        if not _SESSION.fullmatch(session_id):
+            return
+        with self._lock:
+            self._sessions[session_id] = upstream
+            self._sessions.move_to_end(session_id)
+            while len(self._sessions) > MAX_CONVERSATIONS:
+                self._sessions.popitem(last=False)
+
+    def sessions(self) -> dict[str, str]:
+        """Session id to the upstream that last served it, since the daemon started."""
+        with self._lock:
+            return dict(self._sessions)
 
     def enter(self) -> None:
         """Count one open connection."""
@@ -1124,6 +1145,7 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
                     {
                         "forced": forced,
                         "upstreams": [asdict(s) for s in gw.router.status(forced)],
+                        "sessions": gw.sessions(),
                     }
                 ).encode()
                 self._send(200, [("Content-Type", "application/json")], data, None)
@@ -1237,6 +1259,9 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
                         up.name,
                         tainted=wire.stripped > 0 or (state is not None and state.tainted),
                     )
+                    # a request without tools is a side task (a title), maybe on another model
+                    if job.tools:
+                        gw.note_session(self.headers.get(SESSION_HEADER, ""), up.name)
                 if wrap:
                     self._send(*_wrapped(resp.status, resp.getheaders(), peek), None)
                 else:
@@ -1359,6 +1384,43 @@ def _inherited(port: int) -> socket.socket | None:
         sock.close()
         return None
     return sock
+
+
+def fetch_status(port: int, token: str | None, timeout: float = 3.0) -> dict[str, Any]:
+    """The reply of the running gateway's ``/_cabildo/status``.
+
+    Raises:
+        OSError: when nothing answers on the port.
+        ValueError: when the reply is not a JSON object.
+    """
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    try:
+        conn.request("GET", "/_cabildo/status", headers={TOKEN_HEADER: token} if token else {})
+        resp = conn.getresponse()
+        body = resp.read()
+    except http.client.HTTPException as exc:
+        msg = f"bad reply: {type(exc).__name__}"
+        raise ValueError(msg) from exc
+    finally:
+        conn.close()
+    if resp.status != HTTPStatus.OK:
+        msg = f"the gateway answered {resp.status}"
+        raise ValueError(msg)
+    data = json.loads(body)
+    if not isinstance(data, dict):
+        msg = "the reply is not a JSON object"
+        raise ValueError(msg)
+    return data
+
+
+def claude_uses(path: Path, port: int) -> bool:
+    """Whether a Claude Code settings file points ``ANTHROPIC_BASE_URL`` at this gateway."""
+    try:
+        env = _read_settings(path).get("env")
+        url = env.get(BASE_URL_ENV) if isinstance(env, dict) else None
+        return _is_local(url) and urlsplit(str(url)).port == port
+    except (GatewayError, ValueError):
+        return False
 
 
 BASE_URL_ENV = "ANTHROPIC_BASE_URL"

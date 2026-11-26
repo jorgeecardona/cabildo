@@ -1783,9 +1783,7 @@ def cmd_jupyter(args) -> int:
 
 def cmd_gateway(args) -> int:
     """``cabildo gateway serve|status|use|enable|disable``: the gateway Claude Code can talk to."""
-    import json as _json
     import time as _time
-    import urllib.request
 
     from . import config, gateway
 
@@ -1821,11 +1819,7 @@ def cmd_gateway(args) -> int:
 
     def fetch_status() -> dict:
         token = gateway.Keys().get(settings.token) if settings.token else None
-        req = urllib.request.Request(f"http://127.0.0.1:{port}/_cabildo/status")
-        if token:
-            req.add_header(gateway.TOKEN_HEADER, token)
-        with urllib.request.urlopen(req, timeout=3) as r:
-            return _json.load(r)
+        return gateway.fetch_status(port, token)
 
     if args.action == "disable":
         path = gateway.claude_settings_path()
