@@ -147,6 +147,13 @@ cabildo gateway status                 # each upstream: ready or set aside, serv
 The upstream you choose goes first. The others stay as fallbacks. The gateway reads the choice on
 each request, so it needs no restart.
 
+The `cabildo workspace` mode line shows the same when Claude Code's settings point at the
+gateway: an `upstream` row with the upstream that last served the shown conversation, and a
+`gateway` table with the requests and failovers of each upstream. The table of your subscription
+limits turns grey while another upstream serves that conversation. A limit at 100% shows its
+reset time without pace or ETA. The gateway finds the conversation by the
+`X-Claude-Code-Session-Id` header, and forgets it when the daemon restarts.
+
 After you change the config file, run `cabildo service reload`. The gateway reads the file again
 and keeps the streams that are open. The command also reloads the daemon. New gateway code needs
 `cabildo service restart`, which cuts the streams that are open.

@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- Workspace: with the gateway on, the mode line shows which upstream serves the shown
+  conversation, and a table of upstreams with their requests, failovers and why one is set aside.
+  A subscription limit at 100% shows no pace or ETA.
+
 - Gateway, `bedrock-invoke`: old tool results are cleared when the prompt passes the trigger, and
   then pile up until it passes it again. Before, every request after that kept only the last 3.
   The results of the newest message are no longer cleared.

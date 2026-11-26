@@ -37,7 +37,17 @@ from textual.timer import Timer
 from textual.widgets import ContentSwitcher, DataTable, Input, Label, Static
 from textual.worker import get_current_worker
 
-from cabildo import __version__, cloud, config, host_client, jupyter, names, sessions_ops, store
+from cabildo import (
+    __version__,
+    cloud,
+    config,
+    gateway,
+    host_client,
+    jupyter,
+    names,
+    sessions_ops,
+    store,
+)
 from cabildo import usage as usage_tokens
 from cabildo.workspace import (
     agents,
@@ -54,6 +64,7 @@ from cabildo.workspace import (
     sessions,
     spend,
     state,
+    upstreams,
     usage,
 )
 from cabildo.workspace.agents import AgentState
@@ -188,6 +199,7 @@ SCOPE_HEADERS = {"here": "Session", "subfolders": "Session · subfolders", "all"
 # sample on the same wall-clock beats (:00, :15, :30, :45), so they all change at :00
 PLAN_SECONDS = 60.0
 PLAN_POLL_SECONDS = 15.0
+UPSTREAM_POLL_SECONDS = 5.0  # how often to ask the gateway who serves
 
 
 def fmt_plan(p: PlanUsage, pace: plan.PlanPace | None = None) -> list[str]:
@@ -198,8 +210,8 @@ def fmt_plan(p: PlanUsage, pace: plan.PlanPace | None = None) -> list[str]:
         7d               53%  0.9%/h  Sat     Thu 00:46
 
     ``pace`` is percent per hour, smoothed; ``ETA`` is when the limit reaches 100% at
-    that pace, shown only when that is before the reset. Times are local; a 7-day time
-    carries its weekday.
+    that pace, shown only when that is before the reset. A limit at 100% shows neither.
+    Times are local; a 7-day time carries its weekday.
     """
     rows = [grid(f"{p.plan} plan".strip(), "used", "pace", f"  {'resets':<8}ETA")]
     for name, lim, at in (
@@ -212,11 +224,41 @@ def fmt_plan(p: PlanUsage, pace: plan.PlanPace | None = None) -> list[str]:
         reset = (
             time.strftime(day or "%H:%M", time.localtime(lim.resets_at)) if lim.resets_at else ""
         )
-        full = at.full_at() if at else None
+        used_up = lim.percent >= 100  # nothing left to fill: no pace, no ETA
+        full = at.full_at() if at and not used_up else None
         when = time.strftime(f"{day} %H:%M".strip(), time.localtime(full)) if full else ""
-        rate = (f"{at.rate:.1f}%/h" if at.ready else "-") if at else ""
+        rate = (f"{at.rate:.1f}%/h" if at.ready else "-") if at and not used_up else ""
         rows.append(grid(name, f"{lim.percent:.0f}%", rate, f"  {reset:<8}{when}").rstrip())
     return rows
+
+
+def fmt_upstream(up: gateway.UpstreamStatus) -> str:
+    """``upstream  bedrock-eu``: which gateway upstream last served the shown conversation."""
+    return grid("upstream", up.name[:20], "").rstrip()
+
+
+def fmt_gateway(view: upstreams.View, serving: str = "") -> list[tuple[str, str]]:
+    """The gateway table, one row per upstream in the order of the config file, as (line,
+    style) pairs::
+
+        gateway      requests failovers
+        anthropic         412        37  set aside 3d
+          rate or usage limit
+        bedrock            38         0  ready
+
+    The counts are of all sessions since the daemon started. ``serving`` names the upstream
+    of the shown conversation; its row is bold.
+    """
+    out: list[tuple[str, str]] = [(grid("gateway", "requests", "failovers"), "")]
+    for u in view.upstreams:
+        state = "ready" if u.ready else f"set aside {fmt_age(u.set_aside_s)}"
+        if u.forced:
+            state += ", first"
+        line = grid(u.name[:10], str(u.requests), str(u.failovers), f"  {state}")
+        out.append((line, "bold" if u.name == serving else ""))
+        if not u.ready and u.reason:
+            out.append((f"  {u.reason}", "dim"))
+    return out
 
 
 INTENT_LINES = (
@@ -845,6 +887,8 @@ class SwitcherApp(App[None]):
         self.reading = False  # a scan for a new scope is on its way
         self.plan_usage: PlanUsage | None = None  # the subscription's limits, once fetched
         self.plan_pace: plan.PlanPace | None = None  # how fast they fill
+        self.upstreams: upstreams.View | None = None  # the gateway, when sessions use it
+        self._upstream_reader = upstreams.Reader()
         self.spend: spend.Report | None = None  # consumed tokens and cost, when shown
         self.spend_label = ""  # "" while the mode line shows no spend row
         self.spend_mode = "never"  # [workspace].spend; read at mount
@@ -917,6 +961,8 @@ class SwitcherApp(App[None]):
         if usage.available():
             self.set_interval(SAMPLE_SECONDS, self._sample_tick)
         self._plan_tick()
+        self._upstreams_tick()
+        self.set_interval(UPSTREAM_POLL_SECONDS, self._upstreams_tick)
         self._spend_start()
         self._intents_tick()
         self.set_interval(INTENT_POLL_SECONDS, self._intents_tick)
@@ -1034,6 +1080,17 @@ class SwitcherApp(App[None]):
         if found and (found.usage, found.pace) != (self.plan_usage, self.plan_pace):
             # a failed ask has no sample: the last one stays
             self.plan_usage, self.plan_pace = found.usage, found.pace
+            self._modeline()
+
+    def _upstreams_tick(self) -> None:
+        self.run_worker(self._upstreams_fetch, thread=True, group="upstreams", exclusive=True)
+
+    def _upstreams_fetch(self) -> None:
+        self._to_ui(self._upstreams_got, self._upstream_reader.read())
+
+    def _upstreams_got(self, found: upstreams.View | None) -> None:
+        if found != self.upstreams:
+            self.upstreams = found
             self._modeline()
 
     def _spend_start(self) -> None:
@@ -1294,11 +1351,20 @@ class SwitcherApp(App[None]):
         # the cabildo name other agents address this one by (deterministic from the id)
         agent = [(f"@ {names.robot_name(shown)}", "bold")] if shown else []
         groups: list[list[tuple[str, str]]] = [[(top, ""), *agent, (bottom, "")]]
+        view = self.upstreams
+        ids = (shown, *row.ids) if shown and row else (shown,) if shown else ()
+        serving = view.serving(ids) if view else None
         if context or tokens:
-            groups.append([(context, ctx_style), *([(effort, "")] if effort else []), (tokens, "")])
+            extra = [effort, fmt_upstream(serving) if serving else ""]
+            between = [(x, "") for x in extra if x]
+            groups.append([(context, ctx_style), *between, (tokens, "")])
         if self.plan_usage:
-            style = plan_style(self.plan_usage)
+            # another upstream serves this session: the limits are not what stops it now
+            elsewhere = serving is not None and serving.kind != "passthrough"
+            style = "dim" if elsewhere else plan_style(self.plan_usage)
             groups.append([(x, style) for x in fmt_plan(self.plan_usage, self.plan_pace)])
+        if view:
+            groups.append(fmt_gateway(view, serving.name if serving else ""))
         if self.spend and self.spend_label:
             groups.append([(x, "") for x in fmt_spend(self.spend, self.spend_label, width)])
         if self.intents or (self._intents_seen and store.db_path().exists()):
