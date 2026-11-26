@@ -1992,19 +1992,26 @@ def jupyter_cells(runner: str, notebook: str) -> dict[str, Any]:
 
 @mcp.tool()
 def jupyter_edit_cell(
-    runner: str, notebook: str, cell: str, source: str, cell_type: str | None = None
+    runner: str,
+    notebook: str,
+    cell: str,
+    source: str,
+    cell_type: str | None = None,
+    tags: list[str] | None = None,
 ) -> dict[str, Any]:
     """Replace the source of one cell. ``cell`` is its id or its position ("0", "-1").
 
     Use this, never ``Edit``, ``Write`` or ``NotebookEdit``, on a notebook that a runner serves:
     the user has it open in JupyterLab and sees the change within a second, and a write to the
     file would overwrite what they have typed. It waits until the user stops typing. Outputs of
-    the cell stay until ``jupyter_run_cell`` runs it again. ``cell_type`` changes the type.
+    the cell stay until ``jupyter_run_cell`` runs it again. ``cell_type`` changes the type;
+    ``tags`` replaces the cell's tags (``["replay"]`` makes it run again on every new kernel of
+    the notebook, ``[]`` removes them).
     """
     from . import jupyter, jupyter_cells
 
     try:
-        done = jupyter_cells.edit(runner, notebook, cell, source, cell_type)
+        done = jupyter_cells.edit(runner, notebook, cell, source, cell_type, tags)
     except jupyter.RunnerError as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, "cell": _as_dict(done)}
@@ -2012,17 +2019,23 @@ def jupyter_edit_cell(
 
 @mcp.tool()
 def jupyter_insert_cell(
-    runner: str, notebook: str, source: str, position: int = -1, cell_type: str = "code"
+    runner: str,
+    notebook: str,
+    source: str,
+    position: int = -1,
+    cell_type: str = "code",
+    tags: list[str] | None = None,
 ) -> dict[str, Any]:
     """Add a cell to a notebook that a runner serves: ``position`` 0 is first, -1 (default) last.
 
     ``cell_type`` is code, markdown or raw. The notebook is made when it does not exist. The user
-    sees the cell within a second. Run it with ``jupyter_run_cell``.
+    sees the cell within a second. Run it with ``jupyter_run_cell``. Tag setup cells (imports,
+    data loading) ``["replay"]``: they run again after a restart.
     """
     from . import jupyter, jupyter_cells
 
     try:
-        done = jupyter_cells.insert(runner, notebook, source, position, cell_type)
+        done = jupyter_cells.insert(runner, notebook, source, position, cell_type, tags)
     except jupyter.RunnerError as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, "cell": _as_dict(done)}
@@ -2077,7 +2090,8 @@ def jupyter_interrupt(runner: str, notebook: str | None = None) -> dict[str, Any
 def jupyter_restart(runner: str, notebook: str | None = None) -> dict[str, Any]:
     """Restart the kernel of a Jupyter runner (or of one notebook): variables are lost.
 
-    The runner's ``startup`` code runs again. A running cell ends. Use it when the state is
+    The runner's ``startup`` code runs again, then, with ``notebook``, its cells tagged
+    ``replay``. A running cell ends. Use it when the state is
     broken, after installing a package, or to check that a notebook runs from the top.
     """
     from . import jupyter

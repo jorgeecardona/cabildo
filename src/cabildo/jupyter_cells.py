@@ -47,6 +47,7 @@ class CellView:
     execution_count: int | None = None
     outputs: int = 0  # how many outputs the cell holds
     output_text: str = ""  # the start of its text output
+    tags: tuple[str, ...] = ()  # nbformat cell tags; ``replay`` runs the cell on a new kernel
 
 
 def _state(name: str) -> RunnerState:
@@ -139,6 +140,7 @@ def _view(index: int, cell: dict[str, Any]) -> CellView:
         execution_count=cell.get("execution_count"),
         outputs=len(outputs),
         output_text=shown[:PREVIEW],
+        tags=tuple(cell.get("metadata", {}).get("tags", [])),
     )
 
 
@@ -209,12 +211,28 @@ def _change(name: str, notebook: str, change: Callable[[dict[str, Any]], int]) -
         return _view(index, nb["cells"][index]) if nb["cells"] else CellView(-1, "", "", "")
 
 
+def _tag(cell: dict[str, Any], tags: list[str] | None) -> None:
+    """Set the cell's nbformat tags: None leaves them, an empty list removes them."""
+    if tags is None:
+        return
+    metadata = cell.setdefault("metadata", {})
+    if tags:
+        metadata["tags"] = list(dict.fromkeys(tags))
+    else:
+        metadata.pop("tags", None)
+
+
 def edit(
-    name: str, notebook: str, cell: str, source: str, cell_type: str | None = None
+    name: str,
+    notebook: str,
+    cell: str,
+    source: str,
+    cell_type: str | None = None,
+    tags: list[str] | None = None,
 ) -> CellView:
     """Replace the source of one cell (and its type when ``cell_type`` is given).
 
-    Outputs of a code cell stay until it runs again.
+    ``tags`` replaces its tags. Outputs of a code cell stay until it runs again.
     """
 
     def change(nb: dict[str, Any]) -> int:
@@ -224,22 +242,31 @@ def edit(
         if cell_type and cell_type != target["cell_type"]:
             fresh = _new_cell(source, cell_type)
             fresh["id"] = target["id"]
+            fresh["metadata"] = target.get("metadata", {})
             nb["cells"][i] = fresh
+        _tag(nb["cells"][i], tags)
         return i
 
     return _change(name, notebook, change)
 
 
 def insert(
-    name: str, notebook: str, source: str, position: int = -1, cell_type: str = "code"
+    name: str,
+    notebook: str,
+    source: str,
+    position: int = -1,
+    cell_type: str = "code",
+    tags: list[str] | None = None,
 ) -> CellView:
-    """Add a cell at ``position`` (0 first; -1, the default, last). The notebook is made when
-    it does not exist.
+    """Add a cell at ``position`` (0 first; -1, the default, last), with ``tags``. The notebook
+    is made when it does not exist.
     """
 
     def change(nb: dict[str, Any]) -> int:
         at = len(nb["cells"]) if position < 0 else min(position, len(nb["cells"]))
-        nb["cells"].insert(at, _new_cell(source, cell_type))
+        new = _new_cell(source, cell_type)
+        _tag(new, tags)
+        nb["cells"].insert(at, new)
         return at
 
     state = _state(name)

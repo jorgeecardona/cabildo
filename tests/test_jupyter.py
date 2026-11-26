@@ -284,7 +284,11 @@ class FakeServer:
 
     def __call__(self, _state, method, path, body=None, timeout=10.0):
         self.calls.append((method, path, body))
-        if method == "GET" and path.startswith("/api/contents/") and self.missing:
+        written = {c[1] for c in self.calls if c[0] == "PUT"}
+        wanted = path.partition("?")[0]
+        if method == "GET" and wanted.startswith("/api/contents/") and self.missing:
+            if wanted in written:
+                return {}
             raise jupyter.RunnerError(f"{method} {path}: HTTP 404")
         if method == "GET" and path == "/api/sessions":
             return self.sessions
@@ -478,3 +482,68 @@ def test_an_ended_server_is_collected_and_not_taken_for_alive(home: Path) -> Non
         time.sleep(0.05)
     assert jupyter._alive(proc.pid) is False  # a zombie until its parent waits
     assert jupyter.running("z") is None and "z" not in jupyter._children
+
+
+def test_an_env_file_is_read_without_expanding_anything(tmp_path: Path) -> None:
+    path = tmp_path / ".env"
+    path.write_text("# comment\n\nexport A=\"two words\"\nB='q'\nC = $HOME/x\nD=\nE=a=b\n")
+    assert jupyter.read_env_file(path) == {
+        "A": "two words", "B": "q", "C": "$HOME/x", "D": "", "E": "a=b",
+    }  # fmt: skip
+
+
+def test_a_bad_env_file_names_the_line_and_never_shows_it(tmp_path: Path) -> None:
+    path = tmp_path / ".env"
+    path.write_text("OK=1\nsupersecretvalue\n")
+    with pytest.raises(jupyter.RunnerError, match="line 2 is not KEY=VALUE") as caught:
+        jupyter.read_env_file(path)
+    assert "supersecret" not in str(caught.value)
+    with pytest.raises(jupyter.RunnerError, match="env_file"):
+        jupyter.read_env_file(tmp_path / "missing")
+
+
+def test_env_file_is_relative_to_the_runners_directory(home: Path, tmp_path: Path) -> None:
+    (home / "config.toml").write_text('[jupyter.runners.e]\nenv_file = ".env"\n')
+    assert jupyter.resolve("e", str(tmp_path)).env_file == tmp_path.resolve() / ".env"
+    (home / "config.toml").write_text('[jupyter.runners.e]\nenv_file = "/etc/x.env"\n')
+    assert jupyter.resolve("e", str(tmp_path)).env_file == Path("/etc/x.env")
+    assert jupyter.resolve("other", str(tmp_path)).env_file is None
+
+
+def _notebook_model(*cells: tuple[str, str, list[str]]) -> dict:
+    return {
+        "content": {
+            "cells": [
+                {"cell_type": kind, "source": source, "metadata": {"tags": tags}}
+                for kind, source, tags in cells
+            ]
+        }
+    }
+
+
+def test_replay_runs_the_tagged_code_cells_in_order_and_stops_at_a_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    model = _notebook_model(
+        ("code", "import a", ["replay"]),
+        ("code", "slow()", []),
+        ("markdown", "# no", ["replay"]),
+        ("code", ["x = ", "1"], ["other", "replay"]),  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr(jupyter, "_http", lambda *a, **k: model)
+    ran: list[str] = []
+    outcome = {"status": "ok"}
+
+    def execute(_state, _kernel, code, timeout):
+        ran.append(code)
+        return jupyter.RunResult(outcome["status"], "", error="NameError: boom\ntrace")
+
+    monkeypatch.setattr(jupyter, "_execute", execute)
+    state = jupyter.RunnerState("r", 1, 1, str(tmp_path), 0.0)
+    assert jupyter._replay(state, "k", "n.ipynb") == 2
+    assert ran == ["import a", "x = 1"]
+    ran.clear()
+    outcome["status"] = "error"
+    with pytest.raises(jupyter.RunnerError, match=r"replay cell 0 of n\.ipynb failed: NameError"):
+        jupyter._replay(state, "k", "n.ipynb")
+    assert ran == ["import a"]

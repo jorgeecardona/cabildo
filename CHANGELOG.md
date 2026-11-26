@@ -4,6 +4,12 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- Notebook cells tagged `replay` run again, after `startup`, on every new kernel cabildo makes for
+  the notebook (a restart, or after a reboot). `jupyter_edit_cell` and `jupyter_insert_cell` take
+  `tags`.
+- `env_file = ".env"` in a runner's config loads secrets into the runner.
+- Docs: a data analysis session from start to end, and git diffs of notebooks with jupytext.
+
 - A busy session no longer shows a stack of identical "cabildo: 1 new message(s) from @daemon"
   prompts. The push plugin submits one wake prompt and holds the others until that turn ends; it
   then wakes again only for messages that are still unread.

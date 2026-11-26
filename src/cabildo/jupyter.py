@@ -53,6 +53,8 @@ START_SECONDS = 180.0  # the first start resolves packages with uv
 TEXT_LIMIT = 8000
 KEEP_RUNS = 200  # executions whose files a runner keeps
 _PNG = b"\x89PNG\r\n\x1a\n"
+REPLAY_TAG = "replay"  # a cell with this tag runs again on every new kernel of its notebook
+REPLAY_SECONDS = 600.0
 CHANNEL_SECONDS = 90.0  # the channel answers once the kernel is up: a new kernel is slow
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
@@ -73,6 +75,7 @@ class RunnerSpec:
     kernelspec: str = "python3"
     env: tuple[tuple[str, str], ...] = ()  # set in the server, so every kernel has them
     startup: str = ""  # code run once each time the runner makes its kernel
+    env_file: Path | None = None  # KEY=VALUE lines set in the server; ``env`` wins over them
     port: int = 0  # 0: a free port
     collaboration: bool = True  # jupyter-collaboration: edits made through the API show live
     autostart: bool = False  # the daemon starts it, and starts it again when it ends
@@ -160,6 +163,34 @@ def _private(path: Path, text: str) -> None:
 # --------------------------------------------------------------------------- #
 # Config: [jupyter] and [jupyter.runners.<name>]
 # --------------------------------------------------------------------------- #
+def read_env_file(path: Path) -> dict[str, str]:
+    """The variables of a ``.env`` file: ``KEY=VALUE`` lines.
+
+    Blank lines and ``#`` comments are skipped, ``export `` is allowed, and one pair of quotes
+    around a value is removed. Nothing is expanded or run.
+
+    Raises:
+        RunnerError: the file cannot be read, or a line has no ``=``.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise RunnerError(f"env_file {path}: {exc}") from exc
+    found: dict[str, str] = {}
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, equals, value = line.removeprefix("export ").partition("=")
+        key, value = key.strip(), value.strip()
+        if not equals or not key:  # the line is not shown: it may hold a secret
+            raise RunnerError(f"env_file {path}: line {number} is not KEY=VALUE")
+        if len(value) > 1 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        found[key] = value
+    return found
+
+
 def _megabytes(value: object) -> int:
     """``"4G"``, ``"512M"`` or a number of megabytes as megabytes; 0 for anything else."""
     if isinstance(value, int | float) and not isinstance(value, bool):
@@ -182,6 +213,8 @@ def _spec_from(
     port = merged.get("port", 0)
     python = merged.get("python")
     project = merged.get("project")
+    env_file = merged.get("env_file")
+    base_dir = Path(str(where)).expanduser().resolve()
     return RunnerSpec(
         name=name,
         cwd=Path(str(where)).expanduser().resolve(),
@@ -191,6 +224,7 @@ def _spec_from(
         kernelspec=str(merged.get("kernelspec") or "python3"),
         env=env_pairs,
         startup=str(merged.get("startup") or ""),
+        env_file=base_dir / Path(str(env_file)).expanduser() if env_file else None,
         port=port if isinstance(port, int) else 0,
         collaboration=merged.get("collaboration") is not False,
         autostart=merged.get("autostart") is True,
@@ -356,8 +390,10 @@ def start(spec: RunnerSpec, timeout: float = START_SECONDS) -> RunnerState:
     token = secrets.token_urlsafe(32)
     _private(folder / "token", token)
     port = spec.port or _free_port()
+    from_file = read_env_file(spec.env_file) if spec.env_file else {}
     env = {
         **os.environ,
+        **from_file,
         **dict(spec.env),
         "JUPYTER_TOKEN": token,
         "JUPYTER_RUNTIME_DIR": str(folder / "runtime"),
@@ -691,6 +727,32 @@ def _startup(state: RunnerState, kernel_id: str, spec: RunnerSpec) -> None:
         raise RunnerError(f"startup code failed: {result.error or result.status}")
 
 
+def _replay(state: RunnerState, kernel_id: str, path: str) -> int:
+    """Run the code cells of the notebook at ``path`` tagged ``replay``, in order, on a fresh
+    kernel. Returns how many ran. Their stored outputs are left as they are.
+
+    Raises:
+        RunnerError: one of them failed; the ones after it did not run.
+    """
+    model = _http(state, "GET", f"/api/contents/{quote(path)}?content=1&type=notebook")
+    notebook = model.get("content") if isinstance(model, dict) else None
+    cells = notebook.get("cells", []) if isinstance(notebook, dict) else []
+    ran = 0
+    for index, cell in enumerate(cells):
+        if cell.get("cell_type") != "code" or REPLAY_TAG not in cell.get("metadata", {}).get(
+            "tags", []
+        ):
+            continue
+        source = cell.get("source", "")
+        code = "".join(source) if isinstance(source, list) else str(source)
+        result = _execute(state, kernel_id, code, timeout=REPLAY_SECONDS)
+        if result.status != "ok":
+            why = result.error.splitlines()[0] if result.error else result.status
+            raise RunnerError(f"replay cell {index} of {path} failed: {why}")
+        ran += 1
+    return ran
+
+
 def _ensure_notebook(state: RunnerState, path: str) -> None:
     """Make an empty notebook at ``path`` (inside the runner's directory) when it is not there."""
     url = f"/api/contents/{quote(path)}"
@@ -728,8 +790,8 @@ def _notebook_kernel(state: RunnerState, spec: RunnerSpec, notebook: str) -> str
     """The id of the kernel of ``notebook``'s session: the one JupyterLab shows for it.
 
     A notebook that has no session gets one (and an empty file when it does not exist), with
-    the spec's ``startup`` run once. A notebook the user opens later in JupyterLab joins this
-    session, so the agent and the user share the variables.
+    the spec's ``startup`` and then the notebook's ``replay`` cells run once. A notebook the user
+    opens later in JupyterLab joins this session, so the agent and the user share the variables.
     """
     path = notebook_path(notebook)
     _ensure_notebook(state, path)
@@ -743,6 +805,7 @@ def _notebook_kernel(state: RunnerState, spec: RunnerSpec, notebook: str) -> str
     made = _http(state, "POST", "/api/sessions", body)
     kernel_id = str(made["kernel"]["id"])
     _startup(state, kernel_id, spec)
+    _replay(state, kernel_id, path)
     return kernel_id
 
 
@@ -916,7 +979,8 @@ def interrupt(name: str, notebook: str | None = None) -> bool:
 
 
 def restart(name: str, notebook: str | None = None) -> bool:
-    """Restart a runner's kernel (or a notebook's): its variables are lost, ``startup`` runs again.
+    """Restart a runner's kernel (or a notebook's): its variables are lost. ``startup`` runs
+    again, then, for a notebook, its cells tagged ``replay``.
 
     A cell that is running ends. False when there is no kernel yet.
 
@@ -936,6 +1000,8 @@ def restart(name: str, notebook: str | None = None) -> bool:
     with (runner_dir(name) / "run.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         _startup(state, kernel_id, spec)
+        if notebook:
+            _replay(state, kernel_id, notebook_path(notebook))
     return True
 
 

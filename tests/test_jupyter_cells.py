@@ -202,3 +202,17 @@ def test_live_roots_lists_runners_whose_process_is_alive(home: Path) -> None:
         jupyter.runner_dir(name).mkdir(parents=True)
         jupyter._write_state(jupyter.RunnerState(name, pid, 1, f"/work/{name}", 0.0))
     assert jupyter.live_roots() == [("up", Path("/work/up"))]
+
+
+def test_tags_are_set_replaced_removed_and_listed(server: Contents) -> None:
+    server.put("n.ipynb", nb("a"))
+    made = jupyter_cells.insert("r", "n.ipynb", "import x", position=0, tags=["replay", "replay"])
+    assert made.tags == ("replay",)
+    jupyter_cells.edit("r", "n.ipynb", "c0", "a2", tags=["slow"])
+    assert [c.tags for c in jupyter_cells.cells("r", "n.ipynb")] == [("replay",), ("slow",)]
+    jupyter_cells.edit("r", "n.ipynb", "c0", "a3")  # None leaves them
+    jupyter_cells.edit("r", "n.ipynb", "0", "# t", cell_type="markdown")  # keeps them too
+    assert [c.tags for c in jupyter_cells.cells("r", "n.ipynb")] == [("replay",), ("slow",)]
+    jupyter_cells.edit("r", "n.ipynb", "c0", "a4", tags=[])
+    assert jupyter_cells.cells("r", "n.ipynb")[1].tags == ()
+    assert "tags" not in server.files["n.ipynb"]["cells"][1]["metadata"]

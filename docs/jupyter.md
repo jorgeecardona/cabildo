@@ -77,6 +77,7 @@ cwd = "~/stuff/projects/crm"   # a session's cwd wins over this
 packages = ["polars"]          # replaces the default list for this runner
 kernelspec = "python3"
 startup = "import numpy as np" # run once each time the runner makes its kernel
+env_file = ".env"              # KEY=VALUE lines for secrets; relative to cwd
 port = 8899                    # 0 (default): a free port
 autostart = true               # the daemon starts it and starts it again when it ends
 memory_max = "6G"              # the daemon pauses it above this much memory (server and kernels)
@@ -87,9 +88,71 @@ DATABASE_URL = "postgresql:///crm"
 
 A name that is not in the config gets the `[jupyter]` defaults.
 
+`env_file` keeps secrets out of `config.toml`. It is read when the runner starts: `KEY=VALUE`
+lines, `#` comments, an optional `export`, one pair of quotes removed, nothing expanded. A key in
+`[jupyter.runners.<name>.env]` wins over the file.
+
 `project` makes the kernel run in a uv project's own locked environment (`uv run --project`), so
 `import` finds the project's packages and its versions. `packages` are added on top. The folder
 needs a `pyproject.toml`.
+
+## A data analysis session
+
+1. Configure a runner for the project once, in `~/.cabildo/config.toml`:
+
+   ```toml
+   [jupyter.runners.eda]
+   cwd = "~/stuff/projects/crm"
+   project = "~/stuff/projects/crm"
+   env_file = ".env"
+   packages = ["jupytext"]
+   autostart = true
+   ```
+
+2. Restart the daemon so it starts the runner, or start it yourself:
+
+   ```bash
+   cabildo jupyter start eda
+   ```
+
+3. Open a notebook:
+
+   ```bash
+   cabildo jupyter open eda analysis/churn.ipynb
+   ```
+
+4. Tell an agent what you want to look at. It adds cells, runs them, and reads the plots. You see
+   each cell appear.
+5. Tag the setup cells (imports, data loading) `replay`. In JupyterLab: select the cell, open the
+   right sidebar, add the tag. An agent passes `tags=["replay"]`.
+6. Save results that took long to compute to a file (parquet), and load them in a replay cell.
+   Kernel variables are lost on a restart or a reboot.
+
+## After a restart: the replay cells
+
+A new kernel of a notebook runs the runner's `startup`, then every code cell tagged `replay`, in
+order. This happens when you restart the notebook's kernel with `cabildo jupyter restart eda
+--notebook analysis/churn.ipynb` or `jupyter_restart`, and when cabildo makes the kernel again,
+for example after a reboot, on the first cell an agent runs.
+
+- A replay cell that fails stops the replay, and the message names the cell. Run the cells after
+  it yourself.
+- Stored outputs are not changed by a replay.
+- Keep replay cells safe to run twice.
+- A restart from JupyterLab's own button does not replay. Use "Run All", or restart from cabildo.
+
+## Notebook diffs in git
+
+Add `jupytext` to the runner's `packages` and a `jupytext.toml` in the project:
+
+```toml
+formats = "ipynb,py:percent"
+```
+
+Every save, yours or an agent's, then writes `analysis/churn.py` next to the notebook, with cells
+marked `# %%` and their tags. Commit the `.py` file for readable diffs, and add `*.ipynb` to
+`.gitignore` if you do not want outputs in git. Close the notebook before you edit the `.py`
+file by hand.
 
 ## Edit a notebook that you have open
 
@@ -104,7 +167,8 @@ An agent edits the cells of a notebook while you watch it in JupyterLab:
 | `jupyter_run_cell` | run a cell and store its outputs in it |
 | `jupyter_run` with `add_cell` | run code and add it, with its outputs, as a new cell |
 
-A cell is named by its id or its position (`"0"`, `"-1"`). `cabildo jupyter cells NAME --notebook
+A cell is named by its id or its position (`"0"`, `"-1"`). `jupyter_edit_cell` and
+`jupyter_insert_cell` also take `tags`. `cabildo jupyter cells NAME --notebook
 PATH` lists them from a shell.
 
 Each edit reads the `.ipynb` through the server, changes it and writes it back. The runner
