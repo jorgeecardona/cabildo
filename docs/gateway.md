@@ -119,13 +119,14 @@ For each request the gateway does what the Invoke API needs, and Claude Code see
   `service_tier` is dropped, and so is `top_p` when `temperature` is set.
   A `temperature` other than 1 is dropped while thinking is on.
 - `context_management` is dropped too, but first the gateway does what its
-  `clear_tool_uses_20250919` edit asks (#60). Once the prompt passes the `trigger` (default 100,000
-  tokens, estimated from the size of the JSON), the oldest tool results become a short
-  placeholder, and the last `keep` tool uses (default 3) stay. `exclude_tools`, `clear_at_least`
-  and `clear_tool_inputs` work as in the API. Without this the conversation grows until Bedrock
-  refuses it, and Claude Code compacts in a loop. The client keeps its full history. The
-  `clear_thinking` edit is ignored. A request that goes to an upstream that supports the field is
-  sent as it is.
+  `clear_tool_uses_20250919` edit asks (#60). Each time the prompt passes the `trigger` (default
+  100,000 tokens, estimated from the size of the JSON), the old tool results become a short
+  placeholder and the last `keep` tool uses (default 3) stay. New results then pile up until the
+  prompt passes the trigger again. The results of the newest message are never cleared.
+  `exclude_tools`, `clear_at_least` and `clear_tool_inputs` work as in the API. Without this the
+  conversation grows until Bedrock refuses it, and Claude Code compacts in a loop. The client
+  keeps its full history. The `clear_thinking` edit is ignored. A request that goes to an
+  upstream that supports the field is sent as it is.
 - A streamed answer arrives as AWS binary frames. The gateway decodes them and sends server-sent
   events.
 - A Bedrock error (`{"message": ...}`) is sent as an Anthropic error, so Claude Code reads it.

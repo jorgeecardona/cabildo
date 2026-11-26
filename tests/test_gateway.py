@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+import itertools
 import json
 import threading
 import time
@@ -1099,6 +1100,37 @@ def test_clearing_twice_clears_nothing_more() -> None:
     before = json.dumps(data)
     gateway.apply_context_management(data)
     assert json.dumps(data) == before
+
+
+def test_results_pile_up_again_after_a_clearing_until_the_trigger_is_passed_again() -> None:
+    seen: list[list[bool]] = []
+    for count in range(1, 16):
+        data = tool_history(count, trigger={"type": "input_tokens", "value": 6000})
+        gateway.apply_context_management(data)
+        seen.append(cleared(data))
+    for before, after in itertools.pairwise(seen):
+        assert after[: len(before) - 1] == before[:-1] or sum(after) > sum(before)
+        assert [a for b, a in zip(before, after, strict=False) if b] == [True] * sum(before)
+    totals = [sum(c) for c in seen]
+    assert max(len(c) - sum(c) for c in seen) > 3, "more than the last three are kept"
+    assert 1 < len(set(totals)) <= 5, "a few clearings, not one for each new result"
+
+
+def test_the_results_the_model_has_not_read_yet_are_never_cleared() -> None:
+    data = tool_history(2, trigger={"type": "input_tokens", "value": 100})
+    ids = [f"p{n}" for n in range(5)]
+    data["messages"] += [
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": i, "name": "Read", "input": {}} for i in ids],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": i, "content": BIG} for i in ids],
+        },
+    ]
+    gateway.apply_context_management(data)
+    assert cleared(data) == [True, True, False, False, False, False, False]
 
 
 def test_a_request_without_context_management_or_messages_is_left_alone() -> None:

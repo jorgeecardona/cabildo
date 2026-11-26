@@ -690,12 +690,14 @@ def _number(spec: Any, default: int, kind: str) -> int:
 def apply_context_management(data: dict[str, Any]) -> list[str]:
     """Do what the ``clear_tool_uses_20250919`` edit of ``context_management`` asks, in place.
 
-    The Messages API clears the oldest tool results once the prompt passes a trigger, and keeps
-    the most recent tool uses. Bedrock's Invoke API refuses the field, so the gateway does the
-    same on the request: a cleared result becomes a short placeholder and its ``tool_use_id``
-    stays. The client keeps its full history and sends it again, and the same results are cleared
-    each time. Tokens are estimated from the size of the JSON, so clearing may start a little
-    early. Other edits (``clear_thinking_20251015``) are ignored.
+    Bedrock's Invoke API refuses the field, so the gateway clears old tool results itself: a
+    cleared result becomes a short placeholder and its ``tool_use_id`` stays. The history is
+    replayed in order. Each time the prompt passes the trigger, every result but those of the
+    most recent tool uses is cleared, and then results pile up again until the next crossing.
+    A longer history clears the same results as its prefix did, so the prompt cache holds
+    between crossings. The results of the message being read are never cleared. Tokens are
+    estimated from the size of the JSON, so clearing may start a little early. Other edits
+    (``clear_thinking_20251015``) are ignored.
 
     Returns a note for the log, or nothing when no edit applies or nothing was cleared.
     """
@@ -707,54 +709,71 @@ def apply_context_management(data: dict[str, Any]) -> list[str]:
     messages = data.get("messages")
     if edit is None or not isinstance(messages, list):
         return []
-    uses: list[tuple[int, int, str]] = []  # (message, block, tool_use id) in order of appearance
-    names: dict[str, str] = {}
-    for i, message in enumerate(messages):
-        content = message.get("content") if isinstance(message, dict) else None
-        for j, block in enumerate(content if isinstance(content, list) else ()):
-            if isinstance(block, dict) and block.get("type") == "tool_use":
-                uses.append((i, j, str(block.get("id"))))
-                names[str(block.get("id"))] = str(block.get("name"))
+    cleared, saved = _replay_clearing(edit, data, messages)
+    if not cleared:
+        return []
+    if edit.get("clear_tool_inputs") is True:
+        for message in messages:
+            for block in _blocks(message):
+                if block.get("type") == "tool_use" and str(block.get("id")) in cleared:
+                    block["input"] = {}
+    return [f"cleared {len(cleared)} old tool result(s), about {saved} tokens"]
+
+
+def _blocks(message: Any) -> list[dict[str, Any]]:
+    """The content blocks of a message; none when its content is plain text."""
+    content = message.get("content") if isinstance(message, dict) else None
+    return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+
+
+def _replay_clearing(
+    edit: Mapping[str, Any], data: Mapping[str, Any], messages: list[Any]
+) -> tuple[set[str], int]:
+    """Clear results as the history grew. Returns the cleared tool_use ids and tokens saved."""
     trigger = edit.get("trigger")
-    if isinstance(trigger, dict) and trigger.get("type") == "tool_uses":
-        if len(uses) <= _number(trigger, 0, "tool_uses"):
-            return []
+    by_uses = isinstance(trigger, dict) and trigger.get("type") == "tool_uses"
+    if by_uses:
+        limit = _number(trigger, 0, "tool_uses")
     else:
         limit = _number(trigger, _TRIGGER_TOKENS, "input_tokens")
-        if _size([data.get("system"), messages, data.get("tools")]) // _CHARS_PER_TOKEN <= limit:
-            return []
     keep = _number(edit.get("keep"), _KEEP_TOOL_USES, "tool_uses")
-    kept = {u[2] for u in uses[len(uses) - keep :]} if keep else set()
-    excluded = {x for x in edit.get("exclude_tools") or [] if isinstance(x, str)}
-    clear_inputs = edit.get("clear_tool_inputs") is True
-    targets: list[tuple[dict[str, Any], int]] = []
-    for message in messages:
-        content = message.get("content") if isinstance(message, dict) else None
-        for block in content if isinstance(content, list) else ():
-            if not (isinstance(block, dict) and block.get("type") == "tool_result"):
-                continue
-            use_id = str(block.get("tool_use_id"))
-            if use_id in kept or names.get(use_id) in excluded or block.get("content") == _CLEARED:
-                continue
-            targets.append((block, _size(block.get("content")) // _CHARS_PER_TOKEN))
-    saved = sum(size for _block, size in targets)
     least = _number(edit.get("clear_at_least"), 0, "input_tokens")
-    if not targets or saved < least:
-        return []
-    for block, _size_tokens in targets:
-        block["content"] = _CLEARED
-    if clear_inputs:
-        cleared = {str(b.get("tool_use_id")) for b, _s in targets}
-        for message in messages:
-            content = message.get("content") if isinstance(message, dict) else None
-            for block in content if isinstance(content, list) else ():
-                if (
-                    isinstance(block, dict)
-                    and block.get("type") == "tool_use"
-                    and str(block.get("id")) in cleared
-                ):
-                    block["input"] = {}
-    return [f"cleared {len(targets)} old tool result(s), about {saved} tokens"]
+    excluded = {x for x in edit.get("exclude_tools") or [] if isinstance(x, str)}
+    chars = _size([data.get("system"), [], data.get("tools")])
+    uses: list[str] = []  # tool_use ids so far, oldest first
+    names: dict[str, str] = {}
+    held: list[tuple[str, dict[str, Any]]] = []  # results not cleared yet
+    cleared: set[str] = set()
+    saved = 0
+    for message in messages:
+        chars += _size(message)
+        results: list[tuple[str, dict[str, Any]]] = []
+        for block in _blocks(message):
+            if block.get("type") == "tool_use":
+                uses.append(str(block.get("id")))
+                names[uses[-1]] = str(block.get("name"))
+            elif block.get("type") == "tool_result" and block.get("content") != _CLEARED:
+                results.append((str(block.get("tool_use_id")), block))
+        # a request ends with a user message: only there can a clearing happen
+        if isinstance(message, dict) and message.get("role") == "user":
+            count = len(uses) - len(cleared) if by_uses else chars // _CHARS_PER_TOKEN
+            if count > limit:
+                kept = set(uses[len(uses) - keep :]) if keep else set()
+                targets = [
+                    (use_id, block)
+                    for use_id, block in held
+                    if use_id not in kept and names.get(use_id) not in excluded
+                ]
+                freed = sum(_size(block.get("content")) - _size(_CLEARED) for _id, block in targets)
+                if targets and freed // _CHARS_PER_TOKEN >= least:
+                    for use_id, block in targets:
+                        block["content"] = _CLEARED
+                        cleared.add(use_id)
+                    held = [h for h in held if h[0] not in cleared]
+                    chars -= freed
+                    saved += freed // _CHARS_PER_TOKEN
+        held.extend(results)
+    return cleared, saved
 
 
 def strip_thinking(data: dict[str, Any]) -> int:

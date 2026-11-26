@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- Gateway, `bedrock-invoke`: old tool results are cleared when the prompt passes the trigger, and
+  then pile up until it passes it again. Before, every request after that kept only the last 3.
+  The results of the newest message are no longer cleared.
+
 - VS Code extension: on the Visual Studio Marketplace as `cardona-oss.cabildo`.
 
 - VS Code extension: a cabildo side bar with three lists. Claude Sessions (start, open, end),
