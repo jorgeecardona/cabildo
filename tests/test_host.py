@@ -269,8 +269,9 @@ def test_a_dropped_viewer_reads_the_end_of_the_connection(session_host, tmp_path
         ["sh", "-c", "read go; head -c 8000000 /dev/zero; read x"], cwd=str(tmp_path)
     )
     sock = viewer(session_host.path, record.id)
-    type_in(sock, b"go\n")
     session = session_host.sessions[record.id]
+    wait_for_a_viewer(session)  # the host adds it after its reply
+    type_in(sock, b"go\n")
     deadline = time.monotonic() + 15
     while session.viewers and time.monotonic() < deadline:  # it reads nothing, so it is dropped
         time.sleep(0.02)
