@@ -19,7 +19,7 @@ export function statusText(status: Status): string {
 }
 
 /** The status bar tooltip, as plain text lines. */
-export function statusTooltip(status: Status): string {
+export function statusTooltip(status: Status, now = new Date()): string {
   if (status.kind === "offline") {
     return `cabildo daemon not reachable: ${status.reason}`;
   }
@@ -27,7 +27,10 @@ export function statusTooltip(status: Status): string {
     .slice(0, LINES)
     .map((a) => `${a.display} (${a.presence}${a.project_name ? `, ${a.project_name}` : ""})`);
   const newest = status.unread.slice(-LINES).reverse();
-  const messages = newest.map((m) => `${m.urgent ? "! " : ""}${m.from_display}: ${preview(m.body)}`);
+  const messages = newest.map((m) => {
+    const sent = shortDate(m.created_at, now);
+    return `${m.urgent ? "! " : ""}${sent} ${m.from_display}: ${preview(m.body)}`;
+  });
   return [
     `Agents: ${status.agents.length}`,
     ...agents,
@@ -39,6 +42,22 @@ export function statusTooltip(status: Status): string {
     "",
     "Click to open a Claude session.",
   ].join("\n");
+}
+
+/**
+ * When a message was sent, short: the time for today, else the day and the time. A day of
+ * another year shows the year in place of the time.
+ */
+export function shortDate(seconds: number, now: Date): string {
+  const sent = new Date(seconds * 1000);
+  const time = sent.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  if (sent.toDateString() === now.toDateString()) {
+    return time;
+  }
+  const day = { day: "numeric", month: "short" } as const;
+  return sent.getFullYear() === now.getFullYear()
+    ? `${sent.toLocaleDateString(undefined, day)} ${time}`
+    : sent.toLocaleDateString(undefined, { ...day, year: "numeric" });
 }
 
 /** A body on one line, cut short. */

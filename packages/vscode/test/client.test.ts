@@ -43,6 +43,17 @@ test("status asks the broker for agents and the person's unread messages", async
   assert.deepEqual(broker.requests[0].identity, HUMAN);
 });
 
+test("the daemon and the person are not agents", async (t) => {
+  const ids = ["daemon", HUMAN.session, "s1"];
+  const broker = await fakeSocket(t, (r) => ({
+    ok: true,
+    result: r.op === "list_agents" ? ids.map((session_id) => ({ session_id })) : [],
+  }));
+  const status = await fetchStatus(broker.address);
+  assert.ok(status.kind === "online");
+  assert.deepEqual(status.agents.map((a) => a.session_id), ["s1"]);
+});
+
 test("status is offline when the broker refuses", async (t) => {
   const broker = await fakeSocket(t, () => ({ ok: false, error: { message: "nope" } }));
   assert.deepEqual(await fetchStatus(broker.address), { kind: "offline", reason: "nope" });

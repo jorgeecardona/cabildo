@@ -6,6 +6,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 - `cabildo stats` prints the numbers of the workspace's mode line: each session's context, CPU and
   memory, plan limits, gateway, cost, intents and Jupyter runners. `--json` gives them as data.
+- VS Code extension 0.0.5: each unread message shows when it was sent, and the status bar no
+  longer counts you as an agent.
 - VS Code extension 0.0.4: a Stats list in the side bar shows those numbers.
 
 - Notebook cells tagged `replay` run again, after `startup`, on every new kernel cabildo makes for

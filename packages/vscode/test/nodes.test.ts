@@ -1,9 +1,9 @@
 import * as assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { HUMAN } from "../src/client";
 import { agentNodes, messageNodes, messageText, sessionNodes } from "../src/nodes";
 import type { Agent, HostSession, Message } from "../src/types";
+import { shortDate } from "../src/view";
 
 const session = (id: string, pid: number, cwd: string): HostSession => ({
   id, cwd, pid, started_at: pid, command: ["claude"], rows: 24, cols: 80,
@@ -24,12 +24,10 @@ test("a hosted session is named after the agent its process runs", () => {
   assert.deepEqual([bare!.label, bare!.description], ["other", "b2"]);
 });
 
-test("agents of the open folder come first, then working ones; the daemon is left out", () => {
+test("agents of the open folder come first, then working ones", () => {
   const nodes = agentNodes(
     [
       agent("away", "working", "/other"),
-      agent("daemon", "working", "/home"),
-      agent(HUMAN.session, "idle", "/home"),
       agent("quiet", "idle", "/work/repo", 10),
       agent("busy", "working", "/work/repo/sub"),
     ],
@@ -47,7 +45,9 @@ test("messages are listed newest first, and open with the whole body", () => {
     id, from_session: "s", from_display: "@a", topic: "general", body: `one\ntwo ${id}`,
     urgent: true, created_at: 0,
   });
-  const nodes = messageNodes([message(1), message(2)]);
-  assert.deepEqual(nodes.map((n) => n.description), ["one two 2", "one two 1"]);
+  const now = new Date(0);
+  const nodes = messageNodes([message(1), message(2)], now);
+  const sent = shortDate(0, now);
+  assert.deepEqual(nodes.map((n) => n.description), [`${sent} · one two 2`, `${sent} · one two 1`]);
   assert.match(messageText(message(3)), /^@a to #general · .* · urgent\n\none\ntwo 3\n$/);
 });

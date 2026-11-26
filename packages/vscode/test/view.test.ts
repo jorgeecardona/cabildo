@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { UNREAD_LIMIT } from "../src/client";
 import type { HostSession, Message, Status } from "../src/types";
-import { NEW_ROW, pickerRows, sessionRows, statusText, statusTooltip } from "../src/view";
+import { NEW_ROW, pickerRows, sessionRows, shortDate, statusText, statusTooltip } from "../src/view";
 
 const message = (id: number): Message => ({
   id, from_session: "s", from_display: "@a", topic: null, body: "x\ny", urgent: false, created_at: 0,
@@ -30,6 +30,18 @@ test("the tooltip lists the newest messages on one line each", () => {
   assert.match(text, /@a \(idle, p\)/);
   assert.match(text, /@a: x y/);
   assert.match(text, /and 2 more/);
+});
+
+test("a date is the time today, the day before that, and the year before that", () => {
+  const now = new Date(2026, 10, 26, 18, 0);
+  const at = (...day: [number, number, number]) => new Date(...day, 9, 5).getTime() / 1000;
+  const time = new Date(at(2026, 10, 26) * 1000)
+    .toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  assert.equal(shortDate(at(2026, 10, 26), now), time);
+  const earlier = shortDate(at(2026, 10, 24), now);
+  assert.ok(earlier.includes("24") && earlier.endsWith(time) && earlier !== time, earlier);
+  const lastYear = shortDate(at(2025, 10, 24), now);
+  assert.ok(lastYear.includes("2025") && !lastYear.includes(time), lastYear);
 });
 
 test("sessions under an open folder come first, then the newest", () => {

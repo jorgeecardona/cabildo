@@ -47,12 +47,14 @@ connection, the tab stays open and says why. Press Enter to close it.
 
 ### Agents
 
-Every agent that is active on the bus.
+Every agent that is active on the bus. You and the daemon are not agents.
 
 - Send a message: click the speech bubble.
 - Open its session: click an agent that runs in a hosted session.
 
 ### Unread Messages
+
+Each line starts with when the message was sent: the time for today, else the date.
 
 - Read: click a message. It opens in a read-only tab and is marked read.
 - Reply: click the arrow. The reply goes to the sender as a direct message.

@@ -11,6 +11,9 @@ export const HUMAN = {
   project_name: null,
 } as const;
 
+/** The bus sessions that are not agents: the daemon, which posts notices, and the person. */
+const NOT_AGENTS: readonly string[] = ["daemon", HUMAN.session];
+
 /** The most unread messages one request asks for. The status bar shows `200+` at the cap. */
 export const UNREAD_LIMIT = 200;
 
@@ -35,7 +38,8 @@ export async function fetchStatus(socketPath: string): Promise<Status> {
       bus<Agent[]>(socketPath, "list_agents", {}),
       bus<Message[]>(socketPath, "inbox", { unread_only: true, limit: UNREAD_LIMIT }),
     ]);
-    return { kind: "online", agents, unread };
+    const others = agents.filter((a) => !NOT_AGENTS.includes(a.session_id));
+    return { kind: "online", agents: others, unread };
   } catch (error) {
     return { kind: "offline", reason: error instanceof Error ? error.message : String(error) };
   }

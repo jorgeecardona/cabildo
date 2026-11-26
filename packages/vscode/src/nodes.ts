@@ -2,12 +2,8 @@
 
 import * as path from "node:path";
 
-import { HUMAN } from "./client";
 import type { Agent, HostSession, Message, StatGroup, StatRow } from "./types";
-import { preview, sessionRows, within } from "./view";
-
-/** The bus session the daemon posts its notices as. */
-const DAEMON = "daemon";
+import { preview, sessionRows, shortDate, within } from "./view";
 
 const PRESENCE_ORDER = ["working", "idle"];
 
@@ -96,8 +92,7 @@ export function agentNodes(
     const index = PRESENCE_ORDER.indexOf(a.presence);
     return index === -1 ? PRESENCE_ORDER.length : index;
   };
-  return agents
-    .filter((a) => a.session_id !== DAEMON && a.session_id !== HUMAN.session)
+  return [...agents]
     .sort((a, b) => here(a) - here(b) || rank(a) - rank(b) || a.display.localeCompare(b.display))
     .map((agent) => ({
       kind: "agent",
@@ -109,15 +104,15 @@ export function agentNodes(
     }));
 }
 
-/** Unread messages, newest first. */
-export function messageNodes(unread: readonly Message[]): MessageNode[] {
+/** Unread messages, newest first, each with when it was sent. */
+export function messageNodes(unread: readonly Message[], now = new Date()): MessageNode[] {
   return [...unread]
     .sort((a, b) => b.id - a.id)
     .map((message) => ({
       kind: "message",
       message,
       label: message.from_display,
-      description: preview(message.body),
+      description: `${shortDate(message.created_at, now)} · ${preview(message.body)}`,
       tooltip: messageText(message),
     }));
 }

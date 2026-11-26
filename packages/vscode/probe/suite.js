@@ -27,6 +27,8 @@ exports.run = async () => {
     const status = await api.refresh();
     assert.equal(status.kind, "online", status.reason);
     result.statusBar = api.statusText();
+    // The seed has one agent and the person: the person is not counted.
+    assert.match(result.statusBar, /\$\(organization\) 1 /);
 
     // The side bar: show it, then read its three lists.
     await vscode.commands.executeCommand("workbench.view.extension.cabildo");
