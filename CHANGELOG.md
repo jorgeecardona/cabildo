@@ -4,6 +4,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- VS Code extension: on the Visual Studio Marketplace as `cardona-oss.cabildo`.
+
 - VS Code extension: a cabildo side bar with three lists. Claude Sessions (start, open, end),
   Agents (send a message) and Unread Messages (read, reply, mark read), with the unread count on
   the cabildo icon.
@@ -22,7 +24,7 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
   window size showed a blank screen; Claude now redraws. Run `cabildo host stop` to start the new
   host (it ends the hosted sessions).
 
-- A VS Code extension (`packages/vscode/`, not on a marketplace yet): the status bar shows the
+- A VS Code extension (`packages/vscode/`): the status bar shows the
   agent count and your unread count, and `Cabildo: Attach to Claude Session` opens a hosted
   session in a terminal tab. See `docs/vscode.md`.
 

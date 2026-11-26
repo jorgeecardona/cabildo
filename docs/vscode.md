@@ -1,25 +1,18 @@
 # VS Code extension
 
 A cabildo side bar in VS Code: your hosted Claude sessions, the agents on the bus, and your
-unread messages. The extension is in `packages/vscode/`. It is not on a marketplace yet.
+unread messages. It is on the Visual Studio Marketplace as
+[cardona-oss.cabildo](https://marketplace.visualstudio.com/items?itemName=cardona-oss.cabildo).
 
 ## Install
 
-1. Build the package (needs Node 22 or newer and pnpm):
+1. Install it from the Marketplace:
 
 ```bash
-cd packages/vscode
-pnpm install
-pnpm run package
+code --install-extension cardona-oss.cabildo
 ```
 
-2. Install it:
-
-```bash
-code --install-extension cabildo.vsix
-```
-
-3. Run `Developer: Reload Window` in a VS Code window that was already open.
+2. Run `Developer: Reload Window` in a VS Code window that was already open.
 
 ## Use
 
@@ -67,7 +60,7 @@ The GitLab job `vscode` publishes to the Visual Studio Marketplace. It runs on `
 `packages/vscode/` or `.gitlab-ci.yml` changes. Without the variable `VSCE_PAT`, it builds
 `cabildo.vsix` and publishes nothing.
 
-The publisher is `JorgeCardona`, the same one as `react-lens` and `pymodelica-scope`.
+The publisher is `cardona-oss` (display name `Cardona OSS`).
 
 Set up the token once:
 
@@ -93,6 +86,16 @@ says it moved to 27 January 2027. After that date this job needs another sign-in
 without a stored token (`vsce publish --oidc`) accepts GitHub Actions, not GitLab.
 
 ## Develop
+
+The extension is in `packages/vscode/`. Build and install your copy (needs Node 22 or newer and
+pnpm):
+
+```bash
+cd packages/vscode
+pnpm install
+pnpm run package
+code --install-extension cabildo.vsix
+```
 
 Run the tests:
 
