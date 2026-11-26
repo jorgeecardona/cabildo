@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- A busy session no longer shows a stack of identical "cabildo: 1 new message(s) from @daemon"
+  prompts. The push plugin submits one wake prompt and holds the others until that turn ends; it
+  then wakes again only for messages that are still unread.
+
 - Workspace: with the gateway on, the mode line shows which upstream serves the shown
   conversation, and a table of upstreams with their requests, failovers and why one is set aside.
   A subscription limit at 100% shows no pace or ETA.

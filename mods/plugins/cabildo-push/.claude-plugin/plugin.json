@@ -1,6 +1,6 @@
 {
   "name": "cabildo-push",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Push delivery: wake an idle Claude Code session near-instantly when a cabildo message arrives for it.",
   "author": {
     "name": "Jorge Cardona"

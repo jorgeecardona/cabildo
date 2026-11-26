@@ -3,7 +3,8 @@ import type { On } from 'claude-code/testing'
 
 // The doorbell blocks in one `cabildo wait` child at a time and starts the
 // next one when it exits (#37). These hooks stand for the engine and the CLI.
-function world(on: On, waits: string[]) {
+// `unread`: what `cabildo pull` answers when the retry asks what is still unread.
+function world(on: On, waits: string[], unread = '') {
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.env(on, { HOME: '/home/t' })
   const spawned: string[][] = []
@@ -21,7 +22,12 @@ function world(on: On, waits: string[]) {
   on('process.run', (_, e) => ({
     value: {
       exitCode: 0,
-      stdout: e.argv[1] === 'whoami' ? '{"session_id":"S1","is_human":false,"cursor":7}' : '',
+      stdout:
+        e.argv[1] === 'whoami'
+          ? '{"session_id":"S1","is_human":false,"cursor":7}'
+          : e.argv[1] === 'pull'
+            ? unread
+            : '',
       stderr: '',
     },
   }))
@@ -29,6 +35,7 @@ function world(on: On, waits: string[]) {
     prompts.push(e.text)
     return { text: e.text }
   })
+  on('turn.complete', () => ({ text: '' }))
   on('process.spawn', async function* (_, e) {
     spawned.push([...e.argv])
     const out = waits.shift()
@@ -142,4 +149,59 @@ test('a DM not marked wakes only toasts', async ($, on) => {
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await w.clock.settle()
   expect(w.prompts.length).toBe(0)
+})
+
+const daemonDm = (id: number) =>
+  JSON.stringify({
+    session_id: 'S1',
+    cursor: id,
+    messages: [
+      {
+        id,
+        from_session: 'daemon',
+        from_display: '@daemon',
+        from_robot: 'r',
+        from_human: false,
+        wakes: true,
+        to_session: 'S1',
+        topic: null,
+        urgent: false,
+        read: false,
+        created_at: 0,
+        preview: 'intent done',
+        truncated: false,
+      },
+    ],
+  })
+
+test('messages that arrive while a wake is queued submit no second prompt', async ($, on) => {
+  const w = world(on, [daemonDm(8), daemonDm(9), daemonDm(10)])
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  expect(w.spawned.length).toBe(4) // all three batches were read
+  expect(w.prompts.length).toBe(1)
+  await w.clock.advance(120_000) // still no turn ended: the retry stays quiet
+  expect(w.prompts.length).toBe(1)
+})
+
+test('after the turn ends, a message still unread wakes once more', async ($, on) => {
+  const w = world(on, [daemonDm(8), daemonDm(9)], daemonDm(9))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  expect(w.prompts.length).toBe(1)
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' })
+  await w.clock.advance(30_000)
+  expect(w.prompts.length).toBe(2)
+  expect(w.prompts[1]).toContain('1 held message')
+})
+
+test('after the turn read the inbox, nothing wakes again', async ($, on) => {
+  const read = JSON.parse(daemonDm(9))
+  read.messages[0].read = true
+  const w = world(on, [daemonDm(8), daemonDm(9)], JSON.stringify(read))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await w.clock.settle()
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' })
+  await w.clock.advance(120_000)
+  expect(w.prompts.length).toBe(1)
 })

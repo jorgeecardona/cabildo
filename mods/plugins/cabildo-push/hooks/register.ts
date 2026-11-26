@@ -52,6 +52,12 @@ const awaitingA = atom({ plugin: 'cabildo-push', key: 'awaiting' } as const, {})
 const deferredA = atom({ plugin: 'cabildo-push', key: 'deferred' } as const, [] as number[])
 // How often a held-back wake is retried while the doorbell waits for new rows.
 const RETRY_MS = 30_000
+// `$.clock.now()` of the wake prompt that no turn has finished since; 0 when none. While it is
+// set no second prompt is submitted: Claude Code queues each one, and a busy session then shows
+// a stack of identical lines. One turn reads the whole inbox, so one prompt is enough.
+const wakeAtA = atom({ plugin: 'cabildo-push', key: 'wakeAt' } as const, 0)
+// A prompt that no turn ever ended after (a dropped submission) stops counting after this.
+const WAKE_TTL_MS = 600_000
 
 // Module-level, reset on hot reload (fine): one doorbell loop per module, so a
 // second session.start never runs two loops on the same cursor.
@@ -204,6 +210,11 @@ async function spendToken($: EngineInterface, now: number): Promise<boolean> {
   return spent
 }
 
+async function wakePending($: EngineInterface, now: number): Promise<boolean> {
+  const at = await read($, wakeAtA)
+  return at > 0 && now - at < WAKE_TTL_MS
+}
+
 // --------------------------------------------------------------------------- //
 // The doorbell
 // --------------------------------------------------------------------------- //
@@ -327,7 +338,9 @@ async function handleBatch(
   await update($, cursorA, () => advanceTo)
   const moved = advanceTo !== after
 
-  if (wakers.length && !dnd && !humanActive && (await spendToken($, now))) {
+  const queued = await wakePending($, now)
+  if (wakers.length && !dnd && !humanActive && !queued && (await spendToken($, now))) {
+    await update($, wakeAtA, () => now)
     const who = uniq(wakers.map(safeLabel)).join(', ')
     void $.prompt.submit({
       text: `cabildo: ${wakers.length} new message(s) from ${who} — call the inbox tool to read them.`,
@@ -346,8 +359,8 @@ async function handleBatch(
     return moved
   }
 
-  // Suppressed (DND / human present / bucket empty): coalesce everything into a
-  // badge + toast, start no turn, and remember the wakers so `retryDeferred`
+  // Suppressed (DND / human present / a wake already queued / bucket empty): coalesce
+  // everything into a badge + toast, start no turn, and remember the wakers so `retryDeferred`
   // starts the turn once the gate opens.
   if (wakers.length) {
     const ids = wakers.map((m) => m.id)
@@ -370,6 +383,7 @@ async function retryDeferred($: EngineInterface): Promise<void> {
       const now = await $.clock.now()
       if (await isDnd($)) continue
       if (now - (await read($, lastHumanA)) < HUMAN_DEFER_MS) continue
+      if (await wakePending($, now)) continue
       const sid = await read($, sessionIdA)
       if (!sid) continue
       // Take the held ids and clear them in one update, so a second retry loop
@@ -400,6 +414,7 @@ async function retryDeferred($: EngineInterface): Promise<void> {
         continue
       }
       const who = uniq(unread.map(safeLabel)).join(', ')
+      await update($, wakeAtA, () => now)
       void $.prompt.submit({
         text: `cabildo: ${unread.length} held message(s) from ${who} — call the inbox tool to read them.`,
       })
@@ -604,6 +619,13 @@ export const register: Register = (on) => {
       const now = await $.clock.now()
       await update($, lastHumanA, () => now)
     }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // A turn of the main conversation ended, so a queued wake prompt has been read: the next
+  // message may wake again. What arrived meanwhile and is still unread goes by `retryDeferred`.
+  on('turn.complete', async ($, e, next) => {
+    if (!e.agentId) await update($, wakeAtA, () => 0)
     return next(e)
   }).catch(($, e, next) => next(e))
 

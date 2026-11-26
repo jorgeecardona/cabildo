@@ -33,6 +33,8 @@ declare module 'claude-code' {
       // Ids of messages whose wake was held back by DND, a present human, or an
       // empty bucket; retried on a timer, and only while still unread.
       deferred: number[]
+      // `$.clock.now()` of a wake prompt no turn has ended after; 0 when none is queued.
+      wakeAt: number
     }
   }
 }
