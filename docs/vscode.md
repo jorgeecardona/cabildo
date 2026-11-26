@@ -26,19 +26,22 @@ code --install-extension cabildo.vsix
 The status bar shows the agent count and your unread count. Hover over it for the agents and the
 newest messages. It shows a disconnect icon when the daemon does not answer.
 
-To open a Claude session:
+To start a Claude session in the open folder:
 
-1. Start one in the [session host](session-host.md):
+1. Run `Cabildo: New Claude Session in Folder`.
 
-```bash
-cabildo host new
-```
+It runs in the [session host](session-host.md) and opens in a terminal tab.
 
-2. Click the status bar item, or run `Cabildo: Attach to Claude Session`.
-3. Pick the session. Sessions in the open folder are listed first.
+To open a session that runs already:
+
+1. Click the status bar item, or run `Cabildo: Attach to Claude Session`.
+2. Pick the session. Sessions in the open folder are listed first.
 
 Closing the tab detaches. The session keeps running. The list has only sessions that the host
 owns: a Claude that you started in a terminal is not in it.
+
+When the host stops, or closes the connection, the tab stays open and says why. Press Enter to
+close it.
 
 ## Settings
 
@@ -62,4 +65,5 @@ pnpm run probe
 ```
 
 The extension reads two unix sockets: `bus.sock` (the operations `list_agents` and `inbox`) and
-`host.sock` (the operation `list`). The terminal tab runs `cabildo attach`.
+`host.sock` (the operation `list`). It runs `cabildo host new` to start a session, and the terminal
+tab runs `cabildo attach --hold`.

@@ -43,6 +43,9 @@ cabildo attach <id>
 running. Two terminals can attach to one session: both see the output and both can type. The
 window size follows the one that resized last.
 
+If the host stops or closes the connection, `attach` prints why and exits 75. With `--hold` it
+waits for Enter first, then exits 0.
+
 ```bash
 cabildo host kill <id>
 ```

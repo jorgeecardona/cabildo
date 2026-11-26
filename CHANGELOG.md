@@ -4,6 +4,15 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- `cabildo attach` says why it stopped: the host stopped, or it closed the viewer. It exits 75
+  instead of 0, and `--hold` keeps the message on screen until Enter. A viewer that was dropped for
+  being too slow stayed connected and froze; it is now disconnected. Run `cabildo host stop` to
+  start the new host (it ends the hosted sessions).
+
+- VS Code extension: `Cabildo: New Claude Session in Folder` starts a hosted session and opens it.
+  A tab whose connection ends stays open with the reason. The extension no longer imports a
+  `cabildo` folder of the open workspace.
+
 - Hosted sessions: a viewer (`cabildo attach`, a workspace pane, the VS Code tab) was
   disconnected 5 seconds after its last key. It now stays attached. Attaching again at the same
   window size showed a blank screen; Claude now redraws. Run `cabildo host stop` to start the new

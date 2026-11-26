@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
 
-import { brokerSocket, cabildoCommand, home, hostSocket } from "../src/paths";
+import { brokerSocket, cabildoCommand, home, hostSocket, sessionEnv } from "../src/paths";
 
 test("environment variables override the sockets", () => {
   assert.equal(brokerSocket({ CABILDO_HOME: "/h" }), "/h/bus.sock");
@@ -27,6 +27,11 @@ test("the command is the setting, then the daemon's Python, then PATH", (t) => {
   const env = { CABILDO_HOME: dir };
   assert.deepEqual(cabildoCommand("", env), { path: "cabildo", args: [] });
   fs.writeFileSync(path.join(dir, "daemon.json"), JSON.stringify({ exe: process.execPath }));
-  assert.deepEqual(cabildoCommand("", env), { path: process.execPath, args: ["-m", "cabildo.cli"] });
+  assert.deepEqual(cabildoCommand("", env), { path: process.execPath, args: ["-P", "-m", "cabildo.cli"] });
   assert.deepEqual(cabildoCommand("/x/cabildo", env), { path: "/x/cabildo", args: [] });
+});
+
+test("a new session does not get the variables of the extension host", () => {
+  const env = { PATH: "/bin", ELECTRON_RUN_AS_NODE: "1", VSCODE_PID: "7", TERM: "dumb", X: undefined };
+  assert.deepEqual(sessionEnv(env), { PATH: "/bin", TERM: "xterm-256color", COLORTERM: "truecolor" });
 });

@@ -82,8 +82,10 @@ PyPI, with its own version. Per the global rule, bump only the patch.
 - Probe with a real `claude` (25-11-2026): attach, type and read the reply worked. It found two
   host bugs, fixed in `host.py`: a viewer was dropped 5 seconds after its last key, and a
   second attach at the same size showed a blank screen.
-- Not done: sidebar tree, gutter markers, toasts, commands (send, release, mark read), starting a
-  session from VS Code, the check across a daemon restart, Remote SSH, publishing.
+- Added (26-11-2026): a command that starts a session in the open folder, probed with a real
+  `claude`. A tab whose connection to the host ends now shows why.
+- Not done: sidebar tree, gutter markers, toasts, commands (send, release, mark read), the check
+  across a daemon restart, Remote SSH, publishing.
 
 ## Not doing here
 

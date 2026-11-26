@@ -1,7 +1,7 @@
 {
   "name": "cabildo",
   "displayName": "cabildo",
-  "description": "Shows cabildo agents and your unread messages, and opens hosted Claude sessions in a terminal tab.",
+  "description": "Shows cabildo agents and your unread messages, and starts and opens hosted Claude sessions in a terminal tab.",
   "version": "0.0.1",
   "publisher": "jorgeecardona",
   "license": "MIT",
@@ -39,6 +39,11 @@
       {
         "command": "cabildo.attach",
         "title": "Attach to Claude Session",
+        "category": "Cabildo"
+      },
+      {
+        "command": "cabildo.new",
+        "title": "New Claude Session in Folder",
         "category": "Cabildo"
       },
       {

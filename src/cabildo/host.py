@@ -149,6 +149,17 @@ class _Viewer:
         self.conn = conn
         self._lock = threading.Lock()
 
+    def close(self) -> None:
+        """End the connection, so the viewer reads the end of it.
+
+        ``close`` alone does not: the thread blocked reading the viewer's keys keeps the socket
+        open.
+        """
+        with contextlib.suppress(OSError):
+            self.conn.shutdown(socket.SHUT_RDWR)
+        with contextlib.suppress(OSError):
+            self.conn.close()
+
     def send(self, kind: int, payload: bytes) -> bool:
         """Send one frame. False when the viewer is gone or too slow.
 
@@ -191,8 +202,14 @@ class _Session:
             with self.lock:
                 self.viewers = [v for v in self.viewers if v not in dead]
             for v in dead:
-                with contextlib.suppress(OSError):
-                    v.conn.close()
+                v.close()
+
+    def drop_viewers(self) -> None:
+        """Close every viewer's connection."""
+        with self.lock:
+            viewers, self.viewers = self.viewers, []
+        for v in viewers:
+            v.close()
 
     def write(self, data: bytes) -> None:
         """Type into the terminal. The master may be non-blocking when it came from another process."""
@@ -263,7 +280,8 @@ class Host:
                     break
                 session.broadcast(DATA, data)
         finally:
-            self._end(session)
+            if not self._stop.is_set():  # a stopping host sends no exit: the session did not end
+                self._end(session)
 
     def _end(self, session: _Session) -> None:
         session.ended.set()
@@ -274,11 +292,7 @@ class Host:
             except subprocess.TimeoutExpired:
                 threading.Thread(target=session.proc.wait, daemon=True).start()
         session.broadcast(EXIT, _CODE.pack(code))
-        with session.lock:
-            viewers, session.viewers = session.viewers, []
-        for v in viewers:
-            with contextlib.suppress(OSError):
-                v.conn.close()
+        session.drop_viewers()
         with contextlib.suppress(OSError):
             os.close(session.master)
         with self._lock:
@@ -414,6 +428,10 @@ class Host:
             srv.close()
             with contextlib.suppress(OSError):
                 os.unlink(self.path)
+            with self._lock:
+                sessions = list(self.sessions.values())
+            for session in sessions:  # after the socket: a viewer that asks finds no host
+                session.drop_viewers()
 
     def stop(self) -> None:
         """End the accept loop. Sessions are hung up when the process exits."""

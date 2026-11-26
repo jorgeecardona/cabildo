@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { UNREAD_LIMIT } from "../src/client";
 import type { HostSession, Message, Status } from "../src/types";
-import { sessionRows, statusText, statusTooltip } from "../src/view";
+import { NEW_ROW, pickerRows, sessionRows, statusText, statusTooltip } from "../src/view";
 
 const message = (id: number): Message => ({ id, from_display: "@a", body: "x\ny", urgent: false });
 
@@ -40,4 +40,9 @@ test("sessions under an open folder come first, then the newest", () => {
   );
   assert.deepEqual(rows.map((r) => r.session.id), ["in", "root", "new", "sibling"]);
   assert.equal(rows[0]!.label, "sub");
+});
+
+test("the picker offers a new session only when a folder is open", () => {
+  assert.deepEqual(pickerRows([], ["/work/repo"]), [NEW_ROW]);
+  assert.deepEqual(pickerRows([], []), []);
 });

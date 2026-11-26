@@ -47,6 +47,18 @@ def clean_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
     return {k: v for k, v in source.items() if k not in SESSION_VARS}
 
 
+#: Exit code of ``attach`` when the connection to the host closes before the session ends.
+DISCONNECTED = os.EX_TEMPFAIL
+
+#: Turns off what the session may have turned on in this terminal (alternate screen, hidden
+#: cursor, mouse and focus reports, bracketed paste, extended keys), so the message after a lost
+#: connection is readable and Enter reads as Enter.
+_RESET_TERMINAL = (
+    b"\x1b[?1047l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2004l"
+    b"\x1b[<u\x1b[>4m\x1b[0m\r\n"
+)
+
+
 class ClientError(Exception):
     """The host refused the request, or none could be started."""
 
@@ -231,14 +243,17 @@ def attach_command(host_id: str) -> tuple[str, ...]:
     return (sys.executable, "-m", "cabildo.cli", "attach", "--socket", host.socket_path(), host_id)
 
 
-def attach(host_id: str) -> int:
+def attach(host_id: str, *, hold: bool = False) -> int:
     """Connect this terminal to a hosted session until it ends or the terminal closes.
 
-    Returns the session's exit code, or 0 when this terminal closed first.
+    Returns the session's exit code, 0 when this terminal closed first, 1 when the host refuses,
+    or ``DISCONNECTED`` when the connection closes before the session ends. The last two print
+    why. With ``hold``, they then wait for Enter and return 0, so a terminal tab that closes on
+    exit keeps the message on screen.
     """
-    ensure_running()
-    size = shutil.get_terminal_size()
     try:
+        ensure_running()
+        size = shutil.get_terminal_size()
         sock = _connect()
         sock.sendall(
             json.dumps(
@@ -248,24 +263,50 @@ def attach(host_id: str) -> int:
         )
         reply = _read_line(sock)
     except (OSError, ClientError) as exc:
-        print(f"cabildo attach: {exc}", file=sys.stderr)
-        return 1
+        return _fail(str(exc), 1, hold)
     if not reply.get("ok"):
-        print(f"cabildo attach: {reply.get('error')}", file=sys.stderr)
-        return 1
+        return _fail(str(reply.get("error")), 1, hold)
     sock.settimeout(None)
-    return _relay(sock)
+    code = _relay(sock)
+    if code is None:
+        if os.isatty(sys.stdout.fileno()):
+            os.write(sys.stdout.fileno(), _RESET_TERMINAL)
+        return _fail(_why_disconnected(host_id), DISCONNECTED, hold)
+    return code
 
 
-def _relay(sock: socket.socket) -> int:
-    """Copy keys to the host and the host's output to the screen; follow window resizes."""
+def _why_disconnected(host_id: str) -> str:
+    """What the person can do after the connection to the host closed."""
+    if not is_running():
+        return "the session host stopped. Its sessions ended with it."
+    if any(r.id == host_id for r in list_sessions()):
+        return f"the host closed this viewer. The session still runs: cabildo attach {host_id}"
+    return f"the connection closed and the host no longer has session {host_id}."
+
+
+def _fail(message: str, code: int, hold: bool) -> int:
+    """Print why ``attach`` stops; wait for Enter first when ``hold`` and a person can press it."""
+    print(f"cabildo attach: {message}", file=sys.stderr)
+    if not (hold and sys.stdin.isatty()):
+        return code
+    print("Press Enter to close.", file=sys.stderr, flush=True)
+    with contextlib.suppress(OSError, KeyboardInterrupt):
+        sys.stdin.readline()
+    return 0
+
+
+def _relay(sock: socket.socket) -> int | None:
+    """Copy keys to the host and the host's output to the screen; follow window resizes.
+
+    Returns the session's exit code, 0 when this terminal closed first, or None when the
+    connection to the host closed before either.
+    """
     stdin, stdout = sys.stdin.fileno(), sys.stdout.fileno()
     is_tty = os.isatty(stdin)
     saved = termios.tcgetattr(stdin) if is_tty else None
     wake_r, wake_w = os.pipe()
     os.set_blocking(wake_w, False)
     previous = signal.signal(signal.SIGWINCH, lambda *_: _poke(wake_w))
-    code = 0
     try:
         if is_tty:
             tty.setraw(stdin)
@@ -274,33 +315,51 @@ def _relay(sock: socket.socket) -> int:
             if wake_r in ready:
                 os.read(wake_r, 4096)
                 size = shutil.get_terminal_size()
-                sock.sendall(host.pack_frame(host.RESIZE, host.pack_size(size.lines, size.columns)))
+                if not _send(sock, host.RESIZE, host.pack_size(size.lines, size.columns)):
+                    return None
             if stdin in ready:
                 data = os.read(stdin, 65536)
                 if not data:
-                    break
-                sock.sendall(host.pack_frame(host.DATA, data))
+                    return 0
+                if not _send(sock, host.DATA, data):
+                    return None
             if sock in ready:
-                frame = host.read_frame(sock)
+                frame = _receive(sock)
                 if frame is None:
-                    break
+                    return None
                 kind, payload = frame
                 if kind == host.DATA:
                     _write_all(stdout, payload)
                 elif kind == host.EXIT:
-                    code = host.unpack_code(payload)
-                    break
-    except OSError:
-        pass
+                    return max(host.unpack_code(payload), 0)
+    except OSError:  # this terminal is gone
+        return 0
     finally:
         signal.signal(signal.SIGWINCH, previous)
         if saved is not None:
-            termios.tcsetattr(stdin, termios.TCSADRAIN, saved)
+            with contextlib.suppress(termios.error):
+                termios.tcsetattr(stdin, termios.TCSADRAIN, saved)
         with contextlib.suppress(OSError):
             sock.close()
         os.close(wake_r)
         os.close(wake_w)
-    return max(code, 0)
+
+
+def _send(sock: socket.socket, kind: int, payload: bytes) -> bool:
+    """Send one frame to the host. False when the connection is closed."""
+    try:
+        sock.sendall(host.pack_frame(kind, payload))
+    except OSError:
+        return False
+    return True
+
+
+def _receive(sock: socket.socket) -> tuple[int, bytes] | None:
+    """The host's next frame, or None when the connection is closed."""
+    try:
+        return host.read_frame(sock)
+    except OSError:
+        return None
 
 
 def _poke(fd: int) -> None:

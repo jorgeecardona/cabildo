@@ -1,5 +1,6 @@
 // Runs inside the VS Code extension host. See run.mjs.
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const vscode = require("vscode");
@@ -56,6 +57,31 @@ exports.run = async () => {
     await until("the tab to close", () => !vscode.window.terminals.includes(terminal));
     result.runningAfterClose = (await listSessions(socket)).some((s) => s.id === id);
     assert.ok(result.runningAfterClose, "closing the tab ended the session");
+
+    // A new session in the open folder; its `claude` is the script run.mjs put on PATH.
+    const started = await vscode.commands.executeCommand("cabildo.new");
+    const record = (await listSessions(socket)).find((s) => s.id === started);
+    assert.equal(record?.cwd, dir, "the session did not start in the folder");
+    result.newSession = `${record.command.join(" ")} in ${record.cwd}`;
+    const tab = await until("the new tab", () =>
+      vscode.window.terminals.find((t) => t.name.endsWith(started)),
+    );
+    await tab.processId;
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    tab.sendText("typed in the new session");
+    const fresh = path.join(dir, "new");
+    result.newSessionRead = await until("the new session to read the line", () =>
+      fs.existsSync(fresh) ? fs.readFileSync(fresh, "utf8").trim() : "",
+    );
+
+    // The host stops: the tab stays open with the reason until Enter.
+    execFileSync(process.env.CABILDO_BIN, ["host", "stop", "--force"]);
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    assert.equal(tab.exitStatus, undefined, "the tab closed when the host stopped");
+    result.openAfterHostStopped = true;
+    tab.sendText("");
+    await until("the tab to close on Enter", () => !vscode.window.terminals.includes(tab));
+    result.closedOnEnter = true;
   } catch (error) {
     result.error = String(error.stack ?? error);
     throw error;

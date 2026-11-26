@@ -2724,7 +2724,7 @@ def cmd_attach(args) -> int:
 
     if args.socket:
         os.environ["CABILDO_HOST_SOCKET"] = args.socket
-    return host_client.attach(args.id)
+    return host_client.attach(args.id, hold=args.hold)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2981,6 +2981,11 @@ def main(argv: list[str] | None = None) -> int:
 
     at = sub.add_parser("attach", help="show a session the host owns in this terminal")
     at.add_argument("--socket", help="the host's socket (default: the one cabildo uses)")
+    at.add_argument(
+        "--hold",
+        action="store_true",
+        help="after a refusal or a lost connection, wait for Enter, then exit 0",
+    )
     at.add_argument("id", help="the id `cabildo host list` prints")
     at.set_defaults(fn=cmd_attach)
 

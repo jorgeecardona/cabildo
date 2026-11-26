@@ -37,7 +37,7 @@ export function statusTooltip(status: Status): string {
     ...messages,
     ...more(status.unread.length - messages.length),
     "",
-    "Click to attach to a Claude session.",
+    "Click to open a Claude session.",
   ].join("\n");
 }
 
@@ -77,4 +77,27 @@ export function sessionRows(
       detail: `${session.cwd} · ${session.command.join(" ").slice(0, PREVIEW)}`,
       session,
     }));
+}
+
+/** The picker row that starts a session instead of picking one. */
+export interface NewRow {
+  readonly label: string;
+  readonly description: string;
+  readonly detail: string;
+  readonly session?: undefined;
+}
+
+export const NEW_ROW: NewRow = {
+  label: "$(add) New Claude session in this folder",
+  description: "",
+  detail: "",
+};
+
+/** The session rows, then the row that starts one when a folder is open. */
+export function pickerRows(
+  sessions: readonly HostSession[],
+  folders: readonly string[],
+): (SessionRow | NewRow)[] {
+  const rows = sessionRows(sessions, folders);
+  return folders.length ? [...rows, NEW_ROW] : rows;
 }

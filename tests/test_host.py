@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import select
+import signal
 import socket
 import subprocess
 import sys
 import termios
 import threading
 import time
+from collections.abc import Iterator
 
 import pytest
 
@@ -221,6 +224,90 @@ def test_attach_command_relays_a_terminal(session_host, tmp_path):
     assert b"got-q" in read_until(b"got-q")
     assert proc.wait(10) == 0
     os.close(master)
+
+
+@contextlib.contextmanager
+def attach_on_a_pty(*args: str) -> Iterator[tuple[subprocess.Popen[bytes], int]]:
+    """``cabildo attach`` on its own pseudo-terminal: the process and the terminal's master."""
+    master, slave = os.openpty()
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "cabildo.cli", "attach", *args],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+    )
+    os.close(slave)
+    try:
+        yield proc, master
+    finally:
+        proc.kill()
+        proc.wait(5)
+        os.close(master)
+
+
+def screen_until(master: int, needle: bytes) -> bytes:
+    seen = b""
+    deadline = time.monotonic() + 15
+    while needle not in seen and time.monotonic() < deadline:
+        if select.select([master], [], [], 0.2)[0]:
+            try:
+                seen += os.read(master, 4096)
+            except OSError:
+                break
+    return seen
+
+
+def wait_for_a_viewer(session: host._Session) -> None:
+    deadline = time.monotonic() + 15
+    while not session.viewers and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+
+def test_a_dropped_viewer_reads_the_end_of_the_connection(session_host, tmp_path, monkeypatch):
+    monkeypatch.setattr(host, "_VIEWER_SEND_TIMEOUT", 0.2)
+    record = host_client.start_session(
+        ["sh", "-c", "read go; head -c 8000000 /dev/zero; read x"], cwd=str(tmp_path)
+    )
+    sock = viewer(session_host.path, record.id)
+    type_in(sock, b"go\n")
+    session = session_host.sessions[record.id]
+    deadline = time.monotonic() + 15
+    while session.viewers and time.monotonic() < deadline:  # it reads nothing, so it is dropped
+        time.sleep(0.02)
+    assert not session.viewers
+    while sock.recv(1 << 16):  # a timeout here means the connection was left open
+        pass
+
+
+def test_attach_says_the_host_closed_the_viewer(session_host, tmp_path):
+    record = host_client.start_session(["sh", "-c", "read x"], cwd=str(tmp_path))
+    with attach_on_a_pty(record.id) as (proc, master):
+        session = session_host.sessions[record.id]
+        wait_for_a_viewer(session)
+        session.drop_viewers()
+        assert b"The session still runs" in screen_until(master, b"The session still runs")
+        assert proc.wait(10) == host_client.DISCONNECTED
+
+
+def test_attach_says_the_host_stopped(session_host, tmp_path):
+    record = host_client.start_session(["sh", "-c", "read x"], cwd=str(tmp_path))
+    pid = record.pid
+    with attach_on_a_pty(record.id) as (proc, master):
+        wait_for_a_viewer(session_host.sessions[record.id])
+        session_host.stop()
+        assert b"the session host stopped" in screen_until(master, b"the session host stopped")
+        assert proc.wait(10) == host_client.DISCONNECTED
+    os.killpg(os.getpgid(pid), signal.SIGKILL)  # a real host process would hang it up by exiting
+
+
+def test_attach_with_hold_waits_for_enter(session_host):
+    with attach_on_a_pty("--hold", "nope") as (proc, master):
+        screen = screen_until(master, b"Press Enter to close.")
+        assert b"no hosted session 'nope'" in screen
+        with pytest.raises(subprocess.TimeoutExpired):
+            proc.wait(0.3)
+        os.write(master, b"\r")
+        assert proc.wait(10) == 0
 
 
 def test_the_attach_command_names_the_socket(session_host):
