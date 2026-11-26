@@ -28,9 +28,11 @@ def claude(home, monkeypatch):
     return project
 
 
-def reply(message_id: str, **counts: int) -> str:
+def reply(message_id: str, *, input_tokens: int = 0, output: int = 0, cache_read: int = 0) -> str:
     """A transcript line as ``_reply_tokens`` reads it."""
-    raw = json.loads(line(message_id, "2026-01-01T00:00:00.000Z", **counts))
+    when = "2026-01-01T00:00:00.000Z"
+    text = line(message_id, when, input_tokens=input_tokens, output=output, cache_read=cache_read)
+    raw = json.loads(text)
     raw["message"] = {"role": "assistant", **raw["message"]}
     raw["message"]["id"] = f"msg_{message_id}"
     return json.dumps(raw)
