@@ -14,6 +14,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 - VS Code extension: on the Visual Studio Marketplace as `cardona-oss.cabildo`.
 
+- VS Code extension 0.0.3: installs in VS Code 1.108 and later (it asked for 1.120).
+
 - VS Code extension: a cabildo side bar with three lists. Claude Sessions (start, open, end),
   Agents (send a message) and Unread Messages (read, reply, mark read), with the unread count on
   the cabildo icon.

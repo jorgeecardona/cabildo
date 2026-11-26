@@ -2,7 +2,7 @@
   "name": "cabildo",
   "displayName": "cabildo",
   "description": "A side bar for cabildo: hosted Claude sessions, agents and your unread messages.",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "cardona-oss",
   "license": "MIT",
   "repository": {
@@ -11,7 +11,7 @@
     "directory": "packages/vscode"
   },
   "engines": {
-    "vscode": "^1.120.0"
+    "vscode": "^1.108.0"
   },
   "categories": [
     "Other"
@@ -234,7 +234,7 @@
   },
   "devDependencies": {
     "@types/node": "~22.20.7",
-    "@types/vscode": "~1.120.0",
+    "@types/vscode": "~1.108.0",
     "@vscode/vsce": "4.1.1",
     "typescript": "7.0.2"
   }
