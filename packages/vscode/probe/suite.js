@@ -23,7 +23,7 @@ exports.run = async () => {
   const { PROBE_DIR: dir, PROBE_SESSION: id, CABILDO_HOST_SOCKET: socket } = process.env;
   const result = { vscode: vscode.version };
   try {
-    const api = await vscode.extensions.getExtension("jorgeecardona.cabildo").activate();
+    const api = await vscode.extensions.getExtension("JorgeCardona.cabildo").activate();
     const status = await api.refresh();
     assert.equal(status.kind, "online", status.reason);
     result.statusBar = api.statusText();

@@ -67,16 +67,16 @@ The GitLab job `vscode` publishes to the Visual Studio Marketplace. It runs on `
 `packages/vscode/` or `.gitlab-ci.yml` changes. Without the variable `VSCE_PAT`, it builds
 `cabildo.vsix` and publishes nothing.
 
-Set it up once:
+The publisher is `JorgeCardona`, the same one as `react-lens` and `pymodelica-scope`.
 
-1. Create the publisher `jorgeecardona` at
-   [marketplace.visualstudio.com/manage](https://marketplace.visualstudio.com/manage). If the ID
-   is taken, change `publisher` in `packages/vscode/package.json`.
-2. Create a personal access token in [Azure DevOps](https://dev.azure.com), with the same
-   Microsoft account. Organization: `All accessible organizations`. Scope: Marketplace, `Manage`.
-3. Add it in GitLab under Settings, CI/CD, Variables: key `VSCE_PAT`, masked, protected,
+Set up the token once:
+
+1. Get a Marketplace token of that publisher. To make a new one in
+   [Azure DevOps](https://dev.azure.com): Organization `All accessible organizations`, scope
+   Marketplace, `Manage`.
+2. Add it in GitLab under Settings, CI/CD, Variables: key `VSCE_PAT`, masked, protected,
    environment `vscode-marketplace`.
-4. Run a pipeline on `main`:
+3. Run a pipeline on `main`:
 
 ```bash
 glab ci run --branch main
@@ -85,7 +85,7 @@ glab ci run --branch main
 To publish a new version, raise the patch of `version` in `packages/vscode/package.json` and
 push. A version that is already on the Marketplace is skipped.
 
-Microsoft retires the kind of token used in step 2. The
+Microsoft retires the kind of token used in step 1. The
 [VS Code page](https://code.visualstudio.com/api/working-with-extensions/publishing-extension)
 gives 1 December 2026, and the
 [Azure DevOps post](https://devblogs.microsoft.com/devops/retirement-of-global-personal-access-tokens-in-azure-devops/)

@@ -94,7 +94,7 @@ vscode:
   # Scope VSCE_PAT to this environment, so the other jobs do not receive it.
   environment:
     name: vscode-marketplace
-    url: https://marketplace.visualstudio.com/items?itemName=jorgeecardona.cabildo
+    url: https://marketplace.visualstudio.com/items?itemName=JorgeCardona.cabildo
   before_script:
     - cd packages/vscode
     - corepack enable

@@ -87,7 +87,8 @@ PyPI, with its own version. Per the global rule, bump only the patch.
 - Added (26-11-2026): the side bar (hosted sessions, agents, unread messages) with send, reply
   and mark read.
 - Added (26-11-2026): the GitLab job `vscode` that publishes to the Visual Studio Marketplace
-  when `VSCE_PAT` is set. Not published yet: the publisher and the token do not exist.
+  when `VSCE_PAT` is set, under the existing publisher `JorgeCardona`. Not published yet: this
+  project has no token.
 - Not done: claims and rooms in the side bar, gutter markers, toasts, releasing a claim, the check
   across a daemon restart, Remote SSH, publishing.
 
