@@ -226,6 +226,7 @@
     "package": "pnpm run test && vsce package --no-dependencies --out cabildo.vsix",
     "probe": "pnpm run build && node probe/run.mjs"
   },
+  "packageManager": "pnpm@10.33.2",
   "pnpm": {
     "ignoredBuiltDependencies": [
       "@vscode/vsce-sign"

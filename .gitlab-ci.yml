@@ -79,3 +79,34 @@ pages:
   artifacts:
     paths:
       - public
+
+# The VS Code extension (packages/vscode). Runs on main when the extension or this file changes:
+# tests it and builds cabildo.vsix, then publishes that file to the Visual Studio Marketplace if
+# VSCE_PAT is set. A version that is already published is skipped. See docs/vscode.md "Publish".
+vscode:
+  image: node:24-bookworm-slim
+  needs: []
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - packages/vscode/**/*
+        - .gitlab-ci.yml
+  # Scope VSCE_PAT to this environment, so the other jobs do not receive it.
+  environment:
+    name: vscode-marketplace
+    url: https://marketplace.visualstudio.com/items?itemName=jorgeecardona.cabildo
+  before_script:
+    - cd packages/vscode
+    - corepack enable
+    - pnpm install --frozen-lockfile
+  script:
+    - pnpm run package
+    - |
+      if [ -z "${VSCE_PAT:-}" ]; then
+        echo "VSCE_PAT is not set: built cabildo.vsix, published nothing."
+      else
+        pnpm exec vsce publish --packagePath cabildo.vsix --skip-duplicate
+      fi
+  artifacts:
+    paths:
+      - packages/vscode/cabildo.vsix

@@ -61,6 +61,37 @@ The status bar shows the agent count and the unread count too. Click it to pick 
 
 With Remote SSH, install the extension on the remote host: the sockets are there.
 
+## Publish
+
+The GitLab job `vscode` publishes to the Visual Studio Marketplace. It runs on `main` when
+`packages/vscode/` or `.gitlab-ci.yml` changes. Without the variable `VSCE_PAT`, it builds
+`cabildo.vsix` and publishes nothing.
+
+Set it up once:
+
+1. Create the publisher `jorgeecardona` at
+   [marketplace.visualstudio.com/manage](https://marketplace.visualstudio.com/manage). If the ID
+   is taken, change `publisher` in `packages/vscode/package.json`.
+2. Create a personal access token in [Azure DevOps](https://dev.azure.com), with the same
+   Microsoft account. Organization: `All accessible organizations`. Scope: Marketplace, `Manage`.
+3. Add it in GitLab under Settings, CI/CD, Variables: key `VSCE_PAT`, masked, protected,
+   environment `vscode-marketplace`.
+4. Run a pipeline on `main`:
+
+```bash
+glab ci run --branch main
+```
+
+To publish a new version, raise the patch of `version` in `packages/vscode/package.json` and
+push. A version that is already on the Marketplace is skipped.
+
+Microsoft retires the kind of token used in step 2. The
+[VS Code page](https://code.visualstudio.com/api/working-with-extensions/publishing-extension)
+gives 1 December 2026, and the
+[Azure DevOps post](https://devblogs.microsoft.com/devops/retirement-of-global-personal-access-tokens-in-azure-devops/)
+says it moved to 27 January 2027. After that date this job needs another sign-in. Its sign-in
+without a stored token (`vsce publish --oidc`) accepts GitHub Actions, not GitLab.
+
 ## Develop
 
 Run the tests:
