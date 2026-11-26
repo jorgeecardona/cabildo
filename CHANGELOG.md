@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- VS Code extension: a cabildo side bar with three lists. Claude Sessions (start, open, end),
+  Agents (send a message) and Unread Messages (read, reply, mark read), with the unread count on
+  the cabildo icon.
+
 - `cabildo attach` says why it stopped: the host stopped, or it closed the viewer. It exits 75
   instead of 0, and `--hold` keeps the message on screen until Enter. A viewer that was dropped for
   being too slow stayed connected and froze; it is now disconnected. Run `cabildo host stop` to

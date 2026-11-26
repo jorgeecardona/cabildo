@@ -41,7 +41,8 @@ export function statusTooltip(status: Status): string {
   ].join("\n");
 }
 
-function preview(body: string): string {
+/** A body on one line, cut short. */
+export function preview(body: string): string {
   const line = body.replace(/\s+/g, " ").trim();
   return line.length > PREVIEW ? `${line.slice(0, PREVIEW - 1)}…` : line;
 }
@@ -50,7 +51,8 @@ function more(count: number): string[] {
   return count > 0 ? [`and ${count} more`] : [];
 }
 
-function within(folder: string, cwd: string): boolean {
+/** Whether `cwd` is `folder` or under it. */
+export function within(folder: string, cwd: string): boolean {
   const relative = path.relative(folder, cwd);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }

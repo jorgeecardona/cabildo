@@ -1,8 +1,8 @@
 {
   "name": "cabildo",
   "displayName": "cabildo",
-  "description": "Shows cabildo agents and your unread messages, and starts and opens hosted Claude sessions in a terminal tab.",
-  "version": "0.0.1",
+  "description": "A side bar for cabildo: hosted Claude sessions, agents and your unread messages.",
+  "version": "0.0.2",
   "publisher": "jorgeecardona",
   "license": "MIT",
   "repository": {
@@ -31,25 +31,69 @@
   "main": "./out/src/extension.js",
   "files": [
     "out/src",
+    "media",
     "README.md",
     "LICENSE"
   ],
   "contributes": {
     "commands": [
       {
+        "command": "cabildo.new",
+        "title": "New Claude Session in Folder",
+        "category": "Cabildo",
+        "icon": "$(add)"
+      },
+      {
         "command": "cabildo.attach",
         "title": "Attach to Claude Session",
         "category": "Cabildo"
       },
       {
-        "command": "cabildo.new",
-        "title": "New Claude Session in Folder",
+        "command": "cabildo.refresh",
+        "title": "Refresh",
+        "category": "Cabildo",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "cabildo.openSession",
+        "title": "Open Session",
+        "category": "Cabildo",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "cabildo.endSession",
+        "title": "End Session",
+        "category": "Cabildo",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "cabildo.sendMessage",
+        "title": "Send Message",
+        "category": "Cabildo",
+        "icon": "$(comment)"
+      },
+      {
+        "command": "cabildo.openMessage",
+        "title": "Open Message",
         "category": "Cabildo"
       },
       {
-        "command": "cabildo.refresh",
-        "title": "Refresh Status",
-        "category": "Cabildo"
+        "command": "cabildo.reply",
+        "title": "Reply",
+        "category": "Cabildo",
+        "icon": "$(reply)"
+      },
+      {
+        "command": "cabildo.markRead",
+        "title": "Mark Read",
+        "category": "Cabildo",
+        "icon": "$(check)"
+      },
+      {
+        "command": "cabildo.markAllRead",
+        "title": "Mark All Read",
+        "category": "Cabildo",
+        "icon": "$(check-all)"
       }
     ],
     "configuration": {
@@ -68,6 +112,112 @@
           "description": "Seconds between status bar updates."
         }
       }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "cabildo",
+          "title": "cabildo",
+          "icon": "media/cabildo.svg"
+        }
+      ]
+    },
+    "views": {
+      "cabildo": [
+        {
+          "id": "cabildo.sessions",
+          "name": "Claude Sessions"
+        },
+        {
+          "id": "cabildo.agents",
+          "name": "Agents"
+        },
+        {
+          "id": "cabildo.messages",
+          "name": "Unread Messages"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "cabildo.sessions",
+        "contents": "The session host runs no session.\n[New Claude Session](command:cabildo.new)"
+      },
+      {
+        "view": "cabildo.agents",
+        "contents": "No agent is active."
+      },
+      {
+        "view": "cabildo.messages",
+        "contents": "No unread messages."
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "cabildo.openSession",
+          "when": "false"
+        },
+        {
+          "command": "cabildo.endSession",
+          "when": "false"
+        },
+        {
+          "command": "cabildo.sendMessage",
+          "when": "false"
+        },
+        {
+          "command": "cabildo.openMessage",
+          "when": "false"
+        },
+        {
+          "command": "cabildo.reply",
+          "when": "false"
+        },
+        {
+          "command": "cabildo.markRead",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "cabildo.new",
+          "when": "view == cabildo.sessions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "cabildo.refresh",
+          "when": "view == cabildo.sessions",
+          "group": "navigation@2"
+        },
+        {
+          "command": "cabildo.markAllRead",
+          "when": "view == cabildo.messages",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "cabildo.endSession",
+          "when": "viewItem == session",
+          "group": "inline"
+        },
+        {
+          "command": "cabildo.sendMessage",
+          "when": "viewItem == agent",
+          "group": "inline"
+        },
+        {
+          "command": "cabildo.reply",
+          "when": "viewItem == message",
+          "group": "inline@1"
+        },
+        {
+          "command": "cabildo.markRead",
+          "when": "viewItem == message",
+          "group": "inline@2"
+        }
+      ]
     }
   },
   "scripts": {

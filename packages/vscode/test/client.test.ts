@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { test, type TestContext } from "node:test";
 
-import { fetchStatus, HUMAN, listSessions } from "../src/client";
+import { endSession, fetchStatus, HUMAN, listSessions, markRead, sendMessage } from "../src/client";
 
 /** A unix socket that answers each request line with `answer(request)`, split in two writes. */
 async function fakeSocket(t: TestContext, answer: (request: any) => unknown) {
@@ -66,4 +66,26 @@ test("no host means no sessions", async () => {
 test("a host that refuses is an error", async (t) => {
   const host = await fakeSocket(t, () => ({ ok: false, error: "unknown op" }));
   await assert.rejects(listSessions(host.address), /unknown op/);
+});
+
+test("sending and marking read are broker operations of the person", async (t) => {
+  const broker = await fakeSocket(t, () => ({ ok: true, result: {} }));
+  await sendMessage(broker.address, "s1", "hello");
+  await markRead(broker.address, [4, 5]);
+  await markRead(broker.address, "all");
+  assert.deepEqual(
+    broker.requests.map((r) => [r.op, r.params]),
+    [
+      ["send", { to_session: "s1", body: "hello" }],
+      ["mark_read", { message_ids: [4, 5] }],
+      ["mark_read", { all_unread: true }],
+    ],
+  );
+  assert.deepEqual(broker.requests[0].identity, HUMAN);
+});
+
+test("ending a session asks the host, and reports its refusal", async (t) => {
+  const host = await fakeSocket(t, () => ({ ok: false, error: "no hosted session 'x'" }));
+  await assert.rejects(endSession(host.address, "x"), /no hosted session/);
+  assert.deepEqual(host.requests, [{ op: "kill", id: "x" }]);
 });

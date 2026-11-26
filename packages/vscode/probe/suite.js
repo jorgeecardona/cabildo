@@ -28,7 +28,26 @@ exports.run = async () => {
     assert.equal(status.kind, "online", status.reason);
     result.statusBar = api.statusText();
 
-    await vscode.commands.executeCommand("cabildo.attach", id);
+    // The side bar: show it, then read its three lists.
+    await vscode.commands.executeCommand("workbench.view.extension.cabildo");
+    await api.refresh();
+    const rows = api.rows();
+    result.sidebar = Object.fromEntries(
+      Object.entries(rows).map(([list, nodes]) => [
+        list,
+        nodes.map((n) => `${n.label} | ${n.description}`),
+      ]),
+    );
+    assert.equal(rows.sessions[0].label, "@probe-agent", "the session is not named by its agent");
+    assert.equal(rows.agents[0].session?.id, id);
+
+    await vscode.commands.executeCommand("cabildo.openMessage", rows.messages[0]);
+    result.opened = vscode.window.activeTextEditor.document.getText().split("\n").slice(2, 4);
+    assert.deepEqual(result.opened, ["hello from the probe", "second line"]);
+    result.unreadAfterOpen = api.rows().messages.length;
+    assert.equal(result.unreadAfterOpen, 0, "opening did not mark the message read");
+
+    await vscode.commands.executeCommand("cabildo.openSession", api.rows().sessions[0]);
     const terminal = await until("the terminal tab", () =>
       vscode.window.terminals.find((t) => t.name.endsWith(id)),
     );

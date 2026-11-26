@@ -1,4 +1,4 @@
-/** The two requests the extension makes: to the daemon's broker and to the session host. */
+/** The requests the extension makes: to the daemon's broker and to the session host. */
 
 import type { Agent, HostSession, Message, Status } from "./types";
 import { askLine } from "./wire";
@@ -60,4 +60,22 @@ export async function listSessions(socketPath: string): Promise<HostSession[]> {
     throw new Error(reply.error ?? "the session host refused the request");
   }
   return reply.sessions ?? [];
+}
+
+/** Send `body` from the person to one session, as a direct message. */
+export async function sendMessage(socketPath: string, to: string, body: string): Promise<void> {
+  await bus(socketPath, "send", { to_session: to, body });
+}
+
+/** Mark the person's messages read: the ones named, or every unread one. */
+export async function markRead(socketPath: string, ids: readonly number[] | "all"): Promise<void> {
+  await bus(socketPath, "mark_read", ids === "all" ? { all_unread: true } : { message_ids: ids });
+}
+
+/** Hang a hosted session up. */
+export async function endSession(socketPath: string, id: string): Promise<void> {
+  const reply = (await askLine(socketPath, { op: "kill", id })) as { ok: boolean; error?: string };
+  if (!reply.ok) {
+    throw new Error(reply.error ?? "the session host refused the request");
+  }
 }

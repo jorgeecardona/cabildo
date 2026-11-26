@@ -84,7 +84,9 @@ PyPI, with its own version. Per the global rule, bump only the patch.
   second attach at the same size showed a blank screen.
 - Added (26-11-2026): a command that starts a session in the open folder, probed with a real
   `claude`. A tab whose connection to the host ends now shows why.
-- Not done: sidebar tree, gutter markers, toasts, commands (send, release, mark read), the check
+- Added (26-11-2026): the side bar (hosted sessions, agents, unread messages) with send, reply
+  and mark read.
+- Not done: claims and rooms in the side bar, gutter markers, toasts, releasing a claim, the check
   across a daemon restart, Remote SSH, publishing.
 
 ## Not doing here

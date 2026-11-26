@@ -5,12 +5,16 @@ import { UNREAD_LIMIT } from "../src/client";
 import type { HostSession, Message, Status } from "../src/types";
 import { NEW_ROW, pickerRows, sessionRows, statusText, statusTooltip } from "../src/view";
 
-const message = (id: number): Message => ({ id, from_display: "@a", body: "x\ny", urgent: false });
+const message = (id: number): Message => ({
+  id, from_session: "s", from_display: "@a", topic: null, body: "x\ny", urgent: false, created_at: 0,
+});
 
 function online(unread: number): Status {
   return {
     kind: "online",
-    agents: [{ session_id: "s", display: "@a", presence: "idle", project_name: "p" }],
+    agents: [{
+      session_id: "s", display: "@a", presence: "idle", project_name: "p", cwd: null, claude_pid: null,
+    }],
     unread: Array.from({ length: unread }, (_, i) => message(i)),
   };
 }
