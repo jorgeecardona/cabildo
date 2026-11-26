@@ -379,7 +379,10 @@ def test_stop_ends_an_idle_host(tmp_path, monkeypatch):
     thread = threading.Thread(target=h.serve, daemon=True)
     thread.start()
     deadline = time.monotonic() + 5
-    while not os.path.exists(path) and time.monotonic() < deadline:
+    while time.monotonic() < deadline:  # the file exists from bind, before listen
+        with socket.socket(socket.AF_UNIX) as probe:
+            if probe.connect_ex(path) == 0:
+                break
         time.sleep(0.01)
     assert host_client.stop_host() == 0
     thread.join(5)
