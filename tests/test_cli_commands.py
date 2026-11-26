@@ -26,6 +26,7 @@ COMMANDS = [
     "clip",
     "jupyter",
     "gateway",
+    "stats",
     "host",
     "attach",
     "names",

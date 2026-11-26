@@ -1,10 +1,11 @@
-/** The three lists in the cabildo side bar. */
+/** The lists in the cabildo side bar. */
 
 import * as vscode from "vscode";
 
 import { type AgentNode, agentNodes, type MessageNode, messageNodes, type Node } from "./nodes";
 import { type SessionNode, sessionNodes } from "./nodes";
-import type { HostSession, Status } from "./types";
+import { type StatGroupNode, type StatNode, statNodes } from "./nodes";
+import type { HostSession, Stats, Status } from "./types";
 
 /** What the daemon and the host last answered. */
 export interface Snapshot {
@@ -15,6 +16,7 @@ export interface Snapshot {
 }
 
 export interface Rows {
+  readonly stats: readonly StatGroupNode[];
   readonly sessions: readonly SessionNode[];
   readonly agents: readonly AgentNode[];
   readonly messages: readonly MessageNode[];
@@ -56,11 +58,22 @@ function treeItem(node: Node): vscode.TreeItem {
       item.iconPath = node.message.urgent ? icon("warning", "charts.red") : icon("mail");
       item.command = open("cabildo.openMessage");
       break;
+    case "statGroup":
+      item.id = `statGroup:${node.id}`;
+      item.collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
+      break;
+    case "stat":
+      item.id = `stat:${node.id}`;
+      if (node.level) {
+        item.iconPath =
+          node.level === "alert" ? icon("error", "charts.red") : icon("warning", "charts.yellow");
+      }
+      break;
   }
   return item;
 }
 
-/** One flat list. */
+/** One list; a stats heading holds its lines. */
 class List<T extends Node> implements vscode.TreeDataProvider<T> {
   rows: readonly T[] = [];
   readonly view: vscode.TreeView<T>;
@@ -84,7 +97,10 @@ class List<T extends Node> implements vscode.TreeDataProvider<T> {
   }
 
   getChildren(node?: T): T[] {
-    return node ? [] : [...this.rows];
+    if (!node) {
+      return [...this.rows];
+    }
+    return node.kind === "statGroup" ? ([...node.rows] as Node[] as T[]) : [];
   }
 
   dispose(): void {
@@ -94,6 +110,7 @@ class List<T extends Node> implements vscode.TreeDataProvider<T> {
 }
 
 export class Sidebar implements vscode.Disposable {
+  private readonly stats = new List<StatGroupNode | StatNode>("cabildo.stats");
   private readonly sessions = new List<SessionNode>("cabildo.sessions");
   private readonly agents = new List<AgentNode>("cabildo.agents");
   private readonly messages = new List<MessageNode>("cabildo.messages");
@@ -112,12 +129,33 @@ export class Sidebar implements vscode.Disposable {
       : undefined;
   }
 
+  showStats(stats: Stats): void {
+    if (stats.kind === "online") {
+      this.stats.show(statNodes(stats.groups));
+    } else {
+      this.stats.show([], `no stats: ${stats.reason}`);
+    }
+  }
+
+  statsVisible(): boolean {
+    return this.stats.view.visible;
+  }
+
+  onStatsVisibility(changed: () => void): vscode.Disposable {
+    return this.stats.view.onDidChangeVisibility(changed);
+  }
+
   rows(): Rows {
-    return { sessions: this.sessions.rows, agents: this.agents.rows, messages: this.messages.rows };
+    return {
+      stats: this.stats.rows as readonly StatGroupNode[],
+      sessions: this.sessions.rows,
+      agents: this.agents.rows,
+      messages: this.messages.rows,
+    };
   }
 
   dispose(): void {
-    for (const list of [this.sessions, this.agents, this.messages]) {
+    for (const list of [this.stats, this.sessions, this.agents, this.messages]) {
       list.dispose();
     }
   }

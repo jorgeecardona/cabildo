@@ -73,7 +73,14 @@ from cabildo.workspace.launch import Config
 from cabildo.workspace.plan import PlanUsage
 from cabildo.workspace.sessions import Filter, Meta, Row, Tokens
 from cabildo.workspace.state import OpenState
-from cabildo.workspace.usage import Use, fmt_count, fmt_cpu, fmt_mb
+from cabildo.workspace.usage import (
+    Use,
+    fmt_age,
+    fmt_count,
+    fmt_cpu,
+    fmt_mb,
+    fmt_money,
+)
 from cabildo.workspace.xdgdirs import APP, make_dirs, state_home
 
 CLAUDE = "claude"  # the CLI the panes run; tests point this at a fake
@@ -271,15 +278,6 @@ FOCUS_POLL_SECONDS = 0.5  # how often to look for a sessions_focus request
 INTENT_FAILED = ("failed", "rejected", "expired")
 
 
-def fmt_age(seconds: float) -> str:
-    """``45s``, ``3m``, ``2h`` or ``4d``: one unit, the largest that is not zero."""
-    s = max(0, int(seconds))
-    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
-        if s >= size:
-            return f"{s // size}{unit}"
-    return f"{s}s"
-
-
 def fmt_intents(items: tuple[intents.Intent, ...], now: float) -> list[tuple[str, str]]:
     """The intents group, as (line, style) pairs::
 
@@ -333,13 +331,6 @@ def fmt_runners(
     if len(live) > RUNNER_LINES:
         out.append((f"+{len(live) - RUNNER_LINES} more", "dim"))
     return out
-
-
-def fmt_money(dollars: float) -> str:
-    """``$0.84``, ``$12.34``, ``$4,821.79``: cents always, because a daily figure is often
-    cents and rounding them away would show an active day as ``$0``.
-    """
-    return f"${dollars:,.2f}"
 
 
 NO_SPEND_ROW = "-"  # remembered when the login turned out to want no spend row at all
@@ -1136,19 +1127,8 @@ class SwitcherApp(App[None]):
         self._to_ui(self._spend_got, found, label)
 
     def _spend_heading(self) -> str:
-        """The row's label, or "" when there is to be no row.
-
-        "auto" shows it exactly where a subscription would have shown its limits -- on an
-        API key, where there is no published limit -- and stays silent when the login
-        cannot be read. "always" shows it either way, which is how someone on a
-        subscription sees what their work would have cost.
-        """
-        if self.spend_mode == "never":
-            return ""
-        kind = plan.auth_kind()
-        if self.spend_mode == "always":
-            return "api key" if kind == plan.API_KEY else "spend"
-        return "api key" if kind == plan.API_KEY else ""
+        """The row's label, or "" when there is to be no row."""
+        return spend.heading(self.spend_mode)
 
     def _shown_ids(self) -> tuple[str, ...]:
         """Every session id of the conversation in the main pane, for its own spend row.

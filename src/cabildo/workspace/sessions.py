@@ -456,6 +456,32 @@ def _last_cwd(path: Path, chunk: int = 65536) -> str:
 _CWD_BYTES = re.compile(rb'"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"')
 
 
+#: ``last_reply`` reads this much of the end of a transcript first, and at most this much.
+_TAIL_FIRST = 256 * 1024
+_TAIL_MAX = 16 * 1024 * 1024
+
+
+def last_reply(path: Path) -> Tokens | None:
+    """The counts of the last main-chain reply, read from the end of the transcript; None when
+    there is no reply in its last 16 MB. Raises ``OSError`` when the file cannot be read.
+    """
+    with path.open("rb") as fh:
+        size = fh.seek(0, os.SEEK_END)
+        span = _TAIL_FIRST
+        while True:
+            start = max(0, size - span)
+            fh.seek(start)
+            lines = fh.read(size - start).split(b"\n")
+            if start:
+                del lines[0]  # cut in the middle
+            for line in reversed(lines):
+                if found := _reply_tokens(line):
+                    return found[1]
+            if not start or span >= _TAIL_MAX:
+                return None
+            span *= 8
+
+
 @dataclass(frozen=True)
 class Read:
     """One transcript as far as it was read. Claude only appends to a transcript, so the

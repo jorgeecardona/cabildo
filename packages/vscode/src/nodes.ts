@@ -3,7 +3,7 @@
 import * as path from "node:path";
 
 import { HUMAN } from "./client";
-import type { Agent, HostSession, Message } from "./types";
+import type { Agent, HostSession, Message, StatGroup, StatRow } from "./types";
 import { preview, sessionRows, within } from "./view";
 
 /** The bus session the daemon posts its notices as. */
@@ -37,7 +37,21 @@ export interface MessageNode extends Text {
   readonly message: Message;
 }
 
-export type Node = SessionNode | AgentNode | MessageNode;
+/** One line of the stats. */
+export interface StatNode extends Text {
+  readonly kind: "stat";
+  readonly id: string;
+  readonly level: StatRow["level"];
+}
+
+/** A heading of the stats, with its lines. */
+export interface StatGroupNode extends Text {
+  readonly kind: "statGroup";
+  readonly id: string;
+  readonly rows: readonly StatNode[];
+}
+
+export type Node = SessionNode | AgentNode | MessageNode | StatGroupNode | StatNode;
 
 function runs(agent: Agent, session: HostSession): boolean {
   return agent.claude_pid === session.pid || agent.session_id === session.session_id;
@@ -114,4 +128,23 @@ export function messageText(message: Message): string {
   const sent = new Date(message.created_at * 1000).toLocaleString();
   const urgent = message.urgent ? " · urgent" : "";
   return `${message.from_display} to ${to} · ${sent}${urgent}\n\n${message.body}\n`;
+}
+
+/** The stats as headings and lines, in the order cabildo prints them. */
+export function statNodes(groups: readonly StatGroup[]): StatGroupNode[] {
+  return groups.map((group) => ({
+    kind: "statGroup",
+    id: group.key,
+    label: group.title,
+    description: "",
+    tooltip: group.title,
+    rows: group.rows.map((row, index) => ({
+      kind: "stat",
+      id: `${group.key}:${index}:${row.label}`,
+      level: row.level,
+      label: row.label,
+      description: row.value,
+      tooltip: [row.label, row.value, row.detail].filter(Boolean).join("\n"),
+    })),
+  }));
 }

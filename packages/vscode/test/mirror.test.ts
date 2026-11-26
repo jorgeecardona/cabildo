@@ -23,3 +23,14 @@ test("HostSession has the fields of host.Record", () => {
   const typescript = [...body.split("}")[0]!.matchAll(/readonly (\w+):/g)].map((m) => m[1]);
   assert.deepEqual(typescript, python);
 });
+
+test("StatRow and StatGroup have the fields of stats.Row and stats.Group", () => {
+  const python = read("src/cabildo/stats.py");
+  const typescript = read("packages/vscode/src/types.ts");
+  for (const [dataclass, record] of [["Row", "StatRow"], ["Group", "StatGroup"]]) {
+    const body = python.split(`class ${dataclass}:`)[1]!.split("\n\n\n")[0]!;
+    const fields = [...body.matchAll(/^ {4}(\w+): /gm)].map((m) => m[1]);
+    const mirror = typescript.split(`interface ${record} {`)[1]!.split("}")[0]!;
+    assert.deepEqual([...mirror.matchAll(/readonly (\w+):/g)].map((m) => m[1]), fields);
+  }
+});

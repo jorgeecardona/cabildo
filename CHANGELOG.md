@@ -4,6 +4,10 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- `cabildo stats` prints the numbers of the workspace's mode line: each session's context, CPU and
+  memory, plan limits, gateway, cost, intents and Jupyter runners. `--json` gives them as data.
+- VS Code extension 0.0.4: a Stats list in the side bar shows those numbers.
+
 - Notebook cells tagged `replay` run again, after `startup`, on every new kernel cabildo makes for
   the notebook (a restart, or after a reboot). `jupyter_edit_cell` and `jupyter_insert_cell` take
   `tags`.

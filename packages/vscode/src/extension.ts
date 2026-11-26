@@ -7,13 +7,15 @@ import { Messages } from "./messages";
 import type { AgentNode, MessageNode, SessionNode } from "./nodes";
 import { brokerSocket, hostSocket } from "./paths";
 import { type Rows, Sidebar } from "./sidebar";
-import { folderPaths, showError, Terminals } from "./terminals";
-import type { HostSession, Status } from "./types";
+import { fetchStats } from "./stats";
+import { configuredCommand, folderPaths, showError, Terminals } from "./terminals";
+import type { HostSession, Stats, Status } from "./types";
 import { statusText, statusTooltip } from "./view";
 
 /** What other code, and the probe, can call. */
 export interface Api {
   refresh(): Promise<Status>;
+  refreshStats(): Promise<Stats>;
   statusText(): string;
   rows(): Rows;
 }
@@ -51,6 +53,37 @@ export function activate(context: vscode.ExtensionContext): Api {
     return status;
   };
 
+  // One `cabildo stats` at a time: a caller during a run gets that run's answer.
+  let statsAsked: Promise<Stats> | undefined;
+  let statsTimer: NodeJS.Timeout | undefined;
+  const refreshStats = (): Promise<Stats> => {
+    statsAsked ??= fetchStats(configuredCommand(), folderPaths()[0] ?? "", process.env)
+      .then((stats) => {
+        if (!stopped) {
+          sidebar.showStats(stats);
+        }
+        return stats;
+      })
+      .finally(() => {
+        statsAsked = undefined;
+      });
+    return statsAsked;
+  };
+
+  // Stats start a process, so they are asked only while their list is on screen.
+  const pollStats = async (): Promise<void> => {
+    clearTimeout(statsTimer);
+    if (stopped || !sidebar.statsVisible()) {
+      return;
+    }
+    await refreshStats();
+    clearTimeout(statsTimer);
+    if (!stopped) {
+      const seconds = vscode.workspace.getConfiguration("cabildo").get("statsSeconds", 30);
+      statsTimer = setTimeout(pollStats, Math.max(10, seconds) * 1000);
+    }
+  };
+
   // One request chain at a time: the next one is scheduled after the last answers.
   const poll = async (): Promise<void> => {
     await refresh();
@@ -81,7 +114,11 @@ export function activate(context: vscode.ExtensionContext): Api {
     sidebar,
     terminals,
     messages,
-    vscode.commands.registerCommand("cabildo.refresh", refresh),
+    vscode.commands.registerCommand("cabildo.refresh", () => {
+      void refreshStats();
+      return refresh();
+    }),
+    sidebar.onStatsVisibility(() => void pollStats()),
     command("cabildo.attach", (id?: string) => terminals.attach(id)),
     command("cabildo.new", () => terminals.startInFolder()),
     command("cabildo.openSession", (node: SessionNode | AgentNode) =>
@@ -100,9 +137,11 @@ export function activate(context: vscode.ExtensionContext): Api {
       dispose: () => {
         stopped = true;
         clearTimeout(timer);
+        clearTimeout(statsTimer);
       },
     },
   );
   void poll();
-  return { refresh, statusText: () => item.text, rows: () => sidebar.rows() };
+  void pollStats();
+  return { refresh, refreshStats, statusText: () => item.text, rows: () => sidebar.rows() };
 }

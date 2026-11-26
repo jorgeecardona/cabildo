@@ -31,9 +31,12 @@ exports.run = async () => {
     // The side bar: show it, then read its three lists.
     await vscode.commands.executeCommand("workbench.view.extension.cabildo");
     await api.refresh();
+    const stats = await api.refreshStats();
+    assert.equal(stats.kind, "online", stats.reason);
     const rows = api.rows();
+    assert.equal(rows.stats[0].rows[0].label, "@probe-agent", "no stats row for the session");
     result.sidebar = Object.fromEntries(
-      Object.entries(rows).map(([list, nodes]) => [
+      Object.entries({ ...rows, stats: rows.stats.flatMap((g) => g.rows) }).map(([list, nodes]) => [
         list,
         nodes.map((n) => `${n.label} | ${n.description}`),
       ]),

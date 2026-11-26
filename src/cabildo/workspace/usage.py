@@ -294,3 +294,19 @@ def fmt_count(n: int) -> str:
 
 def fmt_mb(mb: float) -> str:
     return f"{mb:.0f}M" if mb < 999.5 else f"{mb / 1024:.1f}G"
+
+
+def fmt_age(seconds: float) -> str:
+    """``45s``, ``3m``, ``2h`` or ``4d``: one unit, the largest that is not zero."""
+    s = max(0, int(seconds))
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if s >= size:
+            return f"{s // size}{unit}"
+    return f"{s}s"
+
+
+def fmt_money(dollars: float) -> str:
+    """``$0.84``, ``$12.34``, ``$4,821.79``: cents always, because a daily figure is often
+    cents and rounding them away would show an active day as ``$0``.
+    """
+    return f"${dollars:,.2f}"

@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from cabildo import billing, store, usage
-from cabildo.workspace import heatmap
+from cabildo.workspace import heatmap, plan
 
 #: How often the transcripts are re-read. Ingestion reads only the bytes appended since
 #: last time, so this is cheap after the first pass; the first pass on a long history is
@@ -75,6 +75,22 @@ class Report:
     @property
     def any_billed(self) -> bool:
         return any(x is not None for x in (self.billed_today, self.billed_week, self.billed_all))
+
+
+def heading(mode: str) -> str:
+    """The spend row's label for ``[workspace].spend``, or "" when there is to be no row.
+
+    "auto" shows it exactly where a subscription would have shown its limits -- on an API
+    key, where there is no published limit -- and stays silent when the login cannot be read.
+    "always" shows it either way, which is how someone on a subscription sees what their
+    work would have cost.
+    """
+    if mode == "never":
+        return ""
+    kind = plan.auth_kind()
+    if mode == "always":
+        return "api key" if kind == plan.API_KEY else "spend"
+    return "api key" if kind == plan.API_KEY else ""
 
 
 def billed_windows(conn, cwd: str | None, at: float) -> tuple[float | None, ...]:

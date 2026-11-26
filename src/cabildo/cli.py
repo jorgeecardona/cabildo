@@ -2686,6 +2686,20 @@ def cmd_doctor(args) -> int:
     return 0
 
 
+def cmd_stats(args) -> int:
+    """Print the numbers of the workspace's mode line."""
+    import dataclasses
+
+    from . import stats
+
+    groups = stats.collect(os.path.abspath(args.cwd))
+    if args.json:
+        print(json.dumps({"groups": [dataclasses.asdict(g) for g in groups]}))
+    else:
+        print(stats.text(groups))
+    return 0
+
+
 def cmd_host(args) -> int:
     """Run the session host, or list, start, and hang up the sessions it owns."""
     from . import host, host_client
@@ -2952,6 +2966,14 @@ def main(argv: list[str] | None = None) -> int:
         "--force", action="store_true", help="enable: write the setting although no gateway answers"
     )
     gw.set_defaults(fn=cmd_gateway)
+
+    sg = sub.add_parser(
+        "stats",
+        help="sessions, plan limits, gateway, cost and intents: the workspace's mode line",
+    )
+    sg.add_argument("--json", action="store_true", help="as data, for another program")
+    sg.add_argument("--cwd", default=".", help="whose [workspace].spend setting applies")
+    sg.set_defaults(fn=cmd_stats)
 
     ho = sub.add_parser(
         "host",

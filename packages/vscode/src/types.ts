@@ -37,6 +37,26 @@ export interface HostSession {
   readonly parent: string;
 }
 
+/** One line of `cabildo stats`. Mirrors `stats.Row`. */
+export interface StatRow {
+  readonly label: string;
+  readonly value: string;
+  readonly level: "" | "warn" | "alert";
+  readonly detail: string;
+}
+
+/** The rows of one source. Mirrors `stats.Group`. */
+export interface StatGroup {
+  readonly key: string;
+  readonly title: string;
+  readonly rows: readonly StatRow[];
+}
+
+/** What `cabildo stats` printed, or why there is nothing. */
+export type Stats =
+  | { readonly kind: "online"; readonly groups: readonly StatGroup[] }
+  | { readonly kind: "unavailable"; readonly reason: string };
+
 /** What the daemon answered. `offline` means it did not answer. */
 export type Status =
   | { readonly kind: "online"; readonly agents: readonly Agent[]; readonly unread: readonly Message[] }

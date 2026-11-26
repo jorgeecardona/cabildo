@@ -18,7 +18,7 @@ export function showError(error: unknown): void {
   void vscode.window.showErrorMessage(`cabildo: ${error instanceof Error ? error.message : error}`);
 }
 
-function configuredCommand(): Command {
+export function configuredCommand(): Command {
   const configured = vscode.workspace.getConfiguration("cabildo").get("command", "");
   return cabildoCommand(configured, process.env);
 }

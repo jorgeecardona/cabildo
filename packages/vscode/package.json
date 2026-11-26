@@ -1,8 +1,8 @@
 {
   "name": "cabildo",
   "displayName": "cabildo",
-  "description": "A side bar for cabildo: hosted Claude sessions, agents and your unread messages.",
-  "version": "0.0.3",
+  "description": "A side bar for cabildo: plan limits and cost, Claude sessions, agents and your unread messages.",
+  "version": "0.0.4",
   "publisher": "cardona-oss",
   "license": "MIT",
   "repository": {
@@ -110,6 +110,12 @@
           "default": 10,
           "minimum": 2,
           "description": "Seconds between status bar updates."
+        },
+        "cabildo.statsSeconds": {
+          "type": "number",
+          "default": 30,
+          "minimum": 10,
+          "description": "Seconds between updates of the Stats list."
         }
       }
     },
@@ -124,6 +130,10 @@
     },
     "views": {
       "cabildo": [
+        {
+          "id": "cabildo.stats",
+          "name": "Stats"
+        },
         {
           "id": "cabildo.sessions",
           "name": "Claude Sessions"
@@ -180,6 +190,11 @@
         }
       ],
       "view/title": [
+        {
+          "command": "cabildo.refresh",
+          "when": "view == cabildo.stats",
+          "group": "navigation"
+        },
         {
           "command": "cabildo.new",
           "when": "view == cabildo.sessions",

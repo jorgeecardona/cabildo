@@ -1,7 +1,7 @@
 # VS Code extension
 
-A cabildo side bar in VS Code: your hosted Claude sessions, the agents on the bus, and your
-unread messages. It is on the Visual Studio Marketplace as
+A cabildo side bar in VS Code: plan limits and cost, your hosted Claude sessions, the agents on
+the bus, and your unread messages. It is on the Visual Studio Marketplace as
 [cardona-oss.cabildo](https://marketplace.visualstudio.com/items?itemName=cardona-oss.cabildo).
 
 ## Install
@@ -17,7 +17,22 @@ code --install-extension cardona-oss.cabildo
 ## Use
 
 Click the cabildo icon in the activity bar. The number on it is your unread count. The side bar
-has three lists. Items of the open folder come first.
+has four lists. In the last three, items of the open folder come first.
+
+### Stats
+
+The numbers of the workspace's mode line, from `cabildo stats`. Hover a line for more.
+
+- Sessions: each live session's model, how full its context is, CPU and memory.
+- Plan: the 5-hour and 7-day limits, pace and reset time.
+- Gateway, cost, intents, Jupyter runners: shown when there is something to show.
+
+A yellow icon means 70% or more of a limit, or an upstream set aside. A red one means 90% or
+more, or a failed intent. CPU and memory need Linux. The cost lines follow
+`[workspace].spend`: on a subscription they show only with `spend = "always"`.
+
+The list updates every 30 seconds while it is on screen. It needs a cabildo that has the
+`stats` command.
 
 ### Claude Sessions
 
@@ -51,6 +66,7 @@ The status bar shows the agent count and the unread count too. Click it to pick 
 |---|---|---|
 | `cabildo.command` | empty | Path of `cabildo`. Empty: the daemon's Python, else `cabildo` on `PATH`. |
 | `cabildo.refreshSeconds` | 10 | Seconds between updates of the side bar and status bar. |
+| `cabildo.statsSeconds` | 30 | Seconds between updates of the Stats list. |
 
 With Remote SSH, install the extension on the remote host: the sockets are there.
 
@@ -112,4 +128,5 @@ CABILDO_BIN=$HOME/.venv/bin/cabildo pnpm run probe
 
 The extension uses two unix sockets: `bus.sock` (the operations `list_agents`, `inbox`, `send`
 and `mark_read`) and `host.sock` (the operations `list` and `kill`). It runs `cabildo host new`
-to start a session, and the terminal tab runs `cabildo attach --hold`.
+to start a session, and the terminal tab runs `cabildo attach --hold`. The Stats list runs
+`cabildo stats --json`.
