@@ -51,6 +51,7 @@ from cabildo.workspace import (
     attach,
     focus,
     heatmap,
+    idle,
     intents,
     keys,
     launch,
@@ -137,6 +138,7 @@ UPSTREAM_POLL_SECONDS = 5.0  # how often to ask the gateway who serves
 INTENT_POLL_SECONDS = 3.0
 RUNNER_POLL_SECONDS = 3.0  # how often to look at the Jupyter runners
 FOCUS_POLL_SECONDS = 0.5  # how often to look for a sessions_focus request
+IDLE_POLL_SECONDS = 60.0  # how often to look for idle Claudes to stop
 
 
 NO_SPEND_ROW = "-"  # remembered when the login turned out to want no spend row at all
@@ -591,6 +593,7 @@ class SwitcherApp(App[None]):
         self.spend_mode = "never"  # [workspace].spend; read at mount
         self._auth_seen = ""  # the row's label once the login has been read, on the worker
         self._spend_busy = False  # a spend refresh is in flight
+        self.stop_idle_hours = 0.0  # [workspace].stop_idle_hours; read at mount
         self._cwd_key = cloud.project_key(cwd)  # what the intents of "here" are matched on
         self.intents: tuple[intents.Intent, ...] = ()  # the push queue and its latest results
         self._intents_seen = False  # the bus has been read once: show the group, even if empty
@@ -667,6 +670,9 @@ class SwitcherApp(App[None]):
         self.set_interval(RUNNER_POLL_SECONDS, self._runners_tick)
         self._focus_dir = focus.register()
         self.set_interval(FOCUS_POLL_SECONDS, self._focus_tick)
+        self.stop_idle_hours = config.stop_idle_hours(self.cwd)
+        if self.stop_idle_hours:
+            self.set_interval(IDLE_POLL_SECONDS, self._idle_tick)
 
     def on_unmount(self) -> None:
         if self._focus_dir is not None:
@@ -1577,6 +1583,7 @@ class SwitcherApp(App[None]):
         pseudo-terminal nobody reads leaves Claude blocked on a full buffer, which is
         worse than the hangup a plain quit would have given it.
         """
+        mounted: list[tuple[ClaudePane, attach.Handed]] = []
         for handed in attach.take():
             owned_by_host = handed.fd < 0  # the host took it: a new viewer, nothing inherited
             target = Target(
@@ -1599,8 +1606,13 @@ class SwitcherApp(App[None]):
             self._show(pane, focus=True)
             if not owned_by_host:
                 pane.repaint_child()
+            mounted.append((pane, handed))
+        for pane, handed in mounted:  # after the loop: showing each one counted as a look
+            pane.seen_at = handed.seen_at
 
     def _show(self, pane: ClaudePane, focus: bool = True) -> None:
+        if (left := self._shown_pane()) is not None:
+            left.seen_at = time.time()
         self.query_one("#main", ContentSwitcher).current = pane.id
         if focus:
             pane.focus()
@@ -1609,6 +1621,63 @@ class SwitcherApp(App[None]):
         if self.spend_mode != "never":
             self._spend_tick()  # the session column is about the pane that just appeared
         self._save_state()
+
+    # --- stop idle Claudes (idle.py) ----------------------------------------
+
+    def _idle_limit(self) -> float:
+        """The time since which a Claude must be idle and unseen to be stopped."""
+        return time.time() - self.stop_idle_hours * 3600
+
+    def _unseen(self, pane: ClaudePane) -> bool:
+        return (
+            pane is not self._shown_pane()
+            and not pane.exited
+            and not pane.closing
+            and pane.seen_at <= self._idle_limit()
+        )
+
+    def _idle_tick(self) -> None:
+        if (shown := self._shown_pane()) is not None:
+            shown.seen_at = time.time()
+        if not self._restored or self._quitting:
+            return
+        found: list[idle.Candidate] = []
+        for pane in self._panes():
+            row = next((r for r in self.rows if pane.session_id in r.ids), None)
+            if row is None or pane.pid is None or not self._unseen(pane):
+                continue  # no row: no transcript to resume it from
+            found.append(idle.Candidate(pane.session_id, pane.pid, row.ids, row.head.path))
+        if found:
+            before = self._idle_limit()
+            self.run_worker(
+                lambda: self._to_ui(self._stop_idle, idle.stoppable(found, before)),
+                thread=True,
+                group="idle",
+                exclusive=True,
+            )
+
+    def _stop_idle(self, found: tuple[idle.Candidate, ...]) -> None:
+        """End these Claudes; their conversations stay marked ○ and Enter resumes one."""
+        stopped = 0
+        for c in found:
+            # asked again: the person or Claude may have acted while the worker looked
+            pane = next((p for p in self._panes() if p.pid == c.pid), None)
+            since = idle.idle_since(c)
+            if pane is None or not self._unseen(pane) or self._quitting:
+                continue
+            if since is None or since > self._idle_limit():
+                continue
+            self._close_panes((c.session_id,))
+            self.was_open = (*(s for s in self.was_open if s != c.session_id), c.session_id)
+            stopped += 1
+        if stopped:
+            self._refresh_marks()
+            self._save_state()
+            self.refresh_live()  # Enter must see that these Claudes ended
+            self.notify(
+                f"Stopped {stopped} Claude session{'s' if stopped > 1 else ''} idle for "
+                f"{self.stop_idle_hours:g} h. Marked ○; Enter resumes one."
+            )
 
     # --- open conversations across runs (state.py) -------------------------
 

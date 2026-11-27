@@ -98,6 +98,32 @@ it again if it had ended, moves the list cursor to it and gives it the keys.
 - With several workspaces open, each one looks in its own list and the first that has the session
   shows it.
 
+## Idle sessions
+
+The workspace stops a Claude it runs after 6 hours idle. This frees its memory. The conversation
+stays in the list with the mark ○, and Enter resumes it with `claude --resume`.
+
+To change the time, or to turn this off with `0`, edit `~/.cabildo/config.toml` (or the repo's
+`.cabildo/config.toml`), then reload the workspace:
+
+```toml
+[workspace]
+stop_idle_hours = 24
+```
+
+A Claude is stopped only when all of these hold for that long:
+
+- Claude Code reports it idle: not working, and not waiting for your answer.
+- You did not look at it: it was not the conversation in the main pane.
+- Its subagents and workflows wrote nothing.
+- It runs no shell command, so no background command and no monitor.
+- It has no cron or wakeup in cabildo. A cron that Claude Code holds itself (no cabildo-push mod)
+  is not seen.
+
+A message you typed but did not send is lost when the Claude stops. A stopped Claude receives
+messages from other agents when you resume it. Claudes in other terminals and background
+sessions are never stopped.
+
 ## More topics
 
 Call `help()` for the list. Each topic is a page of this guide.

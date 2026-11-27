@@ -64,6 +64,7 @@ class Handed:
     cols: int
     host_id: str = ""  # the session host's id for it; the new pane attaches to that
     host_pid: int = 0  # Claude's pid when the host owns it (``pid`` is then the viewer's)
+    seen_at: float = 0.0  # when the person last looked at it; 0: not known
 
 
 def keep_across_exec(fd: int) -> int:

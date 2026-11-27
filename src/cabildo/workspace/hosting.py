@@ -114,6 +114,7 @@ class ClaudePane(Terminal):
         self.host_pid = target.host_pid
         self.exited = False
         self.closing = False  # the app is ending it (quit, delete, x)
+        self.seen_at = time.time()  # when it was last the shown pane (idle.py)
         self._last_cell: Offset | None = None  # the cursor cell last reported
         self._chrome.on_notify = self._notify  # drop the progress reports; see _OSC9_PROGRESS
 
@@ -266,6 +267,7 @@ class ClaudePane(Terminal):
             cols=max(2, self.size.width),
             host_id=self.host_id,
             host_pid=self.host_pid,
+            seen_at=self.seen_at,
         )
 
     @property

@@ -4,6 +4,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- Workspace: a Claude idle for 6 hours is stopped and marked ○; Enter resumes it. Set the time
+  with `[workspace].stop_idle_hours`; `0` never stops one.
 - VS Code extension 0.0.7: a console view in the bottom panel shows the terminals of the sessions
   you open, a tab each, with the model, context and cost. Set `cabildo.openIn` to `terminal` for
   VS Code terminal tabs.

@@ -40,6 +40,7 @@ today; the rest are read generically and wired one call site at a time):
     [spawn]   model, max_agents, max_depth   # request spawn
     [record]  messages = true                # config.record_messages (daemon ingest)
     [roles]   <name> = "responsibilities"    # config.roles (agent-card roster)
+    [workspace] spend, stop_idle_hours       # the workspace's spend row; idle Claudes
     [project.<name>.remote]  peers, token, bind, interval   # wan.py, global file only
     [browser.login.<site>]   origin, username, password, otp   # browser/credentials.py, global only
 """
@@ -338,6 +339,18 @@ def spend_mode(cwd: str | None = None, project_name: str | None = None) -> str:
     """
     mode = str(get(cwd, "workspace", "spend", project_name=project_name, default="auto")).lower()
     return mode if mode in ("auto", "always", "never") else "auto"
+
+
+def stop_idle_hours(cwd: str | None = None, project_name: str | None = None) -> float:
+    """``[workspace].stop_idle_hours``: after how many hours idle the workspace stops a
+    Claude it runs (``workspace/idle.py``). Default 6; 0 never stops one. A value that
+    is not a number of 0 or more falls back to the default.
+    """
+    default = 6.0
+    value = get(cwd, "workspace", "stop_idle_hours", project_name=project_name, default=default)
+    if isinstance(value, bool) or not isinstance(value, int | float) or not value >= 0:
+        return default
+    return float(value)
 
 
 def trunk_mode(cwd: str | None = None, project_name: str | None = None) -> str:
