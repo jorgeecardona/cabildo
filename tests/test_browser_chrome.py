@@ -118,16 +118,22 @@ def test_the_socket_opens_for_its_user_only(browser: Browser) -> None:
 
 
 def test_one_browser_server_at_a_time(browser: Browser) -> None:
+    async def reported(count: int) -> None:
+        """Wait until the thread in the place of the extension heard of ``count`` changes."""
+        for _ in range(1000):
+            if len(browser.clients) >= count:
+                return
+            await asyncio.sleep(0.01)
+
     async def scenario() -> None:
         first = await chrome_relay.Extension.connect("first", browser.path.parent)
         with pytest.raises(chrome_relay.ExtensionError, match="in use by first"):
             await chrome_relay.Extension.connect("second", browser.path.parent)
         await first.close()
-        for _ in range(100):
-            if browser.clients[-1] is None:
-                break
-            await asyncio.sleep(0.01)
-        await (await chrome_relay.Extension.connect("second", browser.path.parent)).close()
+        await reported(2)
+        second = await chrome_relay.Extension.connect("second", browser.path.parent)
+        await reported(3)
+        await second.close()
 
     asyncio.run(scenario())
     assert browser.clients[:3] == ["first", None, "second"]
