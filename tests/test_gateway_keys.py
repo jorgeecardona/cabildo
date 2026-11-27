@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -27,16 +29,29 @@ def keys_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def two_keys(fakes: dict[str, Any], **beta: Any) -> gateway.Settings:
-    def entry(name: str, fake: str) -> dict[str, Any]:
-        return {"kind": "key", "base_url": fakes[fake].url, "key": f"bedrock:{name}"}
+    def entry(fake: str) -> dict[str, Any]:
+        return {"kind": "key", "base_url": fakes[fake].url}
 
-    return gateway.parse(
-        {"upstream": {"alpha": entry("alpha", "sub"), "beta": {**entry("beta", "bed"), **beta}}}
-    )
+    return gateway.parse({"upstream": {"alpha": entry("sub"), "beta": {**entry("bed"), **beta}}})
+
+
+def wait_for(done: Callable[[], object]) -> None:
+    """The gateway records a reply after the client has it: wait for that."""
+    end = time.time() + 5
+    while not done() and time.time() < end:
+        time.sleep(0.01)
+    assert done()
 
 
 def message(**counts: int) -> bytes:
     return json.dumps({"type": "message", "content": [], "usage": counts}).encode()
+
+
+def test_an_upstream_with_no_key_line_uses_the_key_of_its_name(keys_file: Path) -> None:
+    entry = {"kind": "key", "base_url": "https://x.example"}
+    found = gateway.parse({"upstream": {"beta": entry}}).upstreams[0]
+    assert found.key is not None
+    assert gateway.Keys().get(found.key) == "key-beta"
 
 
 def test_a_named_key_is_read_from_the_file_each_time(keys_file: Path) -> None:
@@ -77,6 +92,7 @@ def test_each_key_fails_over_to_the_next_and_counts_its_own_tokens(
     port = run(gateway.Gateway(two_keys(fakes), record=got.append))
 
     assert post(port)[0] == post(port)[0] == 200
+    wait_for(lambda: len(got) == 2)
 
     assert fakes["sub"].header(0, "x-api-key") == ["key-alpha"]
     assert fakes["bed"].header(0, "x-api-key") == ["key-beta"]
@@ -157,8 +173,26 @@ def test_a_streamed_invoke_reply_is_counted(keys_file: Path, fakes, run) -> None
     port = run(gateway.Gateway(settings, record=got.append))
 
     post(port, {"model": "claude-opus-5-5", "stream": True, "messages": []})
+    wait_for(lambda: got)
 
     assert [(r.upstream, r.input, r.output) for r in got] == [("eu", 4, 9)]
+
+
+def test_the_client_does_not_wait_for_the_record(keys_file: Path, fakes, run) -> None:
+    fakes["sub"].body = b'data: {"usage": {"input_tokens": 3}}\n\n'
+    fakes["sub"].headers = {"Content-Type": "text/event-stream"}
+    release, recorded = threading.Event(), threading.Event()
+
+    def slow(_reply: gateway_usage.Reply) -> None:
+        release.wait(10)
+        recorded.set()
+
+    port = run(gateway.Gateway(two_keys(fakes), record=slow))
+
+    assert post(port)[2] == fakes["sub"].body
+    assert not recorded.is_set(), "the reply ended only after the record"
+    release.set()
+    assert recorded.wait(5)
 
 
 def test_spent_prices_each_upstream_apart(home: Path) -> None:
@@ -202,6 +236,7 @@ def test_gateway_status_shows_the_cost_under_each_name(
     settings = gateway.parse(config.gateway_table())
     port = run(gateway.Gateway(settings, record=gateway_usage.recorder(print)))
     post(port)
+    wait_for(lambda: gateway_usage.spent(("alpha",)))
 
     assert cli.main(["gateway", "status", "--port", str(port)]) == 0
 

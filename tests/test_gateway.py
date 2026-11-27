@@ -530,7 +530,6 @@ def test_reconfigure_keeps_an_upstream_set_aside_and_its_counts(fakes) -> None:
     [
         {},
         {"upstream": {"a": {"kind": "nope", "base_url": "http://x"}}},
-        {"upstream": {"a": {"kind": "key", "base_url": "http://x"}}},
         {"upstream": {"a": {"kind": "key", "base_url": "http://x", "key": "plain"}}},
         {"upstream": {"a": {"kind": "key", "base_url": "http://x", "key": "env:"}}},
         {"upstream": {"a": {"kind": "passthrough", "base_url": "ftp://x"}}},
@@ -656,11 +655,11 @@ def test_invoke_defaults_and_the_url_from_a_region() -> None:
     [
         {"key": "env:K", "models": {"a": "b"}},
         {"region": "nope", "key": "env:K", "models": {"a": "b"}},
-        {"region": "eu-central-1", "models": {"a": "b"}},
+        {"region": "eu-central-1", "key": "nope", "models": {"a": "b"}},
         {"region": "eu-central-1", "key": "env:K"},
     ],
 )
-def test_invoke_needs_a_region_or_url_a_key_and_models(entry: dict) -> None:
+def test_invoke_needs_a_region_or_url_a_good_key_and_models(entry: dict) -> None:
     with pytest.raises(gateway.GatewayError):
         gateway.parse({"upstream": {"eu": {"kind": "bedrock-invoke", **entry}}})
 

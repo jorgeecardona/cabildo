@@ -198,7 +198,7 @@ def plan_group(found: plan.Shared) -> Group:
 
 
 def gateway_group(view: upstreams.View) -> Group:
-    """One row per upstream, in the order of the config file."""
+    """One row per upstream, in the order of the config file, with what it served."""
     rows: list[Row] = []
     for u in view.upstreams:
         state = "ready" if u.ready else f"set aside {cpu.fmt_age(u.set_aside_s)}"

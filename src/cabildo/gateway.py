@@ -12,15 +12,19 @@ subscription runs out, the next request goes to an API key or to Amazon Bedrock,
     kind     = "passthrough"       # forwards the client's own login to Anthropic
     base_url = "https://api.anthropic.com"
 
-    [gateway.upstream.bedrock]
+    [gateway.upstream.alpha]       # its key is "alpha" under [bedrock.keys] in keys.toml
     kind         = "key"
     base_url     = "https://bedrock-mantle.us-east-1.api.aws/anthropic"
-    key          = "bedrock:alpha"        # a name in keys.toml; or env:NAME, file:/path, op://...
     server_tools = false           # Bedrock has no WebSearch and the like
     models       = { "claude-opus-5-5" = "anthropic.claude-opus-5-5" }
 
 A Bedrock region with no Mantle endpoint uses ``kind = "bedrock-invoke"``: the gateway then calls
 the Invoke API and turns its binary answer into server-sent events (docs/gateway.md).
+
+A ``key`` or ``bedrock-invoke`` upstream with no ``key`` line reads the key of its own name
+under ``[bedrock.keys]`` in ``~/.config/cabildo/keys.toml``. ``key`` names another source:
+``bedrock:NAME``, ``env:NAME``, ``file:/path`` or an ``op://`` reference. The tokens of each
+reply are recorded under the upstream's name (``gateway_usage``).
 
 The upstreams are tried in the order of the file. An upstream that answers 429 (or out of credit,
 or a key that is refused) is set aside until its retry time, and the same request goes to the next
@@ -36,6 +40,7 @@ connection. ``cabildo gateway serve`` runs the same server in the foreground, fo
 
 from __future__ import annotations
 
+import contextlib
 import fnmatch
 import hashlib
 import hmac
@@ -251,7 +256,7 @@ def parse(table: Mapping[str, Any]) -> Settings:
     """The ``Settings`` for a ``[gateway]`` table, upstreams in the order written.
 
     Raises:
-        GatewayError: on an unknown kind or auth, a key upstream with no valid key, a bad
+        GatewayError: on an unknown kind or auth, a ``key`` that is not a key reference, a bad
             ``base_url``, or a ``policy`` other than ``failover`` (the only one there is).
     """
     policy = table.get("policy", "failover")
@@ -302,7 +307,7 @@ def _upstream(name: str, entry: Mapping[str, Any]) -> Upstream:
     key = None
     if kind != "passthrough":
         try:
-            key = parse_key_ref(entry.get("key"))
+            key = parse_key_ref(entry.get("key", f"{_NAMED}:{name}"))
         except GatewayError as exc:
             msg = f"upstream {name}: {exc}"
             raise GatewayError(msg) from exc
@@ -1311,6 +1316,7 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
                     if counter:
                         used = counter.reply(up.name, job.model or "", gw.wall())
                         if used:
+                            self._end_reply()  # the client must not wait for the record
                             gw.record(used)
                 conn.close()
                 ms = round((time.monotonic() - started) * 1000)
@@ -1324,6 +1330,11 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
                 return
             why = "no upstream can serve this request" if skipped else "no upstream is usable"
             self._error(502, why)
+
+        def _end_reply(self) -> None:
+            """Close the sending side: a reply with no length ends only here (HTTP/1.0)."""
+            with contextlib.suppress(OSError):  # the client went away
+                self.connection.shutdown(socket.SHUT_WR)
 
         def _send(
             self,

@@ -28,8 +28,10 @@ every 15 s: it starts `autostart` runners, starts them again when they end, and 
 between upstreams; it runs as a service of the daemon (`gateway.start_service`, like LAN and WAN;
 on reload it hands its listening socket to the new process) and is the only part that sends model
 traffic to outside hosts. `cabildo gateway enable` writes the base URL into the user's Claude Code
-settings so every session uses it. The `help` MCP
-tool (`help.py`) serves the pages of `docs/`, which the wheel bundles.
+settings so every session uses it. Bedrock keys can be in `~/.config/cabildo/keys.toml` under
+`[bedrock.keys]`; an upstream with no `key` uses the one of its own name. The token counts of
+each reply go to the table `gateway_usage` (`gateway_usage.py`) under the upstream name. The
+`help` MCP tool (`help.py`) serves the pages of `docs/`, which the wheel bundles.
 
 ## Build
 

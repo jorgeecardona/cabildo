@@ -1,4 +1,6 @@
-"""The gateway's upstreams, for the mode line: who serves this session, and each one's counts.
+"""The gateway's upstreams, for the mode line and ``cabildo stats``.
+
+Which one serves a session, and each one's requests, failovers, tokens and cost.
 
 Nothing is shown unless ``[gateway]`` is configured, Claude Code's settings point at it, and it
 answers.

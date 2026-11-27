@@ -25,7 +25,11 @@ The numbers of the workspace's mode line, from `cabildo stats`. Hover a line for
 
 - Sessions: each live session's model, how full its context is, CPU and memory.
 - Plan: the 5-hour and 7-day limits, pace and reset time.
-- Gateway, cost, intents, Jupyter runners: shown when there is something to show.
+- Gateway: each upstream's requests and failovers, and its cost today and in the last 7 days
+  (tokens for the subscription).
+- Cost, intents and Jupyter runners.
+
+A group with nothing to show is left out.
 
 A yellow icon means 70% or more of a limit, or an upstream set aside. A red one means 90% or
 more, or a failed intent. CPU and memory need Linux. The cost lines follow

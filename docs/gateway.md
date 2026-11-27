@@ -16,7 +16,8 @@ of upstream is a change in the gateway, so no session restarts.
    (umask 077; touch ~/.config/cabildo/keys.toml)
    ```
 
-   Put your Bedrock keys in it, each with a name you choose:
+   Put your Bedrock keys in it, each with a name you choose. You use the same names for the
+   upstreams in step 2:
 
    ```toml
    [bedrock.keys]
@@ -37,8 +38,7 @@ of upstream is a change in the gateway, so no session restarts.
    [gateway.upstream.alpha]
    kind         = "key"
    base_url     = "https://bedrock-mantle.us-east-1.api.aws/anthropic"
-   key          = "bedrock:alpha"   # the name in keys.toml
-   server_tools = false             # Bedrock has no WebSearch and the like
+   server_tools = false       # Bedrock has no WebSearch and the like
 
    [gateway.upstream.alpha.models]   # the models this upstream serves, and their names there
    "claude-opus-5-5"  = "anthropic.claude-opus-5-5"
@@ -47,15 +47,14 @@ of upstream is a change in the gateway, so no session restarts.
    [gateway.upstream.beta]
    kind         = "key"
    base_url     = "https://bedrock-mantle.us-east-1.api.aws/anthropic"
-   key          = "bedrock:beta"
    server_tools = false
 
    [gateway.upstream.beta.models]
    "claude-haiku-4-5" = "anthropic.claude-haiku-4-5"
    ```
 
-   Each upstream has its own name, key and models. Status, tokens, cost, fallback and
-   `cabildo gateway use` all go by the upstream name, so give it the name of its key.
+   The upstream `alpha` uses the key `alpha`. `cabildo gateway status`, `cabildo gateway use`
+   and the token counts show that name. Each upstream has its own `models` list.
 
 3. Restart the daemon. It serves the gateway when `[gateway]` exists, so there is no second
    service:
@@ -79,9 +78,17 @@ of upstream is a change in the gateway, so no session restarts.
    Remove `apiKeyHelper` from the settings. With a helper set, Claude Code sends its key
    instead of your subscription login. `enable` warns when it finds one.
 
-A `key` is `bedrock:NAME` (a name under `[bedrock.keys]` in `~/.config/cabildo/keys.toml`),
-`file:/path`, `op://Vault/Item/field` or `env:NAME`. A change to `keys.toml` or to a key file
-applies to the next request.
+An upstream with no `key` line uses the key of its own name under `[bedrock.keys]` in
+`~/.config/cabildo/keys.toml`. Add `key` only to read it from somewhere else:
+
+| `key` | Reads |
+|---|---|
+| `"bedrock:NAME"` | another name under `[bedrock.keys]` |
+| `"file:/path"` | a file that holds only the key |
+| `"op://Vault/Item/field"` | 1Password |
+| `"env:NAME"` | a variable of the daemon |
+
+A change to `keys.toml` or to a key file applies to the next request.
 
 The daemon does not see the variables of your shell. A key with `env:NAME` is empty there, and
 the upstream is set aside with "no usable key". Use another form, or set the variable in
@@ -122,12 +129,12 @@ Use this when Bedrock must stay in one region and `bedrock-mantle.<region>.api.a
 `bedrock-runtime.<region>.amazonaws.com` with the same Bedrock API key:
 
 ```toml
-[gateway.upstream.bedrock-eu]
+[gateway.upstream.beta-eu]
 kind   = "bedrock-invoke"
 region = "eu-central-1"                          # or base_url = "https://..."
-key    = "bedrock:alpha"
+key    = "bedrock:beta"                          # the key "beta" under [bedrock.keys]
 
-[gateway.upstream.bedrock-eu.models]             # required: Bedrock names models its own way
+[gateway.upstream.beta-eu.models]                # required: Bedrock names models its own way
 "claude-opus-5-5" = "eu.anthropic.claude-opus-5"
 ```
 
@@ -161,13 +168,24 @@ A model that is not in `models` skips the upstream. Map the background model too
 ## Tokens and cost per upstream
 
 `cabildo gateway status`, the workspace's mode line and `cabildo stats` show what each upstream
-served today and in the last 7 days:
+served today (since midnight, local time) and in the last 7 days:
 
 - A `key` or `bedrock-invoke` upstream shows an estimated cost, at Anthropic's list prices. Your
-  AWS bill can differ: a regional Bedrock endpoint costs more than the list price.
+  AWS bill can differ: for Claude Sonnet 4.5 and later, a regional Bedrock endpoint costs
+  [10% more](https://platform.claude.com/docs/en/about-claude/pricing) than a global one.
+- A model with no known price shows as `+ N tokens unpriced` after the cost.
 - A `passthrough` upstream shows tokens, because your subscription pays for them.
 - The numbers come from the replies the gateway served. They are kept for 400 days, under the
   upstream name. A renamed upstream starts from zero.
+
+`cabildo gateway status` with two keys, against a local test server (cabildo 0.1.256):
+
+```text
+  alpha            key          set aside 120s: rate or usage limit (claude-opus-5-5) 12 served, 1 set aside, last: rate or usage limit
+                   today $0.58 · 7d $0.58
+  beta             key          ready                                    8 served, 0 set aside
+                   today $0.38 · 7d $0.38
+```
 
 ## Choose the upstream yourself
 
@@ -181,11 +199,11 @@ cabildo gateway status                 # each upstream: ready or set aside, serv
 The upstream you choose goes first. The others stay as fallbacks. The gateway reads the choice on
 each request, so it needs no restart.
 
-The `cabildo workspace` mode line shows the same when Claude Code's settings point at the
-gateway: an `upstream` row with the upstream that last served the shown conversation, and a
-`gateway` table with the requests and failovers of each upstream. The table of your subscription
-limits turns grey while another upstream serves that conversation. A limit at 100% shows its
-reset time without pace or ETA. The gateway finds the conversation by the
+The `cabildo workspace` mode line shows the same when Claude Code's settings point at the gateway:
+an `upstream` row with the upstream that last served the shown conversation, and a `gateway` table
+with the requests and failovers of each upstream, and what it served today and in 7 days. The table
+of your subscription limits turns grey while another upstream serves that conversation. A limit at
+100% shows its reset time without pace or ETA. The gateway finds the conversation by the
 `X-Claude-Code-Session-Id` header, and forgets it when the daemon restarts.
 
 After you change the config file, run `cabildo service reload`. The gateway reads the file again
@@ -226,11 +244,16 @@ and keeps the streams that are open. The command also reloads the daemon. New ga
   another `Host`, so a web page cannot use it. Any program on your machine can still call it and
   spend your keys. To require a secret, set `token = "file:/path"` in `[gateway]` and add
   `ANTHROPIC_CUSTOM_HEADERS="x-cabildo-gateway: <the secret>"` to Claude Code's `env`.
-- It reads only `~/.cabildo/config.toml`, never a repo's config. It logs one line per request
-  (upstream, model, status, time). On a 4xx or 5xx the line ends with the upstream's error message,
-  cut to 200 characters, with long token-like strings replaced. It never logs headers or bodies.
+- It reads `~/.cabildo/config.toml`, `~/.config/cabildo/keys.toml` and the key files your `key`
+  lines name. It never reads a repo's config.
+- It stores one row per reply in the bus database: time, upstream, model and token counts. It
+  stores no text of a request or a reply.
+- It logs one line per request (upstream, model, status, time). On a 4xx or 5xx the line ends with
+  the upstream's error message, cut to 200 characters, with long token-like strings replaced. It
+  never logs headers or bodies.
 - A `key` upstream sends the Anthropic Messages API, so a Bedrock `key` upstream needs the Mantle
-  endpoint. Not every region has one for your account. Use `bedrock-invoke` there (next section).
+  endpoint. Not every region has one for your account. Use `bedrock-invoke` there (see "Bedrock in a
+  region without Mantle").
 - Not checked live yet: which header Mantle expects with a real key, and whether Claude Code stops
   by itself on a usage limit before it sends a request.
 
