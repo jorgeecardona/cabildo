@@ -52,17 +52,15 @@ exports.run = async () => {
     });
     assert.equal(result.detail.model, "opus 5.5");
     assert.ok(result.detail.context.window, "the context window is not known");
-    if (process.env.PROBE_SHOT) {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      fs.writeFileSync(path.join(dir, "shoot"), "");
-      await until("the picture", () => fs.existsSync(path.join(dir, "shot-done")), 40_000);
-    }
-
     await vscode.commands.executeCommand("cabildo.openMessage", api.unread()[0]);
     result.opened = vscode.window.activeTextEditor.document.getText().split("\n").slice(2, 4);
     assert.deepEqual(result.opened, ["hello from the probe", "second line"]);
     result.unreadAfterOpen = api.unread().length;
     assert.equal(result.unreadAfterOpen, 0, "opening did not mark the message read");
+
+    // `cabildo.openIn` terminal: hosted sessions open in terminal tabs.
+    const settings = () => vscode.workspace.getConfiguration("cabildo");
+    await settings().update("openIn", "terminal", vscode.ConfigurationTarget.Global);
 
     // A click on a hosted conversation shows its terminal.
     await api.panelMessage({ type: "select", id: hosted.id });
@@ -130,6 +128,32 @@ exports.run = async () => {
       fs.existsSync(fresh) ? fs.readFileSync(fresh, "utf8").trim() : "",
     );
 
+    // The console view: the page loads, says its size, and that attaches it to the session.
+    await settings().update("openIn", "console", vscode.ConfigurationTarget.Global);
+    fs.rmSync(fresh);
+    const shown = await vscode.commands.executeCommand("cabildo.new");
+    const tabOf = () => api.console().find((t) => t.id === shown);
+    await until("the console page to say its size", () => tabOf()?.connected);
+    // The host sets the session's window size once the viewer is registered.
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await api.consoleMessage({
+      type: "input",
+      id: shown,
+      data: "typed in the console\r",
+      binary: false,
+    });
+    result.consoleRead = await until("the session to read the console's line", () =>
+      fs.existsSync(fresh) ? fs.readFileSync(fresh, "utf8").trim() : "",
+    );
+    assert.equal(result.consoleRead, "typed in the console");
+    // The terminal echoes what is typed: that output reaches the console.
+    await until("the console to receive output", () => tabOf()?.received > 0);
+    if (process.env.PROBE_SHOT) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      fs.writeFileSync(path.join(dir, "shoot"), "");
+      await until("the picture", () => fs.existsSync(path.join(dir, "shot-done")), 40_000);
+    }
+
     // The host stops: the tab stays open with the reason until Enter.
     execFileSync(process.env.CABILDO_BIN, ["host", "stop", "--force"]);
     await new Promise((resolve) => setTimeout(resolve, 5000));
@@ -138,6 +162,10 @@ exports.run = async () => {
     tab.sendText("");
     await until("the tab to close on Enter", () => !vscode.window.terminals.includes(tab));
     result.closedOnEnter = true;
+    result.consoleAfterHostStopped = await until("the console tab to say it", () => {
+      const state = tabOf()?.state;
+      return state && state !== "attached" ? state : "";
+    });
   } catch (error) {
     result.error = String(error.stack ?? error);
     throw error;

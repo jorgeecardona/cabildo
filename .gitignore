@@ -23,4 +23,5 @@ logs/
 # VS Code extension
 packages/vscode/node_modules/
 packages/vscode/out/
+packages/vscode/media/vendor/
 *.vsix

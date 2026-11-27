@@ -1,10 +1,11 @@
-/** Hosted sessions in terminal tabs: open, start and end them. */
+/** Open, start and end sessions: a hosted one in the console view or in a terminal tab. */
 
 import * as os from "node:os";
 
 import * as vscode from "vscode";
 
 import { endSession, listSessions } from "./client";
+import type { ConsoleView } from "./consoleView";
 import { type Command, cabildoCommand, hostSocket } from "./paths";
 import { startSession } from "./start";
 import type { HostSession } from "./types";
@@ -24,6 +25,8 @@ export function configuredCommand(): Command {
 }
 
 export class Terminals implements vscode.Disposable {
+  /** Where hosted sessions open when `cabildo.openIn` is `console`. */
+  console: ConsoleView | undefined;
   private readonly tabs = new Map<string, vscode.Terminal>();
   private readonly closing = vscode.window.onDidCloseTerminal((closed) => {
     for (const [id, terminal] of this.tabs) {
@@ -35,7 +38,7 @@ export class Terminals implements vscode.Disposable {
 
   /**
    * Start a Claude in the session host, in the open folder (asked for when there are several),
-   * and show it in a terminal tab. Returns the new session's id.
+   * and show it. Returns the new session's id.
    */
   async startInFolder(): Promise<string | undefined> {
     const folders = folderPaths();
@@ -64,7 +67,7 @@ export class Terminals implements vscode.Disposable {
     return id;
   }
 
-  /** Show the hosted session `id` in a terminal tab; ask which one when `id` is absent. */
+  /** Show the hosted session `id`; ask which one when `id` is absent. */
   async attach(id?: string): Promise<void> {
     let session: HostSession | undefined;
     try {
@@ -97,7 +100,13 @@ export class Terminals implements vscode.Disposable {
       showError(error);
       return;
     }
-    if (session) {
+    if (!session) {
+      return;
+    }
+    const place = vscode.workspace.getConfiguration("cabildo").get("openIn", "console");
+    if (this.console && place === "console") {
+      await this.console.show(session);
+    } else {
       this.open(session);
     }
   }
@@ -132,6 +141,7 @@ export class Terminals implements vscode.Disposable {
     }
     // The tab goes first: one whose session is hung up exits with an error, and VS Code says so.
     this.tabs.get(session.id)?.dispose();
+    this.console?.detach(session.id);
     await endSession(hostSocket(process.env), session.id);
     return true;
   }

@@ -1,0 +1,208 @@
+/* The console view: a bar of tabs over the terminal of the tab in front. */
+:root {
+  --line: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
+  --soft: color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
+  --track: color-mix(in srgb, var(--vscode-foreground) 15%, transparent);
+  --quiet: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  --wait: var(--vscode-editorWarning-foreground, #cca700);
+  --work: var(--vscode-charts-green, #3fb950);
+  --red: var(--vscode-errorForeground, #f14c4c);
+}
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: var(--vscode-font-family, system-ui, sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+  color: var(--vscode-foreground);
+  font-variant-numeric: tabular-nums;
+}
+[hidden] {
+  display: none !important;
+}
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+button:focus-visible,
+.tab:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.tabs {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tab {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 5px;
+  color: var(--quiet);
+  cursor: pointer;
+}
+.tab:hover {
+  background: var(--soft);
+}
+.tab.active {
+  background: var(--soft);
+  color: var(--vscode-foreground);
+}
+.tab .title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tab.ended .title,
+.tab.disconnected .title {
+  text-decoration: line-through;
+}
+.tool {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.tool:hover {
+  background: var(--vscode-toolbar-hoverBackground);
+}
+.close {
+  visibility: hidden;
+}
+.tab:hover .close,
+.tab.active .close,
+.close:focus-visible {
+  visibility: visible;
+}
+.new {
+  font-size: 16px;
+}
+
+.dot {
+  box-sizing: border-box;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--vscode-foreground) 60%, transparent);
+}
+.dot.stopped {
+  background: none;
+  border: 1.5px solid color-mix(in srgb, var(--vscode-foreground) 35%, transparent);
+}
+.dot.waiting {
+  background: var(--wait);
+}
+.dot.working {
+  background: none;
+  border: 2px solid color-mix(in srgb, var(--work) 30%, transparent);
+  border-top-color: var(--work);
+  animation: turn 0.9s linear infinite;
+}
+.dot.ready {
+  background: var(--work);
+}
+.dot.aside {
+  background: var(--wait);
+}
+@keyframes turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dot.working {
+    animation: none;
+  }
+}
+
+.about {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--quiet);
+  white-space: nowrap;
+}
+.model {
+  font-weight: 600;
+  color: var(--vscode-foreground);
+}
+.context {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.meter {
+  width: 90px;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--track);
+}
+.fill {
+  display: block;
+  height: 100%;
+  background: var(--vscode-progressBar-background, var(--vscode-focusBorder));
+}
+.meter.amber .fill {
+  background: var(--wait);
+}
+.meter.red .fill {
+  background: var(--red);
+}
+.end {
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.end:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.stage {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+}
+.terminal {
+  position: absolute;
+  inset: 4px 0 0 10px;
+}
+.empty {
+  padding: 8px 12px;
+  color: var(--quiet);
+}
+.empty p {
+  margin: 0 0 4px;
+}

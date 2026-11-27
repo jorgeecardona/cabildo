@@ -4,9 +4,14 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
-- VS Code extension 0.0.6: the side bar is one panel. It lists your conversations with their state, and shows the
-  selected one's model, context and cost, the plan limits, the gateway, the spend, the intents
-  and the Jupyter runners. `cabildo panel` prints what it shows as JSON lines.
+- VS Code extension 0.0.7: a console view in the bottom panel shows the terminals of the sessions
+  you open, a tab each, with the model, context and cost. Set `cabildo.openIn` to `terminal` for
+  VS Code terminal tabs.
+- VS Code extension 0.0.7: a row of the list no longer shows the rooms, and shows another folder
+  on a line of its own.
+- VS Code extension 0.0.6: the side bar is one panel. It lists your conversations with their
+  state, and shows the selected one's model, context and cost, the plan limits, the gateway,
+  the spend, the intents and the Jupyter runners. `cabildo panel` prints what it shows as JSON lines.
 - Gateway: put several Bedrock keys in `~/.config/cabildo/keys.toml` under `[bedrock.keys]`. The
   upstream `[gateway.upstream.alpha]` uses the key `alpha`, with no `key` line.
 - Gateway: tokens and estimated cost of today and 7 days for each upstream, in

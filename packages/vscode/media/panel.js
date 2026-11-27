@@ -212,9 +212,8 @@
     parts.branch = make("span", "branch", second);
     icon("branch", parts.branch);
     parts.branchName = make("span", "", parts.branch);
-    parts.dir = make("span", "dir", second);
-    parts.rooms = make("span", "rooms", second);
     parts.use = make("span", "use", second);
+    parts.dir = make("div", "dir", main);
     parts.extra = make("div", "extra", main);
     parts.actions = actions(row);
     row.parts = parts;
@@ -232,7 +231,6 @@
     text(parts.branchName, item.branch);
     parts.branch.hidden = !item.branch;
     show(parts.dir, item.dir !== frame.folder && tail(item.dir));
-    show(parts.rooms, item.rooms.join(" "));
     show(parts.use, item.cpu && `${item.cpu} · ${item.mem}`);
     parts.use.title = item.cpu ? `CPU ${item.cpu}, memory ${item.mem}` : "";
     once(parts.extra, [item.tags, item.notes], (extra) => {

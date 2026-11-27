@@ -32,6 +32,7 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
     private readonly context: vscode.ExtensionContext,
     private readonly terminals: Terminals,
     private readonly messages: Messages,
+    private readonly onFrame: (frame: Frame) => void,
   ) {}
 
   /** The last frame cabildo sent. */
@@ -76,9 +77,11 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
     this.feed.start(folder, scope && SCOPES.includes(scope) ? scope : folder ? "here" : "all");
   }
 
-  /** Show the new conversation of the hosted session `hostId` as the selected one. */
+  /** Make the conversation of the hosted session `hostId` the selected one. */
   select(hostId: string): void {
-    this.feed.send({ cmd: "select", id: `host:${hostId}` });
+    // A session with no transcript yet is listed as `host:<id>`.
+    const item = this.last?.items.find((i) => i.host_id === hostId);
+    this.feed.send({ cmd: "select", id: item?.id ?? `host:${hostId}` });
   }
 
   /** Act on a message of the webview. */
@@ -141,6 +144,7 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
         this.last = event;
         this.reason = "";
         this.post();
+        this.onFrame(event);
         return;
       case "unavailable":
         this.reason = event.reason;
@@ -152,7 +156,7 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
     }
   }
 
-  /** Show what `open` answered in a terminal tab. */
+  /** Show what `open` answered. */
   private async opened(answer: Opened): Promise<void> {
     if (answer.error) {
       showError(`not opened: ${answer.error}`);

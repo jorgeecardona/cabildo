@@ -11,7 +11,8 @@ MCP server plus hook scripts); all state lives in one shared SQLite DB, single-m
 `cabildo panel` (`workspace/panel.py`) prints what the VS Code side bar (`packages/vscode/`) shows,
 one JSON object per line, and reads commands on stdin. It shares `workspace/modeline.py` and
 `workspace/routing.py` with the TUI. `packages/vscode/src/types.ts` repeats the dataclasses of
-`panel.py`: change both together.
+`panel.py`: change both together. Its console view (`src/attach.ts`) speaks the wire format of
+`host.py`.
 
 Sessions are client-tagged (`sessions.client`), so Codex can share the same bus: `cabildo codex`
 wires it via `codex mcp add` (or prints the `~/.codex/config.toml` block); Codex sessions

@@ -3,6 +3,7 @@
 import * as vscode from "vscode";
 
 import { fetchStatus } from "./client";
+import { type Connected, ConsoleView, type FromConsole } from "./consoleView";
 import { Messages } from "./messages";
 import type { MessageNode } from "./nodes";
 import { brokerSocket } from "./paths";
@@ -19,6 +20,8 @@ export interface Api {
   unread(): readonly MessageNode[];
   panel(): { frame: Frame | undefined; unavailable: string; rendered: number };
   panelMessage(message: FromView): Promise<void>;
+  console(): readonly Connected[];
+  consoleMessage(message: FromConsole): Promise<void>;
 }
 
 export function activate(context: vscode.ExtensionContext): Api {
@@ -31,7 +34,12 @@ export function activate(context: vscode.ExtensionContext): Api {
   const unread = new Unread();
   const terminals = new Terminals();
   const messages = new Messages();
-  const panel = new PanelView(context, terminals, messages);
+  const consoles: ConsoleView = new ConsoleView(context, {
+    shown: (id) => panel.select(id),
+    end: (session, title) => terminals.end(session, title),
+  });
+  terminals.console = consoles;
+  const panel = new PanelView(context, terminals, messages, (frame) => consoles.update(frame));
   let timer: NodeJS.Timeout | undefined;
   let stopped = false;
   let asked = 0;
@@ -79,7 +87,11 @@ export function activate(context: vscode.ExtensionContext): Api {
     terminals,
     messages,
     panel,
+    consoles,
     vscode.window.registerWebviewViewProvider("cabildo.panel", panel),
+    vscode.window.registerWebviewViewProvider("cabildo.console", consoles, {
+      webviewOptions: { retainContextWhenHidden: true }, // the terminals keep their screens
+    }),
     vscode.commands.registerCommand("cabildo.refresh", () => {
       panel.restart();
       return refresh();
@@ -101,6 +113,12 @@ export function activate(context: vscode.ExtensionContext): Api {
       if (change.affectsConfiguration("cabildo.command")) {
         panel.restart();
       }
+      if (
+        change.affectsConfiguration("terminal.integrated") ||
+        change.affectsConfiguration("editor.fontFamily")
+      ) {
+        consoles.font();
+      }
     }),
     {
       dispose: () => {
@@ -120,5 +138,7 @@ export function activate(context: vscode.ExtensionContext): Api {
       rendered: panel.rendered(),
     }),
     panelMessage: (message) => panel.handle(message),
+    console: () => consoles.tabs(),
+    consoleMessage: (message) => consoles.handle(message),
   };
 }

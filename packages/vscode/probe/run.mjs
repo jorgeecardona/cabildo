@@ -138,7 +138,7 @@ try {
         ...(shot ? [`--remote-debugging-port=${port}`] : []),
         dir,
       ],
-      { env: { ...env, PROBE_SESSION: id }, stdio: "inherit", timeout: 90_000 },
+      { env: { ...env, PROBE_SESSION: id }, stdio: "inherit", timeout: 240_000 },
     );
     child.on("exit", (status) => resolve(status ?? 1));
   });

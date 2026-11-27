@@ -1,7 +1,8 @@
 # VS Code extension
 
 A cabildo side bar in VS Code: your Claude conversations, the selected one's model, context and
-cost, the plan limits, the gateway, the spend, and your unread messages. It is on the Visual Studio
+cost, the plan limits, the gateway, the spend, and your unread messages. A console view shows the
+terminals of the sessions you open. It is on the Visual Studio
 Marketplace as
 [cardona-oss.cabildo](https://marketplace.visualstudio.com/items?itemName=cardona-oss.cabildo).
 
@@ -18,7 +19,7 @@ code --install-extension cardona-oss.cabildo
 ## Use
 
 Click the cabildo icon in the activity bar. The number on it is your unread count. The side bar
-has two views: the panel and your unread messages.
+has two views: the panel and your unread messages. The console view is in the bottom panel.
 
 ### Panel
 
@@ -42,19 +43,17 @@ In the list, the dot of a row is its state:
 | Grey, hollow | stopped |
 
 A row also shows the age, the agent name, the branch, CPU and memory, the group, the tags and the
-notes. It shows the directory when it is not the open folder, and the rooms when the side bar is
-420 pixels or wider.
+notes. When the directory is not the open folder, the row shows it on a line of its own. The rooms
+are in the Conversation section and in the row's tooltip.
 
 - Select: click a row, or use the arrow keys. A conversation that the
-  [session host](session-host.md) runs shows its terminal.
+  [session host](session-host.md) runs opens in the [console](#console).
 - Open: double click a row, press Enter, or click the terminal icon. A stopped conversation is
-  resumed in the session host. Claude runs in a terminal tab.
+  resumed in the session host, and opens in the console. A background agent of Claude opens in a
+  terminal tab.
 - Send a message: click the envelope. Only a conversation on the bus has it.
 - End: click the cross and confirm. Only a conversation in the session host has it.
 - New conversation: click `+` at the top of the view. It starts in the open folder.
-
-Closing a terminal tab detaches, and the session keeps running. When the host stops, or closes
-the connection, the tab stays open and says why. Press Enter to close it.
 
 The sections under the list:
 
@@ -77,6 +76,31 @@ out. Drag the line above the sections to resize them. Double click it to fit the
 A bar or a number is amber from 70% and red from 90%. CPU and memory need Linux. The spend
 follows `[workspace].spend`: on a subscription it shows only with `spend = "always"`.
 
+### Console
+
+The console view shows Claude's terminal for the sessions that the session host runs. It is a
+second viewer, like `cabildo attach`: the same screen, and you can type in both.
+
+- Tabs: one per session you opened. Click one to see it. The list selects the same conversation.
+- Close: the `×` of a tab detaches. The session keeps running.
+- New session: the `+` after the tabs.
+- On the right: the model, how full the context window is, and the cost of the conversation in
+  front. `End` asks, then stops Claude.
+- Move it: drag the `cabildo` tab of the bottom panel to the right side bar.
+- Disconnected: the tab says why. Click it to attach again.
+
+Keys:
+
+| Keys | Action |
+|---|---|
+| Shift+Enter | New line in Claude's prompt |
+| Ctrl+Shift+C | Copy the selection |
+| Ctrl+Shift+V (Cmd+V on macOS) | Paste |
+
+The console is not VS Code's terminal: a file path in the output is not a link, and there is no
+search. URLs are links. To use VS Code terminal tabs, set `cabildo.openIn` to `terminal`. Closing
+such a tab detaches. When the host stops, the tab stays open and says why. Press Enter to close it.
+
 ### Unread Messages
 
 Each line starts with when the message was sent: the time for today, else the date.
@@ -92,6 +116,7 @@ The status bar shows the agent count and the unread count too. Click it to pick 
 | Setting | Default | Meaning |
 |---|---|---|
 | `cabildo.command` | empty | Path of `cabildo`. Empty: the daemon's Python, else `cabildo` on `PATH`. |
+| `cabildo.openIn` | `console` | Where a hosted session opens: `console` or `terminal`. |
 | `cabildo.refreshSeconds` | 10 | Seconds between updates of the status bar. |
 
 With Remote SSH, install the extension on the remote host: the sockets are there.
@@ -138,6 +163,10 @@ pnpm install
 pnpm run package
 code --install-extension cabildo.vsix
 ```
+
+The console draws with [xterm.js](https://xtermjs.org). `vendor.mjs` copies its files from
+`node_modules` to `media/vendor/` on each build. `src/attach.ts` repeats the wire format of
+`host.py`: change both together.
 
 Run the tests:
 

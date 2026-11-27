@@ -295,9 +295,6 @@ button.chip.more {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.second .dir {
-  flex-shrink: 12;
-}
 .branch {
   display: inline-flex;
   align-items: center;
@@ -306,19 +303,27 @@ button.chip.more {
 .branch .icon {
   width: 11px;
   height: 11px;
+  flex: none;
+}
+.row .branch > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .second .branch {
   flex-shrink: 3;
   align-self: center;
   min-width: 26px;
 }
-.second .rooms {
-  display: none;
-  flex-shrink: 20;
-}
 .second .use {
   flex: none;
   margin-left: auto;
+}
+.row .dir {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--small);
+  color: var(--quiet);
 }
 .extra {
   display: flex;
@@ -806,13 +811,6 @@ button.chip.more {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-}
-
-/* A wide side bar has room for the rooms in a row. */
-@container (min-width: 420px) {
-  .second .rooms {
-    display: block;
-  }
 }
 
 /* A narrow one has short names for the scopes. */
