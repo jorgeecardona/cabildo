@@ -1,8 +1,8 @@
 {
   "name": "cabildo",
   "displayName": "cabildo",
-  "description": "A side bar for cabildo: plan limits and cost, Claude sessions, agents and your unread messages.",
-  "version": "0.0.5",
+  "description": "The cabildo panel in the side bar: your Claude conversations, their model, context, limits and cost, and your unread messages.",
+  "version": "0.0.6",
   "publisher": "cardona-oss",
   "license": "MIT",
   "repository": {
@@ -55,24 +55,6 @@
         "icon": "$(refresh)"
       },
       {
-        "command": "cabildo.openSession",
-        "title": "Open Session",
-        "category": "Cabildo",
-        "icon": "$(go-to-file)"
-      },
-      {
-        "command": "cabildo.endSession",
-        "title": "End Session",
-        "category": "Cabildo",
-        "icon": "$(trash)"
-      },
-      {
-        "command": "cabildo.sendMessage",
-        "title": "Send Message",
-        "category": "Cabildo",
-        "icon": "$(comment)"
-      },
-      {
         "command": "cabildo.openMessage",
         "title": "Open Message",
         "category": "Cabildo"
@@ -110,12 +92,6 @@
           "default": 10,
           "minimum": 2,
           "description": "Seconds between status bar updates."
-        },
-        "cabildo.statsSeconds": {
-          "type": "number",
-          "default": 30,
-          "minimum": 10,
-          "description": "Seconds between updates of the Stats list."
         }
       }
     },
@@ -131,51 +107,20 @@
     "views": {
       "cabildo": [
         {
-          "id": "cabildo.stats",
-          "name": "Stats"
-        },
-        {
-          "id": "cabildo.sessions",
-          "name": "Claude Sessions"
-        },
-        {
-          "id": "cabildo.agents",
-          "name": "Agents"
+          "type": "webview",
+          "id": "cabildo.panel",
+          "name": "Panel"
         },
         {
           "id": "cabildo.messages",
-          "name": "Unread Messages"
+          "name": "Unread Messages",
+          "when": "cabildo.hasUnread",
+          "visibility": "collapsed"
         }
       ]
     },
-    "viewsWelcome": [
-      {
-        "view": "cabildo.sessions",
-        "contents": "The session host runs no session.\n[New Claude Session](command:cabildo.new)"
-      },
-      {
-        "view": "cabildo.agents",
-        "contents": "No agent is active."
-      },
-      {
-        "view": "cabildo.messages",
-        "contents": "No unread messages."
-      }
-    ],
     "menus": {
       "commandPalette": [
-        {
-          "command": "cabildo.openSession",
-          "when": "false"
-        },
-        {
-          "command": "cabildo.endSession",
-          "when": "false"
-        },
-        {
-          "command": "cabildo.sendMessage",
-          "when": "false"
-        },
         {
           "command": "cabildo.openMessage",
           "when": "false"
@@ -191,18 +136,13 @@
       ],
       "view/title": [
         {
-          "command": "cabildo.refresh",
-          "when": "view == cabildo.stats",
-          "group": "navigation"
-        },
-        {
           "command": "cabildo.new",
-          "when": "view == cabildo.sessions",
+          "when": "view == cabildo.panel",
           "group": "navigation@1"
         },
         {
           "command": "cabildo.refresh",
-          "when": "view == cabildo.sessions",
+          "when": "view == cabildo.panel",
           "group": "navigation@2"
         },
         {
@@ -212,16 +152,6 @@
         }
       ],
       "view/item/context": [
-        {
-          "command": "cabildo.endSession",
-          "when": "viewItem == session",
-          "group": "inline"
-        },
-        {
-          "command": "cabildo.sendMessage",
-          "when": "viewItem == agent",
-          "group": "inline"
-        },
         {
           "command": "cabildo.reply",
           "when": "viewItem == message",

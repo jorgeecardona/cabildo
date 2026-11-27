@@ -27,6 +27,7 @@ COMMANDS = [
     "jupyter",
     "gateway",
     "stats",
+    "panel",
     "host",
     "attach",
     "names",

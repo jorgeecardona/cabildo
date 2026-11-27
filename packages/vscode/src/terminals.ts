@@ -102,6 +102,23 @@ export class Terminals implements vscode.Disposable {
     }
   }
 
+  /** Run `command` (a `claude attach`) in a terminal tab, one tab per `key`. */
+  run(key: string, command: readonly string[], cwd: string, name: string): void {
+    let terminal = this.tabs.get(key);
+    if (!terminal || terminal.exitStatus) {
+      terminal = vscode.window.createTerminal({
+        name: `claude ${name}`,
+        shellPath: command[0],
+        shellArgs: command.slice(1),
+        cwd: cwd || os.homedir(),
+        iconPath: new vscode.ThemeIcon("comment-discussion"),
+        isTransient: true,
+      });
+      this.tabs.set(key, terminal);
+    }
+    terminal.show();
+  }
+
   /** Ask, then hang the session up: its Claude stops. */
   async end(session: HostSession, name: string): Promise<boolean> {
     const yes = "End Session";

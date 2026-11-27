@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from cabildo import store
-from cabildo.workspace import app, intents
+from cabildo.workspace import intents, modeline
 from cabildo.workspace.intents import Intent
 
 NOW = 1_000_000.0
@@ -68,7 +68,7 @@ def test_load_is_empty_without_a_db_and_never_creates_it(bus_home: Path) -> None
 
 
 def test_fmt_age_uses_one_unit() -> None:
-    assert [app.fmt_age(s) for s in (5, 59, 60, 3599, 3600, 90000)] == [
+    assert [modeline.fmt_age(s) for s in (5, 59, 60, 3599, 3600, 90000)] == [
         "5s",
         "59s",
         "1m",
@@ -86,7 +86,7 @@ def row(
 
 
 def test_the_group_shows_the_queue_and_a_failure_with_its_reason() -> None:
-    lines = app.fmt_intents((row("running"), row("failed", "dirty tree")), NOW)
+    lines = modeline.fmt_intents((row("running"), row("failed", "dirty tree")), NOW)
     text = [x for x, _ in lines]
     assert text[0].startswith("intents") and "state" in text[0]
     assert text[1].startswith("push cabildo") and "running" in text[1] and "2m" in text[1]
@@ -95,19 +95,22 @@ def test_the_group_shows_the_queue_and_a_failure_with_its_reason() -> None:
 
 
 def test_the_group_says_none_for_an_empty_queue() -> None:
-    assert app.fmt_intents((), NOW) == [("intents    none in the last hour", "")]
+    assert modeline.fmt_intents((), NOW) == [("intents    none in the last hour", "")]
 
 
 def test_the_group_counts_what_does_not_fit() -> None:
-    many = tuple(row("pending") for _ in range(app.INTENT_LINES + 3))
-    lines = app.fmt_intents(many, NOW)
-    assert len(lines) <= app.INTENT_LINES + 2
+    many = tuple(row("pending") for _ in range(modeline.INTENT_LINES + 3))
+    lines = modeline.fmt_intents(many, NOW)
+    assert len(lines) <= modeline.INTENT_LINES + 2
     assert lines[-1][0].startswith("+") and lines[-1][0].endswith("more")
 
 
 def test_the_group_leaves_out_a_failure_that_has_no_room_for_its_reason() -> None:
-    items = (*(row("pending") for _ in range(app.INTENT_LINES - 1)), row("failed", "dirty tree"))
-    lines = [x for x, _ in app.fmt_intents(items, NOW)]
+    items = (
+        *(row("pending") for _ in range(modeline.INTENT_LINES - 1)),
+        row("failed", "dirty tree"),
+    )
+    lines = [x for x, _ in modeline.fmt_intents(items, NOW)]
     assert not any("failed" in x or "dirty tree" in x for x in lines)
     assert lines[-1] == "+1 more"
 

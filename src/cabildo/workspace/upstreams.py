@@ -13,6 +13,7 @@ from dataclasses import dataclass, fields, replace
 from typing import Any
 
 from cabildo import config, gateway, gateway_usage
+from cabildo import usage as usage_tokens
 
 from .usage import fmt_count, fmt_money
 
@@ -48,18 +49,19 @@ class View:
         return next((u for u in self.upstreams if u.name == name), None)
 
 
+def spent_value(window: usage_tokens.Window, *, priced: bool) -> str:
+    """One period of an upstream: estimated cost when ``priced``, else the number of tokens."""
+    if not priced:
+        return f"{fmt_count(window.tokens)} tokens"
+    if window.unpriced:
+        return f"{fmt_money(window.cost)} + {fmt_count(window.unpriced)} tokens unpriced"
+    return fmt_money(window.cost)
+
+
 def spent_text(spent: gateway_usage.Spent, *, priced: bool) -> str:
     """Today and 7 days: estimated cost when ``priced``, else the number of tokens."""
-    parts: list[str] = []
-    for label, window in (("today", spent.today), ("7d", spent.week)):
-        if not priced:
-            value = f"{fmt_count(window.tokens)} tokens"
-        elif window.unpriced:
-            value = f"{fmt_money(window.cost)} + {fmt_count(window.unpriced)} tokens unpriced"
-        else:
-            value = fmt_money(window.cost)
-        parts.append(f"{label} {value}")
-    return " · ".join(parts)
+    periods = (("today", spent.today), ("7d", spent.week))
+    return " · ".join(f"{label} {spent_value(w, priced=priced)}" for label, w in periods)
 
 
 def parse(data: Mapping[str, Any]) -> View | None:

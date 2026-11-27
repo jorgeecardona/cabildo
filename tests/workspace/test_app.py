@@ -11,7 +11,8 @@ from textual.widgets import DataTable, Input, Static
 
 from cabildo.workspace import agents, sessions
 from cabildo.workspace.agents import AgentState
-from cabildo.workspace.app import CHROME, MIN_WIDTH, LiveState, SwitcherApp, short_path
+from cabildo.workspace.app import CHROME, MIN_WIDTH, LiveState, SwitcherApp
+from cabildo.workspace.modeline import short_path
 
 
 def test_short_path_uses_tilde_and_keeps_the_end(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -683,7 +684,7 @@ def test_a_scan_that_ends_after_quit_changes_nothing(transcript, monkeypatch) ->
 
 
 def test_the_context_line_has_no_model_part_when_the_model_is_unknown() -> None:
-    from cabildo.workspace.app import fmt_context, grid
+    from cabildo.workspace.modeline import fmt_context, grid
     from cabildo.workspace.sessions import Tokens
 
     assert fmt_context(Tokens(53_000, 53_000, 2000, model="")) == grid("context", "ctx 53k", "")
@@ -693,7 +694,7 @@ def test_the_context_line_has_no_model_part_when_the_model_is_unknown() -> None:
 
 
 def test_the_tokens_line_shows_cache_reads_apart_from_input() -> None:
-    from cabildo.workspace.app import fmt_tokens
+    from cabildo.workspace.modeline import fmt_tokens
     from cabildo.workspace.sessions import Tokens
 
     t = Tokens(224_000, 31_200_000, 139_000, cached=30_000_000)
@@ -721,7 +722,7 @@ def _report(**over):
 
 
 def test_the_spend_matrix_is_a_row_per_period_and_a_column_per_model() -> None:
-    from cabildo.workspace.app import fmt_spend
+    from cabildo.workspace.modeline import fmt_spend
 
     rows = [line.split() for line in fmt_spend(_report(), "spend", width=60)]
     assert rows[0] == ["spend", "opus", "5", "sonnet", "5.5", "total"]
@@ -730,7 +731,7 @@ def test_the_spend_matrix_is_a_row_per_period_and_a_column_per_model() -> None:
 
 
 def test_the_share_row_is_each_models_part_of_the_weeks_cost() -> None:
-    from cabildo.workspace.app import fmt_spend
+    from cabildo.workspace.modeline import fmt_spend
 
     rows = [line.split() for line in fmt_spend(_report(), "spend", width=60)]
     share = next(x for x in rows if x[:2] == ["7d", "share"])
@@ -738,7 +739,7 @@ def test_the_share_row_is_each_models_part_of_the_weeks_cost() -> None:
 
 
 def test_the_share_row_is_dashes_when_the_week_has_no_priced_cost() -> None:
-    from cabildo.workspace.app import fmt_spend
+    from cabildo.workspace.modeline import fmt_spend
 
     share = next(x for x in fmt_spend(_report(split={}), "spend", 60) if x.startswith("7d share"))
     assert set(share.split()[2:]) == {"-"}
@@ -748,7 +749,7 @@ def test_the_tokens_row_has_no_total() -> None:
     """Summing tokens across models is the one number this table refuses to print, so the
     row that carries them stops before the total column.
     """
-    from cabildo.workspace.app import fmt_spend
+    from cabildo.workspace.modeline import fmt_spend
 
     tokens = next(x for x in fmt_spend(_report(), "spend", 60) if x.startswith("tokens"))
     assert tokens.split() == ["tokens", "623.8M", "115.9M"]  # no third figure
@@ -759,7 +760,7 @@ def test_a_billed_column_sits_last_and_a_gap_is_a_dash() -> None:
     """Today's billed cost lands hours late. A dash says "not known yet"; a $0.00 there
     would read as a morning that cost nothing.
     """
-    from cabildo.workspace.app import fmt_spend
+    from cabildo.workspace.modeline import fmt_spend
 
     r = _report(billed_today=None, billed_week=4712.08, billed_all=21004.55)
     rows = [line.split() for line in fmt_spend(r, "spend", width=70)]
@@ -770,7 +771,7 @@ def test_a_billed_column_sits_last_and_a_gap_is_a_dash() -> None:
 
 def test_the_shown_conversation_is_a_row_of_its_own() -> None:
     from cabildo.usage import Spend, Window
-    from cabildo.workspace.app import fmt_spend
+    from cabildo.workspace.modeline import fmt_spend
 
     mine = Spend(Window(cost=12.0), Window(cost=100.0), Window(cost=310.25))
     rows = fmt_spend(_report(session=mine), "spend", width=60)
@@ -781,7 +782,7 @@ def test_a_narrow_list_drops_the_cheapest_model_but_keeps_the_total() -> None:
     """The list can be 36 cells wide. Something has to go, and the total is not it: it is
     the one figure that still accounts for the models no longer shown.
     """
-    from cabildo.workspace.app import fmt_spend
+    from cabildo.workspace.modeline import fmt_spend
 
     narrow = fmt_spend(_report(), "spend", width=36)
     assert narrow[0].split() == ["spend", "opus", "5", "total"]  # sonnet dropped, total kept
@@ -789,7 +790,7 @@ def test_a_narrow_list_drops_the_cheapest_model_but_keeps_the_total() -> None:
 
 
 def test_the_effort_line_is_empty_when_the_effort_is_unknown() -> None:
-    from cabildo.workspace.app import fmt_effort
+    from cabildo.workspace.modeline import fmt_effort
     from cabildo.workspace.sessions import Tokens
 
     assert fmt_effort(Tokens(1, 1, 1, effort="xhigh")).split() == ["effort", "xhigh"]
@@ -797,7 +798,7 @@ def test_the_effort_line_is_empty_when_the_effort_is_unknown() -> None:
 
 
 def test_the_context_line_turns_amber_then_red_as_the_window_fills() -> None:
-    from cabildo.workspace.app import context_style
+    from cabildo.workspace.modeline import context_style
     from cabildo.workspace.sessions import Tokens
 
     def at(used: int, model: str = "claude-opus-5-5") -> str:
@@ -849,6 +850,7 @@ def test_the_runners_screen_lists_runners_and_the_mode_line_has_a_group(
 ) -> None:
     from cabildo import jupyter
     from cabildo.workspace import app as app_mod
+    from cabildo.workspace import modeline
 
     rows = (
         jupyter.RunnerRow("lab", True, False, 4242, 8888, "/work/lab"),
@@ -860,7 +862,7 @@ def test_the_runners_screen_lists_runners_and_the_mode_line_has_a_group(
 
     async def scenario(app, pilot) -> None:
         await settle(app, pilot)
-        seen["group"] = app_mod.fmt_runners(app.runners, {})
+        seen["group"] = modeline.fmt_runners(app.runners, {})
         await pilot.press("J")
         await settle(app, pilot)
         table = app.screen.query_one(app_mod.DataTable)

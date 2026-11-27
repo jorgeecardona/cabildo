@@ -30,29 +30,42 @@ exports.run = async () => {
     // The seed has one agent and the person: the person is not counted.
     assert.match(result.statusBar, /\$\(organization\) 1 /);
 
-    // The side bar: show it, then read its three lists.
+    // The side bar: show it, and wait until the page has drawn the panel.
     await vscode.commands.executeCommand("workbench.view.extension.cabildo");
-    await api.refresh();
-    const stats = await api.refreshStats();
-    assert.equal(stats.kind, "online", stats.reason);
-    const rows = api.rows();
-    assert.equal(rows.stats[0].rows[0].label, "@probe-agent", "no stats row for the session");
-    result.sidebar = Object.fromEntries(
-      Object.entries({ ...rows, stats: rows.stats.flatMap((g) => g.rows) }).map(([list, nodes]) => [
-        list,
-        nodes.map((n) => `${n.label} | ${n.description}`),
-      ]),
-    );
-    assert.equal(rows.sessions[0].label, "@probe-agent", "the session is not named by its agent");
-    assert.equal(rows.agents[0].session?.id, id);
+    const { frame } = await until("the panel", () => {
+      const panel = api.panel();
+      assert.equal(panel.unavailable, "");
+      const items = panel.frame?.items ?? [];
+      return panel.rendered === 2 && items.some((i) => i.cpu) ? panel : undefined;
+    });
+    result.items = frame.items.map((i) => `${i.mark} | ${i.title} | ${i.host_id} | ${i.bus_id}`);
+    const hosted = frame.items.find((i) => i.host_id === id);
+    assert.equal(hosted?.title, "Probe session");
+    assert.equal(hosted.bus_id, "probe-agent");
+    const seeded = frame.items.find((i) => i.id === "seeded");
+    assert.equal(seeded?.title, "Seeded conversation");
 
-    await vscode.commands.executeCommand("cabildo.openMessage", rows.messages[0]);
+    await api.panelMessage({ type: "highlight", id: "seeded" });
+    result.detail = await until("the detail of the conversation", () => {
+      const found = api.panel().frame;
+      return found?.selected === "seeded" && found.detail?.model ? found.detail : undefined;
+    });
+    assert.equal(result.detail.model, "opus 5.5");
+    assert.ok(result.detail.context.window, "the context window is not known");
+    if (process.env.PROBE_SHOT) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      fs.writeFileSync(path.join(dir, "shoot"), "");
+      await until("the picture", () => fs.existsSync(path.join(dir, "shot-done")), 40_000);
+    }
+
+    await vscode.commands.executeCommand("cabildo.openMessage", api.unread()[0]);
     result.opened = vscode.window.activeTextEditor.document.getText().split("\n").slice(2, 4);
     assert.deepEqual(result.opened, ["hello from the probe", "second line"]);
-    result.unreadAfterOpen = api.rows().messages.length;
+    result.unreadAfterOpen = api.unread().length;
     assert.equal(result.unreadAfterOpen, 0, "opening did not mark the message read");
 
-    await vscode.commands.executeCommand("cabildo.openSession", api.rows().sessions[0]);
+    // A click on a hosted conversation shows its terminal.
+    await api.panelMessage({ type: "select", id: hosted.id });
     const terminal = await until("the terminal tab", () =>
       vscode.window.terminals.find((t) => t.name.endsWith(id)),
     );
@@ -81,6 +94,25 @@ exports.run = async () => {
     await until("the tab to close", () => !vscode.window.terminals.includes(terminal));
     result.runningAfterClose = (await listSessions(socket)).some((s) => s.id === id);
     assert.ok(result.runningAfterClose, "closing the tab ended the session");
+
+    // A stopped conversation opens: the host starts `claude --resume` for it.
+    await api.panelMessage({ type: "open", id: "seeded" });
+    const resumed = await until("the resumed session", async () =>
+      (await listSessions(socket)).find((s) => s.session_id === "seeded"),
+    );
+    result.resumed = resumed.command.join(" ");
+    assert.equal(result.resumed, "claude --resume seeded");
+    const view = await until("the tab of the resumed session", () =>
+      vscode.window.terminals.find((t) => t.name.endsWith(resumed.id)),
+    );
+    await view.processId;
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    view.sendText("typed in the resumed session");
+    result.resumedRead = await until("the resumed session to read the line", () => {
+      const file = path.join(dir, "resumed");
+      return fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim() : "";
+    });
+    view.dispose();
 
     // A new session in the open folder; its `claude` is the script run.mjs put on PATH.
     const started = await vscode.commands.executeCommand("cabildo.new");

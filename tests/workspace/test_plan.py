@@ -8,7 +8,7 @@ import pytest
 
 from cabildo import store
 from cabildo.workspace import plan, xdgdirs
-from cabildo.workspace.app import fmt_plan, plan_style
+from cabildo.workspace.modeline import fmt_plan, plan_style
 from cabildo.workspace.plan import Limit, PlanUsage
 
 REPLY = {

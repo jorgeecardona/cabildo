@@ -102,7 +102,7 @@ def test_the_lines_never_exceed_the_width_and_keep_the_rooms(transcript) -> None
 
 
 def test_short_path_with_no_room_returns_at_most_an_ellipsis() -> None:
-    from cabildo.workspace.app import short_path
+    from cabildo.workspace.modeline import short_path
 
     assert short_path("/a/long/path", 1) == "…"
     assert short_path("/a/long/path", 0) == ""

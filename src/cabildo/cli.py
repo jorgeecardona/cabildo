@@ -2713,6 +2713,13 @@ def cmd_stats(args) -> int:
     return 0
 
 
+def cmd_panel(args) -> int:
+    """Serve the workspace's list and mode line as JSON lines."""
+    from .workspace import panel
+
+    return panel.run(os.path.abspath(args.cwd), args.scope, args.once)
+
+
 def cmd_host(args) -> int:
     """Run the session host, or list, start, and hang up the sessions it owns."""
     from . import host, host_client
@@ -2987,6 +2994,15 @@ def main(argv: list[str] | None = None) -> int:
     sg.add_argument("--json", action="store_true", help="as data, for another program")
     sg.add_argument("--cwd", default=".", help="whose [workspace].spend setting applies")
     sg.set_defaults(fn=cmd_stats)
+
+    pa = sub.add_parser(
+        "panel",
+        help="the workspace's list and mode line as JSON lines, for the VS Code side bar",
+    )
+    pa.add_argument("--cwd", default=".", help="the directory the list is about")
+    pa.add_argument("--scope", choices=("here", "subfolders", "all"), default="here")
+    pa.add_argument("--once", action="store_true", help="print one frame and exit")
+    pa.set_defaults(fn=cmd_panel)
 
     ho = sub.add_parser(
         "host",

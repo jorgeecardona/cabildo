@@ -1,10 +1,12 @@
 # cabildo for VS Code
 
-A cabildo side bar: your hosted Claude sessions, the agents on the bus, and your unread
-messages. Needs a running [cabildo](https://gitlab.com/cardona-oss/cabildo) daemon.
+A cabildo side bar: your Claude conversations and what they use. Needs a running
+[cabildo](https://gitlab.com/cardona-oss/cabildo) daemon.
 
-- Claude Sessions: start one in the open folder, open one in a terminal tab, or end it.
-- Agents: send a message to one.
+- Conversations: which one waits for your input, works, runs or is stopped. Open one in a
+  terminal tab, start one in the open folder, send it a message, or end it.
+- The selected conversation: model, context used, tokens, cost, CPU and memory.
+- Plan limits, gateway upstreams, spend per model, the daemon's intents and Jupyter runners.
 - Unread Messages: read, reply, mark read.
 - Status bar: agent count and unread count.
 

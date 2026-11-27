@@ -2,22 +2,23 @@
 
 import * as vscode from "vscode";
 
-import { fetchStatus, listSessions } from "./client";
+import { fetchStatus } from "./client";
 import { Messages } from "./messages";
-import type { AgentNode, MessageNode, SessionNode } from "./nodes";
-import { brokerSocket, hostSocket } from "./paths";
-import { type Rows, Sidebar } from "./sidebar";
-import { fetchStats } from "./stats";
-import { configuredCommand, folderPaths, showError, Terminals } from "./terminals";
-import type { HostSession, Stats, Status } from "./types";
+import type { MessageNode } from "./nodes";
+import { brokerSocket } from "./paths";
+import { type FromView, PanelView } from "./panelView";
+import { Unread } from "./sidebar";
+import { showError, Terminals } from "./terminals";
+import type { Frame, Status } from "./types";
 import { statusText, statusTooltip } from "./view";
 
 /** What other code, and the probe, can call. */
 export interface Api {
   refresh(): Promise<Status>;
-  refreshStats(): Promise<Stats>;
   statusText(): string;
-  rows(): Rows;
+  unread(): readonly MessageNode[];
+  panel(): { frame: Frame | undefined; unavailable: string; rendered: number };
+  panelMessage(message: FromView): Promise<void>;
 }
 
 export function activate(context: vscode.ExtensionContext): Api {
@@ -27,61 +28,24 @@ export function activate(context: vscode.ExtensionContext): Api {
   item.text = "$(sync~spin) cabildo";
   item.show();
 
-  const sidebar = new Sidebar();
+  const unread = new Unread();
   const terminals = new Terminals();
   const messages = new Messages();
+  const panel = new PanelView(context, terminals, messages);
   let timer: NodeJS.Timeout | undefined;
   let stopped = false;
   let asked = 0;
 
   const refresh = async (): Promise<Status> => {
     const mine = ++asked;
-    let hostError: string | undefined;
-    const [status, sessions] = await Promise.all([
-      fetchStatus(brokerSocket(process.env)),
-      listSessions(hostSocket(process.env)).catch((error: unknown): HostSession[] => {
-        hostError = `session host: ${error instanceof Error ? error.message : error}`;
-        return [];
-      }),
-    ]);
+    const status = await fetchStatus(brokerSocket(process.env));
     if (!stopped && mine === asked) {
       // a slower, older answer must not replace a newer one
       item.text = statusText(status);
       item.tooltip = statusTooltip(status);
-      sidebar.show({ status, sessions, hostError }, folderPaths());
+      unread.show(status);
     }
     return status;
-  };
-
-  // One `cabildo stats` at a time: a caller during a run gets that run's answer.
-  let statsAsked: Promise<Stats> | undefined;
-  let statsTimer: NodeJS.Timeout | undefined;
-  const refreshStats = (): Promise<Stats> => {
-    statsAsked ??= fetchStats(configuredCommand(), folderPaths()[0] ?? "", process.env)
-      .then((stats) => {
-        if (!stopped) {
-          sidebar.showStats(stats);
-        }
-        return stats;
-      })
-      .finally(() => {
-        statsAsked = undefined;
-      });
-    return statsAsked;
-  };
-
-  // Stats start a process, so they are asked only while their list is on screen.
-  const pollStats = async (): Promise<void> => {
-    clearTimeout(statsTimer);
-    if (stopped || !sidebar.statsVisible()) {
-      return;
-    }
-    await refreshStats();
-    clearTimeout(statsTimer);
-    if (!stopped) {
-      const seconds = vscode.workspace.getConfiguration("cabildo").get("statsSeconds", 30);
-      statsTimer = setTimeout(pollStats, Math.max(10, seconds) * 1000);
-    }
   };
 
   // One request chain at a time: the next one is scheduled after the last answers.
@@ -111,37 +75,50 @@ export function activate(context: vscode.ExtensionContext): Api {
 
   context.subscriptions.push(
     item,
-    sidebar,
+    unread,
     terminals,
     messages,
+    panel,
+    vscode.window.registerWebviewViewProvider("cabildo.panel", panel),
     vscode.commands.registerCommand("cabildo.refresh", () => {
-      void refreshStats();
+      panel.restart();
       return refresh();
     }),
-    sidebar.onStatsVisibility(() => void pollStats()),
     command("cabildo.attach", (id?: string) => terminals.attach(id)),
-    command("cabildo.new", () => terminals.startInFolder()),
-    command("cabildo.openSession", (node: SessionNode | AgentNode) =>
-      terminals.attach(node.session!.id),
-    ),
-    command("cabildo.endSession", (node: SessionNode) => terminals.end(node.session, node.label)),
-    command("cabildo.sendMessage", (node: AgentNode) =>
-      messages.send(node.agent.session_id, node.label),
-    ),
+    command("cabildo.new", async () => {
+      const started = await terminals.startInFolder();
+      if (started) {
+        panel.select(started);
+      }
+      return started;
+    }),
     command("cabildo.openMessage", (node: MessageNode) => messages.open(node.message)),
     command("cabildo.reply", (node: MessageNode) => messages.reply(node.message)),
     command("cabildo.markRead", (node: MessageNode) => messages.markRead(node.message)),
     command("cabildo.markAllRead", () => messages.markAllRead()),
-    vscode.workspace.onDidChangeWorkspaceFolders(() => void refresh()),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => panel.restart()),
+    vscode.workspace.onDidChangeConfiguration((change) => {
+      if (change.affectsConfiguration("cabildo.command")) {
+        panel.restart();
+      }
+    }),
     {
       dispose: () => {
         stopped = true;
         clearTimeout(timer);
-        clearTimeout(statsTimer);
       },
     },
   );
   void poll();
-  void pollStats();
-  return { refresh, refreshStats, statusText: () => item.text, rows: () => sidebar.rows() };
+  return {
+    refresh,
+    statusText: () => item.text,
+    unread: () => unread.rows(),
+    panel: () => ({
+      frame: panel.frame(),
+      unavailable: panel.unavailable(),
+      rendered: panel.rendered(),
+    }),
+    panelMessage: (message) => panel.handle(message),
+  };
 }

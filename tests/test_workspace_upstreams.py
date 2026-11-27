@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from cabildo import gateway, gateway_usage, usage
-from cabildo.workspace import app, plan, upstreams
+from cabildo.workspace import modeline, plan, upstreams
 
 
 def status(**over: object) -> dict:
@@ -40,13 +40,13 @@ def test_the_view_names_the_upstream_of_a_session() -> None:
     found = view.serving(("other", "s1"))
     assert found is not None and found.name == "bedrock"
     assert view.serving(("other",)) is None
-    assert app.fmt_upstream(found) == "upstream      bedrock"
+    assert modeline.fmt_upstream(found) == "upstream      bedrock"
 
 
 def test_the_gateway_table_has_one_row_per_upstream_and_the_reason() -> None:
     view = upstreams.parse(REPLY)
     assert view is not None
-    lines = app.fmt_gateway(view, "bedrock")
+    lines = modeline.fmt_gateway(view, "bedrock")
     assert [x.split() for x, _style in lines] == [
         ["gateway", "requests", "failovers"],
         ["anthropic", "412", "37", "set", "aside", "3d"],
@@ -61,7 +61,7 @@ def test_an_upstream_that_served_replies_shows_what_it_used() -> None:
     assert view is not None
     day = usage.Window(input=100, cost=1.5)
     view = replace(view, spent=(gateway_usage.Spent("bedrock", day, day, day),))
-    lines = [x.strip() for x, _style in app.fmt_gateway(view)]
+    lines = [x.strip() for x, _style in modeline.fmt_gateway(view)]
     assert lines[-1] == "today $1.50 · 7d $1.50"
     assert lines[-2].startswith("bedrock")
 
@@ -78,7 +78,7 @@ def test_a_used_up_limit_shows_no_pace_and_no_eta() -> None:
     pace = plan.PlanPace(
         plan.Pace(19.9, 49, 0, 1_000.0, True), plan.Pace(1.1, 100, 0, 1_000.0, True)
     )
-    _head, five, seven = app.fmt_plan(usage, pace)
+    _head, five, seven = modeline.fmt_plan(usage, pace)
     assert "19.9%/h" in five
     assert seven.split() == ["7d", "100%"]
 

@@ -4,6 +4,9 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- VS Code extension 0.0.6: the side bar is one panel. It lists your conversations with their state, and shows the
+  selected one's model, context and cost, the plan limits, the gateway, the spend, the intents
+  and the Jupyter runners. `cabildo panel` prints what it shows as JSON lines.
 - Gateway: put several Bedrock keys in `~/.config/cabildo/keys.toml` under `[bedrock.keys]`. The
   upstream `[gateway.upstream.alpha]` uses the key `alpha`, with no `key` line.
 - Gateway: tokens and estimated cost of today and 7 days for each upstream, in

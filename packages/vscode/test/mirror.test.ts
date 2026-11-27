@@ -24,13 +24,21 @@ test("HostSession has the fields of host.Record", () => {
   assert.deepEqual(typescript, python);
 });
 
-test("StatRow and StatGroup have the fields of stats.Row and stats.Group", () => {
-  const python = read("src/cabildo/stats.py");
+test("the panel's records have the fields of those of panel.py", () => {
+  const python = read("src/cabildo/workspace/panel.py");
   const typescript = read("packages/vscode/src/types.ts");
-  for (const [dataclass, record] of [["Row", "StatRow"], ["Group", "StatGroup"]]) {
-    const body = python.split(`class ${dataclass}:`)[1]!.split("\n\n\n")[0]!;
+  const records = [
+    "Item", "Context", "Detail", "Limit", "Plan", "Upstream", "Period", "Model", "Spend",
+    "Intent", "Runner", "Machine", "Frame", "Opened",
+  ];
+  for (const record of records) {
+    const body = python.split(`class ${record}:`)[1]!.split("\n\n\n")[0]!;
     const fields = [...body.matchAll(/^ {4}(\w+): /gm)].map((m) => m[1]);
-    const mirror = typescript.split(`interface ${record} {`)[1]!.split("}")[0]!;
-    assert.deepEqual([...mirror.matchAll(/readonly (\w+):/g)].map((m) => m[1]), fields);
+    const mirror = typescript.split(`interface ${record} {`)[1]!.split("\n}")[0]!;
+    const found = [...mirror.matchAll(/readonly (\w+):/g)].map((m) => m[1]);
+    assert.deepEqual([...found].sort(), [...fields].sort(), record);
   }
+  // every record a frame is made of is in the list above
+  const sent = [...python.split("class Readings:")[0]!.matchAll(/^class (\w+):/gm)].map((m) => m[1]);
+  assert.deepEqual(sent, records);
 });
