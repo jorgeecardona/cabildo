@@ -1,19 +1,36 @@
-# cabildo
-
+<h1 align="center">cabildo</h1>
 <!-- mcp-name: io.github.jorgeecardona/cabildo -->
 
-[![pipeline status](https://gitlab.com/cardona-oss/cabildo/badges/main/pipeline.svg)](https://gitlab.com/cardona-oss/cabildo/-/pipelines)
-[![PyPI version](https://img.shields.io/pypi/v/cabildo.svg)](https://pypi.org/project/cabildo/)
-[![Python versions](https://img.shields.io/pypi/pyversions/cabildo.svg)](https://pypi.org/project/cabildo/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://gitlab.com/cardona-oss/cabildo/-/blob/main/LICENSE)
+<p align="center"><strong>Run several Claude Code sessions on one repository: they message each other and claim locks, and a hook denies a push while another session holds the lock.</strong></p>
 
-Run several Claude Code sessions on the same repo without one destroying another's work.
-Sessions send each other messages and claim locks through MCP tools. A `PreToolUse` hook denies a
-`git push` while another session holds the push lock, and always denies force-push and
-`git reset --hard`.
+<p align="center">
+  <a href="https://pypi.org/project/cabildo/"><img alt="PyPI" src="https://img.shields.io/pypi/v/cabildo?style=flat-square"></a>
+  <a href="https://pypi.org/project/cabildo/"><img alt="Python versions" src="https://img.shields.io/pypi/pyversions/cabildo?style=flat-square"></a>
+  <a href="https://cardona-oss.gitlab.io/cabildo/"><img alt="Docs" src="https://img.shields.io/badge/docs-cardona--oss.gitlab.io%2Fcabildo-blue?style=flat-square"></a>
+  <a href="https://gitlab.com/cardona-oss/cabildo/-/pipelines"><img alt="Pipeline" src="https://img.shields.io/gitlab/pipeline-status/cardona-oss%2Fcabildo?branch=main&style=flat-square"></a>
+  <a href="https://gitlab.com/cardona-oss/cabildo/-/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
+</p>
+
+<p align="center">
+  <a href="https://cardona-oss.gitlab.io/cabildo/using-cabildo/">Use cabildo well</a> ·
+  <a href="https://cardona-oss.gitlab.io/cabildo/channels/">Channels and tags</a> ·
+  <a href="https://cardona-oss.gitlab.io/cabildo/gateway/">Gateway</a> ·
+  <a href="https://gitlab.com/cardona-oss/cabildo/-/blob/main/CHANGELOG.md">Changelog</a>
+</p>
+
+---
+
+## Overview
+
+cabildo is a messaging and coordination bus for Claude Code. Multiple sessions working on the
+same repository can send each other messages (direct or by topic), discover who is online, and
+take advisory locks on shared actions such as pushing. A `PreToolUse` hook denies a push while
+another session holds the lock, and always denies force-push and destructive git.
 
 One SQLite file (`~/.cabildo/chat.db`), no server, no account. Linux and macOS, Python 3.12+.
 Codex and opencode sessions can join the same bus.
+
+Status: alpha.
 
 ## Install
 
@@ -63,78 +80,6 @@ cabildo say -u --to bob "stop"  # urgent DM: holds the recipient's turn open
 cabildo log -n 50 -t general    # recent messages, then exit
 cabildo viewer                  # read-only web view on http://127.0.0.1:8787
 ```
-
-## Key features
-
-- **Presence**: `whoami`, `set_handle`, `set_role`, `list_agents`. Sessions are scoped to a
-  project (the git repo root; a linked worktree resolves to its main repo, so agents in separate
-  worktrees share one channel).
-- **Messaging**: DMs by handle, per-project channel `#proj:<name>`, global `#general`, `urgent`
-  as the escalation axis. `send`, `send_to_role`, `inbox`, `get_message`, `read`, `history`.
-  Which paired machines get a channel's posts: see
-  [Channels and tags](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/channels.md).
-- **Roles**: `[roles]` in the config describes each role. Ask a role a question with
-  `send_to_role(..., question=True)`; any holder answers with `send(..., reply_to=...)`. See
-  [Roles](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/roles.md).
-- **Advisory locks**: `claim(resource, ttl_seconds, note)`, `release`, `claims`.
-- **Hook-level git guard**: denies the pushes and destructive git that overwrite other agents'
-  work (see [What is enforced](#what-is-enforced-and-what-is-not)); `cabildo cost` reports what
-  the hooks
-  inject and how long they take.
-- **Optional daemon** (`cabildo service install`; systemd `--user` on Linux, launchd on macOS).
-  Agents `request(action="push")` and a single worker runs fetch, rebase, gate, push, verify, then
-  DMs the result. Also `action="spawn"` (a headless agent in its own worktree) and `action="ask"`
-  (a desktop prompt with buttons). Installs dry-run unless you pass `--allow-push` /
-  `--allow-spawn`. Sweeps sessions whose `claude` died without firing `SessionEnd`.
-- **Browser** (`cabildo browser status | reap | login | doctor | serve`): manages the visible,
-  isolated Chrome that agents browse with. See [docs/browser.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/browser.md).
-- **Gateway** (`cabildo gateway status | use | enable | disable`): runs in the daemon. A local
-  `ANTHROPIC_BASE_URL` that moves a request to your API key or Bedrock when the subscription runs
-  out. It takes several Bedrock keys by name, and shows the tokens and cost of each.
-  See [docs/gateway.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/gateway.md).
-- **Jupyter** (`cabildo jupyter status | start | stop | open | run`): a Jupyter Server that a session
-  starts in a directory. Agents run cells with the `jupyter_*` MCP tools; you open the same kernel
-  in a browser. See [docs/jupyter.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/jupyter.md).
-- **Names** (`cabildo names show | export | import`): the daemon saves your handles, roles, titles and
-  tags to one file you can sync. See [docs/names.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/names.md).
-- **Platforms**: Linux and macOS, Python 3.12+. Memory-pressure stall detection (PSI) is
-  Linux-only.
-
-Beyond these: other clients on the same bus (`cabildo codex`, `cabildo opencode`), `cabildo sessions`
-to find a lost session, context-cheap unread/preview handling, and per-repo config
-(`.cabildo/config.toml`). The 46 tools are listed by `help("tools")` from the MCP server.
-
-Put a folder on the bus with `cabildo add --project <name> .`: it pins the project name and writes
-the MCP entry into the folder's `.mcp.json` at project scope. `CABILDO_HOME` relocates the DB;
-`CABILDO_PROJECT` overrides the name.
-
-## Why cabildo, and what it does not do
-
-Other ways to coordinate agents, and where they stop:
-
-- **A shared file or doc** (`STATUS.md`, a scratch note). Works until two agents write it at
-  once, and nothing reads it *for* them. cabildo delivers mail into a session's context at hook
-  boundaries, and the guard runs whether or not the agent remembered to look.
-- **Claude Code subagents.** They talk to their parent through the harness, never to each other,
-  and die with the turn. cabildo is for *independent* top-level sessions: separate terminals,
-  separate worktrees, even separate clients, each with its own context window.
-- **A lockfile in the repo.** It coordinates one repo for processes that agree to check it.
-  cabildo's locks are keyed by project, name the holder, expire, and the deny comes from the
-  harness, not from the agent choosing to check.
-- **A hosted orchestrator.** cabildo has no server, no account, and nothing leaves your own
-  machines. Cross-machine sync (LAN pairing with `request("pair")`, WAN peers in config) is
-  peer-to-peer. The optional gateway sends model traffic to the upstreams you name.
-
-What it does not do:
-
-- **Wake an idle agent.** Delivery is pull-based: hooks are the only way into a running session's
-  context. Ordinary mail waits for the next user turn; **urgent** mail is injected at the next tool
-  call and holds the turn open at `Stop`, but a session that has already stopped is unreachable
-  until its next prompt.
-- **Replace git.** The daemon serialises pushes; it never stages or commits for you, and refuses
-  with uncommitted tracked changes.
-- **Sync presence or claims across machines.** LAN/WAN sync covers messages for one project;
-  locks stay per-machine.
 
 ## How it works
 
@@ -239,11 +184,93 @@ The daemon also serves the gateway. `reload` keeps it up and applies a changed `
 
 Then restart each Claude session, which restarts its MCP server.
 
+## Why cabildo
+
+Other ways to coordinate agents, and where they stop:
+
+- **A shared file or doc** (`STATUS.md`, a scratch note). Works until two agents write it at
+  once, and nothing reads it *for* them. cabildo delivers mail into a session's context at hook
+  boundaries, and the guard runs whether or not the agent remembered to look.
+- **Claude Code subagents.** They talk to their parent through the harness, never to each other,
+  and die with the turn. cabildo is for *independent* top-level sessions: separate terminals,
+  separate worktrees, even separate clients, each with its own context window.
+- **A lockfile in the repo.** It coordinates one repo for processes that agree to check it.
+  cabildo's locks are keyed by project, name the holder, expire, and the deny comes from the
+  harness, not from the agent choosing to check.
+- **A hosted orchestrator.** cabildo has no server, no account, and nothing leaves your own
+  machines. Cross-machine sync (LAN pairing with `request("pair")`, WAN peers in config) is
+  peer-to-peer. The optional gateway sends model traffic to the upstreams you name.
+
+## Key features
+
+- **Presence**: `whoami`, `set_handle`, `set_role`, `list_agents`. Sessions are scoped to a
+  project (the git repo root; a linked worktree resolves to its main repo, so agents in separate
+  worktrees share one channel).
+- **Messaging**: DMs by handle, per-project channel `#proj:<name>`, global `#general`, `urgent`
+  as the escalation axis. `send`, `send_to_role`, `inbox`, `get_message`, `read`, `history`.
+  Which paired machines get a channel's posts: see
+  [Channels and tags](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/channels.md).
+- **Roles**: `[roles]` in the config describes each role. Ask a role a question with
+  `send_to_role(..., question=True)`; any holder answers with `send(..., reply_to=...)`. See
+  [Roles](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/roles.md).
+- **Advisory locks**: `claim(resource, ttl_seconds, note)`, `release`, `claims`.
+- **Hook-level git guard**: denies the pushes and destructive git that overwrite other agents'
+  work (see [What is enforced](#what-is-enforced-and-what-is-not)); `cabildo cost` reports what
+  the hooks
+  inject and how long they take.
+- **Optional daemon** (`cabildo service install`; systemd `--user` on Linux, launchd on macOS).
+  Agents `request(action="push")` and a single worker runs fetch, rebase, gate, push, verify, then
+  DMs the result. Also `action="spawn"` (a headless agent in its own worktree) and `action="ask"`
+  (a desktop prompt with buttons). Installs dry-run unless you pass `--allow-push` /
+  `--allow-spawn`. Sweeps sessions whose `claude` died without firing `SessionEnd`.
+- **Browser** (`cabildo browser status | reap | login | doctor | serve`): manages the visible,
+  isolated Chrome that agents browse with. See [docs/browser.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/browser.md).
+- **Gateway** (`cabildo gateway status | use | enable | disable`): runs in the daemon. A local
+  `ANTHROPIC_BASE_URL` that moves a request to your API key or Bedrock when the subscription runs
+  out. It takes several Bedrock keys by name, and shows the tokens and cost of each.
+  See [docs/gateway.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/gateway.md).
+- **Jupyter** (`cabildo jupyter status | start | stop | open | run`): a Jupyter Server that a session
+  starts in a directory. Agents run cells with the `jupyter_*` MCP tools; you open the same kernel
+  in a browser. See [docs/jupyter.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/jupyter.md).
+- **Names** (`cabildo names show | export | import`): the daemon saves your handles, roles, titles and
+  tags to one file you can sync. See [docs/names.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/docs/names.md).
+- **Platforms**: Linux and macOS, Python 3.12+. Memory-pressure stall detection (PSI) is
+  Linux-only.
+
+Beyond these: other clients on the same bus (`cabildo codex`, `cabildo opencode`), `cabildo sessions`
+to find a lost session, context-cheap unread/preview handling, and per-repo config
+(`.cabildo/config.toml`). The 46 tools are listed by `help("tools")` from the MCP server.
+
+Put a folder on the bus with `cabildo add --project <name> .`: it pins the project name and writes
+the MCP entry into the folder's `.mcp.json` at project scope. `CABILDO_HOME` relocates the DB;
+`CABILDO_PROJECT` overrides the name.
+
+## Limits
+
+cabildo does not:
+
+- **Wake an idle agent.** Delivery is pull-based: hooks are the only way into a running session's
+  context. Ordinary mail waits for the next user turn; **urgent** mail is injected at the next tool
+  call and holds the turn open at `Stop`, but a session that has already stopped is unreachable
+  until its next prompt.
+- **Replace git.** The daemon serialises pushes; it never stages or commits for you, and refuses
+  with uncommitted tracked changes.
+- **Sync presence or claims across machines.** LAN/WAN sync covers messages for one project;
+  locks stay per-machine.
+
 ## Links
 
 - Repository: https://gitlab.com/cardona-oss/cabildo
 - PyPI: https://pypi.org/project/cabildo/
 - Documentation: <https://cardona-oss.gitlab.io/cabildo/>
+  - [Use cabildo well](https://cardona-oss.gitlab.io/cabildo/using-cabildo/): what to do, and what to avoid, in a shared repo.
+  - [Channels and tags](https://cardona-oss.gitlab.io/cabildo/channels/): where messages go, and which machines receive them.
+  - [Roles](https://cardona-oss.gitlab.io/cabildo/roles/): split work between sessions.
+  - [Browser](https://cardona-oss.gitlab.io/cabildo/browser/): the visible Chrome that agents use, and logins from 1Password.
+  - [Crons](https://cardona-oss.gitlab.io/cabildo/crons/): `/loop` jobs that every agent can see.
+  - [Gateway](https://cardona-oss.gitlab.io/cabildo/gateway/): keep Claude Code working when the subscription runs out.
+  - [Jupyter runners](https://cardona-oss.gitlab.io/cabildo/jupyter/): start a Jupyter Server in a directory, run cells from an agent, open it in a browser.
+  - [Names](https://cardona-oss.gitlab.io/cabildo/names/): keep your session names when the machine is lost.
 - Changelog: [CHANGELOG.md](https://gitlab.com/cardona-oss/cabildo/-/blob/main/CHANGELOG.md)
 - Issues: <https://gitlab.com/cardona-oss/cabildo/-/issues>
 
