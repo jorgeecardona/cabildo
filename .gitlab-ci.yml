@@ -110,3 +110,25 @@ vscode:
   artifacts:
     paths:
       - packages/vscode/cabildo.vsix
+
+# The Chrome extension (src/cabildo/browser/extension). Runs on main when the extension, the
+# script or this file changes: builds the zip, and uploads and submits it to the Chrome Web Store
+# if the CWS_ variables are set. A version that the store already has is skipped. See
+# docs/chrome-web-store.md.
+chrome-extension:
+  image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+  needs: []
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - src/cabildo/browser/extension/**/*
+        - scripts/chrome_store.py
+        - .gitlab-ci.yml
+  # Scope the CWS_ variables to this environment, so the other jobs do not receive them.
+  environment:
+    name: chrome-web-store
+  script:
+    - uv run --no-project scripts/chrome_store.py publish
+  artifacts:
+    paths:
+      - dist/cabildo-chrome.zip

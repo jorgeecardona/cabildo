@@ -30,6 +30,12 @@ Jupyter dependency in cabildo) and runs cells over the server's kernel WebSocket
 every 15 s: it starts `autostart` runners, starts them again when they end, and pauses one over
 `memory_max`.
 
+`cabildo browser serve --chrome` drives the person's own Chrome: the extension
+(`browser/extension/`) talks to `chrome_host.py` over native messaging, and `chrome_relay.py` shows
+it to Playwright as a DevTools WebSocket. `background.js` is the only place that limits an agent to
+the `cabildo` tab group and to a list of DevTools commands. Run its end-to-end test with
+`CABILDO_CHROME_E2E=1` (it opens a Chromium window).
+
 `cabildo gateway` (`gateway.py`) is a local HTTP proxy for `ANTHROPIC_BASE_URL` that fails over
 between upstreams; it runs as a service of the daemon (`gateway.start_service`, like LAN and WAN;
 on reload it hands its listening socket to the new process) and is the only part that sends model

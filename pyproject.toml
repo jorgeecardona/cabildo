@@ -104,7 +104,7 @@ packages = ["src/cabildo"]
 "docs" = "src/cabildo/_bundled_docs"
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "docs", "mods", "README.md", "CHANGELOG.md", "LICENSE"]
+include = ["src", "tests", "docs", "mods", "scripts/chrome_store.py", "README.md", "CHANGELOG.md", "LICENSE"]
 exclude = ["docs/issues"]
 
 [tool.ruff]

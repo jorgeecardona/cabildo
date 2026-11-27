@@ -1208,8 +1208,40 @@ def cmd_cost(args) -> int:
     return 0
 
 
+def _cmd_browser_extension(args) -> int:
+    """``cabildo browser extension``: the Chrome extension that opens your Chrome to agents."""
+    if args.extension_cmd == "host":
+        from .browser import chrome_host
+
+        return chrome_host.run()
+    from . import mcp_config
+    from .browser import chrome_install
+
+    if args.extension_cmd == "status":
+        print("\n".join(chrome_install.status()))
+        return 0
+    profiles = chrome_install.profile_dirs()
+    if not profiles:
+        print("cabildo browser extension: no Chrome or Chromium profile found", file=sys.stderr)
+        return 1
+    done = chrome_install.install(profiles)
+    for path in done.manifests:
+        print(f"wrote {path}")
+    serve = [*mcp_config._command("cabildo", "cabildo.cli"), "browser", "serve", "--chrome"]
+    print(
+        "\nIn Chrome, once:\n"
+        "  1. Open chrome://extensions and turn on Developer mode.\n"
+        f"  2. Load unpacked: {done.extension}\n"
+        "Then give agents the tools:\n"
+        f"  claude mcp add --scope user cabildo-chrome -- {shlex.join(serve)}"
+    )
+    return 0
+
+
 def cmd_browser(args) -> int:
     """``cabildo browser``: status, reap, doctor of the browser agents use."""
+    if args.browser_cmd == "extension":
+        return _cmd_browser_extension(args)
     if args.browser_cmd == "serve":
         from .browser import server as browser_server
 
@@ -1223,7 +1255,12 @@ def cmd_browser(args) -> int:
         return browser_server.serve(
             browser_server.Session(
                 channel=args.browser or args.channel,
-                storage_state=Path(args.storage_state).expanduser() if args.storage_state else None,
+                chrome=args.chrome,
+                storage_state=(
+                    Path(args.storage_state).expanduser()
+                    if args.storage_state and not args.chrome
+                    else None
+                ),
                 output_dir=(
                     Path(args.output_dir).expanduser()
                     if args.output_dir
@@ -3117,6 +3154,19 @@ def main(argv: list[str] | None = None) -> int:
     bw_serve.add_argument("--isolated", action="store_true", help="accepted; always on")
     bw_serve.add_argument("--headless", action="store_true", help="refused: the browser is visible")
     bw_serve.add_argument("--user-data-dir", help="refused: browsers are isolated")
+    bw_serve.add_argument(
+        "--chrome",
+        action="store_true",
+        help="drive your own Chrome through the cabildo extension; start no browser",
+    )
+    bw_ext = bw_sub.add_parser(
+        "extension", help="the Chrome extension that lets agents use tabs of your Chrome"
+    )
+    ext_sub = bw_ext.add_subparsers(dest="extension_cmd", required=True)
+    ext_sub.add_parser("install", help="write the extension and register it with Chrome")
+    ext_sub.add_parser("status", help="whether it is installed and connected")
+    host = ext_sub.add_parser("host", help="what Chrome starts; not for people")
+    host.add_argument("chrome_args", nargs="*", help=argparse.SUPPRESS)
     bw_reap = bw_sub.add_parser("reap", help="stop browser processes whose session is gone")
     bw_reap.add_argument("--all", action="store_true", help="every server, live sessions too")
     bw_reap.add_argument(

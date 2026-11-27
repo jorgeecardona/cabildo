@@ -76,6 +76,79 @@ example `double_click` and `full_page`.
 Not available yet: `browser_drag`, `browser_drop`, `browser_find`, `browser_network_request` and
 `browser_run_code_unsafe`.
 
+## Use your own Chrome
+
+The cabildo extension lets agents use tabs of the Chrome you already work in, with your logins.
+No browser is started, and no network port is opened for Chrome.
+
+1. Install the local side. It prints the two steps that follow:
+
+    ```bash
+    cabildo browser extension install
+    ```
+
+2. In Chrome, open `chrome://extensions`, turn on **Developer mode**, press **Load unpacked** and
+   pick the folder that step 1 printed.
+
+3. Give agents the tools, as the `cabildo-chrome` server:
+
+    ```bash
+    claude mcp add --scope user cabildo-chrome -- cabildo browser serve --chrome
+    ```
+
+The tools have the same names as those of `cabildo-browser`. Agents open their tabs in a green
+tab group named `cabildo`, in a window that holds shared tabs only.
+
+To share a tab you already have open, open it, click the extension's icon and press
+**Share this tab**, or drag it into the group. To stop, press `×` beside it in the popup.
+
+### What an agent can reach
+
+The extension checks these on every command. Chrome itself does not: the extension's `debugger`
+permission covers every tab.
+
+- Tabs: only those of a tab group named `cabildo`. Any group with that name counts, also one you
+  made for something else, or one Chrome synced from another computer. A link opened from a
+  shared tab joins the group.
+- Pages: web pages only. `file:`, `chrome:` and extension pages are refused.
+- Sites: any, in those tabs. An agent can open your bank in a shared tab, and you are signed in
+  there.
+- Cookies: the DevTools commands that read them are refused, and cookie headers are removed from
+  what Chrome reports about requests. A script in a shared tab reads what the page can read.
+- Files: `browser_file_upload` can give a page any file your user can read.
+- Other extensions: a script an agent runs in a shared tab can also run where another extension's
+  scripts run in that page, such as a password manager's.
+- Programs: any program that runs as your user can connect to the extension, not only cabildo.
+
+To stop agents, turn the switch in the popup off. Chrome shows a "started debugging this browser"
+bar while an agent is connected; its **Cancel** button turns the switch off too.
+
+`cabildo browser extension status` says whether it is installed and connected. The popup shows
+why it is not connected.
+
+### How it connects
+
+```mermaid
+flowchart LR
+    A[cabildo browser serve --chrome] -- Unix socket --> H[cabildo browser extension host]
+    H -- native messaging --> E[extension] -- chrome.debugger --> T[tabs of the group]
+```
+
+Chrome starts the host when the extension connects. The socket is
+`~/.cabildo/chrome/host-<pid>.sock`, readable by your user only. Playwright, in the browser
+server, connects to a WebSocket on a random local port and path for that one process.
+
+### Limits
+
+- One agent uses your Chrome at a time. A second one is told who holds it.
+- One Chrome profile at a time. With the extension on in two, agents are told to turn one off.
+- Linux and macOS. Chrome and Chromium, version 125 or later.
+- `browser_resize` and `browser_save_logins` are refused: it is your window, with your logins.
+- After `browser_navigate_back`, a snapshot can miss the content of a frame from another site.
+  Navigate to the page again to see it.
+- After you upgrade cabildo, run `cabildo browser extension install` again and press the reload
+  button of the extension in `chrome://extensions`.
+
 ## Log in from 1Password
 
 Use this when a saved login has expired. The agent calls `browser_login`, and the server fills the

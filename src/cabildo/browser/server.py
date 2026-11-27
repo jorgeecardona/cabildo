@@ -9,6 +9,9 @@ The tools keep the names of the npm ``@playwright/mcp`` server. Parameter names 
 ``browser_find``, ``browser_network_request`` and ``browser_run_code_unsafe``.
 
 There is no headless mode. The browser always runs with a visible window.
+
+With ``Session.chrome`` the server starts no browser: it drives the person's own Chrome through
+the cabildo extension (``chrome_relay``), and sees only the tabs of the ``cabildo`` tab group.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import json
+import os
 import re
 import sys
 from collections import deque
@@ -38,7 +42,7 @@ from playwright.async_api import (
 from playwright.async_api import Error as PlaywrightError
 
 from cabildo import config, desktop, onepassword
-from cabildo.browser import credentials
+from cabildo.browser import chrome_relay, credentials
 from cabildo.browser.entry import STALE_DAYS, read_storage_state
 from cabildo.browser.login import write_state
 from cabildo.mcp_stdio import Image, McpServer
@@ -70,6 +74,8 @@ class Session:
     """The one browser of this server process. It starts on first use."""
 
     channel: str = "chrome"
+    chrome: bool = False  # drive the person's Chrome through the extension; start none
+    _relay: chrome_relay.Relay | None = None
     storage_state: Path | None = None
     output_dir: Path = field(default_factory=lambda: Path.home() / ".cache" / "cabildo" / "browser")
     console: deque[tuple[str, str]] = field(default_factory=lambda: deque(maxlen=_KEEP))
@@ -113,7 +119,11 @@ class Session:
     async def context(self) -> BrowserContext:
         """The browser context, started on first use. Parallel first calls start one browser."""
         async with self._start:
-            if self._context is None:
+            if self.chrome and self._browser is not None and not self._browser.is_connected():
+                await self.close()  # Chrome or the extension went away: connect again
+            if self._context is None and self.chrome:
+                self._context = await self._connect_chrome()
+            elif self._context is None:
                 self._pw = await async_playwright().start()
                 self._browser = await self._pw.chromium.launch(
                     channel=self.channel,
@@ -131,6 +141,22 @@ class Session:
             else:
                 await self._reload_logins(self._context)
             return self._context
+
+    async def _connect_chrome(self) -> BrowserContext:
+        """The context of the person's Chrome: the tabs of the ``cabildo`` tab group."""
+        name = f"{Path.cwd().name} (process {os.getpid()})"
+        self._relay = await chrome_relay.Relay.start(name)
+        try:
+            self._pw = await async_playwright().start()
+            self._browser = await self._pw.chromium.connect_over_cdp(self._relay.url)
+        except BaseException:
+            await self.close()
+            raise
+        context = self._browser.contexts[0]
+        for page in context.pages:
+            self._watch(page)
+        context.on("page", self._watch)
+        return context
 
     def redact(self, text: str) -> str:
         """``text`` with every concealed secret replaced, longest first."""
@@ -207,10 +233,12 @@ class Session:
     async def close(self) -> None:
         """Close the browser. The next tool call starts a new one.
 
+        With ``chrome`` it only disconnects: the person's Chrome and its tabs stay.
+
         A browser that is already gone (crashed or reaped) does not stop the reset.
         """
-        browser, pw = self._browser, self._pw
-        self._pw = self._browser = self._context = None
+        browser, pw, relay = self._browser, self._pw, self._relay
+        self._pw = self._browser = self._context = self._relay = None
         self.current = 0
         self.dialog = self.chooser = None
         self.concealed.clear()
@@ -220,6 +248,8 @@ class Session:
         with suppress(PlaywrightError):
             if pw is not None:
                 await pw.stop()
+        if relay is not None:
+            await relay.close()
 
 
 def is_challenge(title: str, frame_urls: list[str]) -> bool:
@@ -360,6 +390,8 @@ async def handoff(session: Session, page: Page) -> str:
 
 
 async def _save_cf(session: Session) -> str:
+    if session.chrome:
+        return "The cookie stays in your Chrome."
     path = session.storage_state
     if path is None or session._context is None:
         return "No storage-state file: the cookie lasts until this browser closes."
@@ -425,7 +457,7 @@ def build(session: Session) -> McpServer:
         finally:
             await session.close()
 
-    mcp = McpServer("cabildo-browser", lifespan=lifespan)
+    mcp = McpServer("cabildo-chrome" if session.chrome else "cabildo-browser", lifespan=lifespan)
 
     @mcp.tool()
     async def browser_navigate(url: str) -> str:
@@ -442,13 +474,17 @@ def build(session: Session) -> McpServer:
         browsers start logged in. Name each site by its domain, for example `splitwise.com`.
         Only cookies of those domains and their subdomains are saved; nothing else is touched.
         """
+        if session.chrome:
+            return "nothing to save: this is your own Chrome, which keeps its logins"
         return await save_logins(session, domains)
 
     @mcp.tool()
     async def browser_navigate_back() -> str:
         """Go back to the previous page."""
         page = await session.page()
-        await page.go_back()
+        # The person's Chrome keeps left pages in memory (Playwright's own Chrome does not).
+        # A page restored from there fires no load event, so wait only for the new address.
+        await page.go_back(wait_until="commit" if session.chrome else "load")
         return await state(session)
 
     @mcp.tool()
@@ -702,6 +738,8 @@ def build(session: Session) -> McpServer:
     @mcp.tool()
     async def browser_resize(width: int, height: int) -> str:
         """Resize the browser viewport."""
+        if session.chrome:
+            return "refused: this is your own Chrome, which keeps its size"
         page = await session.page()
         await page.set_viewport_size({"width": width, "height": height})
         return await state(session)

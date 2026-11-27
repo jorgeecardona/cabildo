@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cabildo</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<header>
+  <span id="dot" class="dot"></span>
+  <div>
+    <h1 id="status">cabildo</h1>
+    <p id="detail"></p>
+  </div>
+  <label class="switch" title="Allow agents">
+    <input id="allow" type="checkbox">
+    <span></span>
+  </label>
+</header>
+<section>
+  <h2>Shared tabs</h2>
+  <ul id="tabs"></ul>
+  <p id="none">No tab is shared. Agents reach only the tabs of the "cabildo" tab group.</p>
+  <button id="share" type="button">Share this tab</button>
+</section>
+<script src="popup.js"></script>
+</body>
+</html>

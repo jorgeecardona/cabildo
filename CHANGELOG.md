@@ -4,6 +4,8 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- Browser: a Chrome extension lets agents use tabs of your own Chrome, with your logins. Run
+  `cabildo browser extension install`. Agents reach only the tabs of the `cabildo` tab group.
 - Workspace: a Claude idle for 6 hours is stopped and marked ○; Enter resumes it. Set the time
   with `[workspace].stop_idle_hours`; `0` never stops one.
 - VS Code extension 0.0.7: a console view in the bottom panel shows the terminals of the sessions

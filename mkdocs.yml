@@ -69,6 +69,8 @@ nav:
   - Channels and tags: channels.md
   - Roles: roles.md
   - Browser: browser.md
+  - Publish the Chrome extension: chrome-web-store.md
+  - Chrome extension privacy: chrome-extension-privacy.md
   - Session host: session-host.md
   - VS Code extension: vscode.md
   - Gateway: gateway.md
