@@ -4,6 +4,11 @@ All notable changes to cabildo are documented here. Versioning is [SemVer](https
 
 ## [Unreleased]
 
+- Gateway: put several Bedrock keys in `~/.config/cabildo/keys.toml` under `[bedrock.keys]`, and
+  use one with `key = "bedrock:NAME"`.
+- Gateway: tokens and estimated cost of today and 7 days for each upstream, in
+  `cabildo gateway status`, the workspace's mode line and `cabildo stats`.
+
 - `cabildo stats` prints the numbers of the workspace's mode line: each session's context, CPU and
   memory, plan limits, gateway, cost, intents and Jupyter runners. `--json` gives them as data.
 - VS Code extension 0.0.5: each unread message shows when it was sent, and the status bar no

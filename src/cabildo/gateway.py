@@ -15,7 +15,7 @@ subscription runs out, the next request goes to an API key or to Amazon Bedrock,
     [gateway.upstream.bedrock]
     kind         = "key"
     base_url     = "https://bedrock-mantle.us-east-1.api.aws/anthropic"
-    key          = "env:AWS_BEARER_TOKEN_BEDROCK"      # or op://..., or file:/path
+    key          = "bedrock:alpha"        # a name in keys.toml; or env:NAME, file:/path, op://...
     server_tools = false           # Bedrock has no WebSearch and the like
     models       = { "claude-opus-5-5" = "anthropic.claude-opus-5-5" }
 
@@ -46,6 +46,7 @@ import re
 import socket
 import threading
 import time
+import tomllib
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
@@ -55,7 +56,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
 
-from . import config, eventstream, onepassword, store
+from . import config, eventstream, gateway_usage, onepassword, store
 
 DEFAULT_PORT = 8788  # 8787 is the port of ``cabildo viewer``
 RATE_COOLDOWN_KEY_S = 60.0
@@ -97,6 +98,7 @@ _SIGNED = b'"signature"'  # every thinking block carries one
 _THINKING = ("thinking", "redacted_thinking")
 _SIGNATURE_ERROR = re.compile(rb"thinking.{0,12}(block|signature)|redacted_thinking", re.IGNORECASE)
 _AUTHS = ("x-api-key", "bearer", "both")
+_NAMED = "bedrock"  # the scheme of a reference to a name under [bedrock.keys] in keys.toml
 _ID = re.compile(r"[A-Za-z0-9_.-]+")
 _SESSION = re.compile(r"[A-Za-z0-9_-]{1,100}")
 _DURATION = re.compile(r"(\d+)([smhd])")
@@ -112,17 +114,17 @@ class GatewayError(ValueError):
 
 @dataclass(frozen=True)
 class KeyRef:
-    """Where a key is read from: an environment variable, a file, or a 1Password reference."""
+    """Where a key is read from: ``keys.toml``, an environment variable, a file, or 1Password."""
 
-    scheme: str  # "env", "file" or "op"
-    value: str  # the variable name, the path, or the whole ``op://`` reference
+    scheme: str  # "bedrock", "env", "file" or "op"
+    value: str  # the key's name, the variable name, the path, or the whole ``op://`` reference
 
     def __str__(self) -> str:
         return self.value if self.scheme == "op" else f"{self.scheme}:{self.value}"
 
 
 def parse_key_ref(text: object) -> KeyRef:
-    """The ``KeyRef`` for ``env:NAME``, ``file:/path`` or ``op://vault/item/field``.
+    """The ``KeyRef`` for ``bedrock:NAME``, ``env:NAME``, ``file:/path`` or ``op://...``.
 
     Raises:
         GatewayError: on anything else, or an empty name.
@@ -131,10 +133,41 @@ def parse_key_ref(text: object) -> KeyRef:
         if text.startswith(onepassword.REF_PREFIX) and len(text) > len(onepassword.REF_PREFIX):
             return KeyRef("op", text)
         scheme, _, rest = text.partition(":")
-        if scheme in ("env", "file") and rest:
+        if scheme in (_NAMED, "env", "file") and rest:
             return KeyRef(scheme, rest)
-    msg = "a key must be env:NAME, file:/path or op://vault/item/field"
+    msg = "a key must be bedrock:NAME, env:NAME, file:/path or op://vault/item/field"
     raise GatewayError(msg)
+
+
+def keys_path() -> Path:
+    """The file of named keys: ``~/.config/cabildo/keys.toml``."""
+    root = os.environ.get("XDG_CONFIG_HOME") or "~/.config"
+    return Path(root).expanduser() / "cabildo" / "keys.toml"
+
+
+def named_key(name: str) -> str:
+    """The key ``name`` of the ``[bedrock.keys]`` section of ``keys.toml``.
+
+    Raises:
+        GatewayError: when the file cannot be read or is not TOML, or it has no such name.
+            The message never holds a key.
+    """
+    path = keys_path()
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        msg = f"cannot read {path}: {exc.strerror}"
+        raise GatewayError(msg) from exc
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError):
+        msg = f"{path} is not valid TOML"
+        raise GatewayError(msg) from None  # the cause holds the text of the file
+    section = data.get("bedrock")
+    table = section.get("keys") if isinstance(section, dict) else None
+    value = table.get(name) if isinstance(table, dict) else None
+    if not isinstance(value, str):
+        msg = f"no key {name!r} under [bedrock.keys] in {path}"
+        raise GatewayError(msg)
+    return value.strip()
 
 
 @dataclass(frozen=True)
@@ -477,7 +510,9 @@ class Keys:
         Raises:
             GatewayError: when it is empty, unset or unreadable. The message never holds it.
         """
-        if ref.scheme == "env":
+        if ref.scheme == _NAMED:
+            value = named_key(ref.value)
+        elif ref.scheme == "env":
             value = os.environ.get(ref.value, "")
         elif ref.scheme == "file":
             try:
@@ -1027,6 +1062,7 @@ class Gateway:
     use_file: Path | None = None
     log: Callable[[str], None] = lambda _m: None
     wall: Callable[[], float] = time.time
+    record: Callable[[gateway_usage.Reply], None] = lambda _r: None  # a reply's token counts
     _active: int = field(default=0, init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _issued: OrderedDict[str, Conversation] = field(default_factory=OrderedDict, init=False)
@@ -1265,7 +1301,17 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
                 if wrap:
                     self._send(*_wrapped(resp.status, resp.getheaders(), peek), None)
                 else:
-                    self._send(resp.status, resp.getheaders(), peek, resp, wire.events)
+                    counter = None
+                    if resp.status < 400 and urlsplit(job.path).path == "/v1/messages":
+                        streamed = wire.events or "event-stream" in (
+                            resp.getheader("Content-Type") or ""
+                        )
+                        counter = gateway_usage.Counter(streamed=streamed)
+                    self._send(resp.status, resp.getheaders(), peek, resp, wire.events, counter)
+                    if counter:
+                        used = counter.reply(up.name, job.model or "", gw.wall())
+                        if used:
+                            gw.record(used)
                 conn.close()
                 ms = round((time.monotonic() - started) * 1000)
                 gw.log(f"{up.name} {job.model or '-'} {resp.status} {ms}ms" + _because(peek))
@@ -1286,6 +1332,7 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
             prefix: bytes,
             stream: http.client.HTTPResponse | None,
             events: bool = False,
+            counter: gateway_usage.Counter | None = None,
         ) -> None:
             decoder = eventstream.Decoder() if events else None
             if decoder is not None:
@@ -1312,6 +1359,8 @@ def make_handler(gw: Gateway) -> type[BaseHTTPRequestHandler]:
                         except eventstream.EventStreamError:
                             self.wfile.write(eventstream.error_event("api_error", "bad stream"))
                             break
+                    if counter is not None:
+                        counter.feed(chunk)
                     self.wfile.write(chunk)
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
@@ -1571,7 +1620,7 @@ def start_service(log: Callable[[str], None]) -> GatewayService | None:
     except GatewayError as exc:
         log(f"gateway: not started: {exc}")
         return None
-    gw = Gateway(settings, use_file=use_file(), log=log)
+    gw = Gateway(settings, use_file=use_file(), log=log, record=gateway_usage.recorder(log))
     try:
         server = make_server(gw, inherited=_inherited(settings.port))
     except OSError as exc:

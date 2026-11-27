@@ -254,7 +254,8 @@ def fmt_gateway(view: upstreams.View, serving: str = "") -> list[tuple[str, str]
         bedrock            38         0  ready
 
     The counts are of all sessions since the daemon started. ``serving`` names the upstream
-    of the shown conversation; its row is bold.
+    of the shown conversation; its row is bold. An upstream that served a reply has a row with
+    its cost (or tokens) of today and of 7 days.
     """
     out: list[tuple[str, str]] = [(grid("gateway", "requests", "failovers"), "")]
     for u in view.upstreams:
@@ -263,6 +264,8 @@ def fmt_gateway(view: upstreams.View, serving: str = "") -> list[tuple[str, str]
             state += ", first"
         line = grid(u.name[:10], str(u.requests), str(u.failovers), f"  {state}")
         out.append((line, "bold" if u.name == serving else ""))
+        if used := view.used(u):
+            out.append((f"  {used}", "dim"))
         if not u.ready and u.reason:
             out.append((f"  {u.reason}", "dim"))
     return out

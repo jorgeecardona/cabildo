@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
-from cabildo import gateway
+from cabildo import gateway, gateway_usage, usage
 from cabildo.workspace import app, plan, upstreams
 
 
@@ -53,6 +54,16 @@ def test_the_gateway_table_has_one_row_per_upstream_and_the_reason() -> None:
         ["bedrock", "38", "0", "ready,", "first"],
     ]
     assert [style for _x, style in lines] == ["", "", "dim", "bold"]
+
+
+def test_an_upstream_that_served_replies_shows_what_it_used() -> None:
+    view = upstreams.parse(REPLY)
+    assert view is not None
+    day = usage.Window(input=100, cost=1.5)
+    view = replace(view, spent=(gateway_usage.Spent("bedrock", day, day, day),))
+    lines = [x.strip() for x, _style in app.fmt_gateway(view)]
+    assert lines[-1] == "today $1.50 · 7d $1.50"
+    assert lines[-2].startswith("bedrock")
 
 
 def test_a_reply_without_sessions_or_with_another_shape() -> None:

@@ -1784,8 +1784,10 @@ def cmd_jupyter(args) -> int:
 def cmd_gateway(args) -> int:
     """``cabildo gateway serve|status|use|enable|disable``: the gateway Claude Code can talk to."""
     import time as _time
+    from dataclasses import replace
 
-    from . import config, gateway
+    from . import config, gateway, gateway_usage
+    from .workspace import upstreams
 
     try:
         settings = gateway.parse(config.gateway_table())
@@ -1869,6 +1871,10 @@ def cmd_gateway(args) -> int:
             return 1
         if data.get("forced"):
             print(f"  using {data['forced']} first (cabildo gateway use auto to undo)")
+        view = upstreams.parse(data)
+        if view:
+            names = tuple(u.name for u in view.upstreams)
+            view = replace(view, spent=gateway_usage.spent(names))
         for row in data["upstreams"]:
             state = "ready" if row["ready"] else f"set aside {row['set_aside_s']}s: {row['reason']}"
             print(
@@ -1876,8 +1882,15 @@ def cmd_gateway(args) -> int:
                 f"{row['requests']} served, {row['failovers']} set aside"
                 + (f", last: {row['last_error']}" if row["last_error"] else "")
             )
+            up = next((u for u in view.upstreams if u.name == row["name"]), None) if view else None
+            if view and up and (used := view.used(up)):
+                print(f"  {'':<16} {used}")
         return 0
-    gw = gateway.Gateway(settings, use_file=use_file, log=lambda m: print(m, flush=True))
+
+    def log(message: str) -> None:
+        print(message, flush=True)
+
+    gw = gateway.Gateway(settings, use_file=use_file, log=log, record=gateway_usage.recorder(log))
     server = gateway.make_server(gw, port)
 
     def reload_config(_sig: int, _frame: object) -> None:

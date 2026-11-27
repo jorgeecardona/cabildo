@@ -9,12 +9,19 @@ of upstream is a change in the gateway, so no session restarts.
 
 ## Set it up
 
-1. Put your Bedrock key in a file only you can read:
+1. Create the key file, readable only by you:
 
    ```bash
    mkdir -p ~/.config/cabildo
-   install -m 600 /dev/null ~/.config/cabildo/bedrock.key
-   printf '%s' "$AWS_BEARER_TOKEN_BEDROCK" > ~/.config/cabildo/bedrock.key
+   (umask 077; touch ~/.config/cabildo/keys.toml)
+   ```
+
+   Put your Bedrock keys in it, each with a name you choose:
+
+   ```toml
+   [bedrock.keys]
+   alpha = "your first Bedrock API key"
+   beta  = "your second one"
    ```
 
 2. Add the upstreams to `~/.cabildo/config.toml`. They are tried in the order of the file:
@@ -27,16 +34,28 @@ of upstream is a change in the gateway, so no session restarts.
    kind     = "passthrough"   # sends the request on with the client's own login
    base_url = "https://api.anthropic.com"
 
-   [gateway.upstream.bedrock]
+   [gateway.upstream.alpha]
    kind         = "key"
    base_url     = "https://bedrock-mantle.us-east-1.api.aws/anthropic"
-   key          = "file:~/.config/cabildo/bedrock.key"   # or op://Vault/Item/field
-   server_tools = false       # Bedrock has no WebSearch and the like
+   key          = "bedrock:alpha"   # the name in keys.toml
+   server_tools = false             # Bedrock has no WebSearch and the like
 
-   [gateway.upstream.bedrock.models]   # the models this upstream serves, and their names there
+   [gateway.upstream.alpha.models]   # the models this upstream serves, and their names there
    "claude-opus-5-5"  = "anthropic.claude-opus-5-5"
    "claude-haiku-4-5" = "anthropic.claude-haiku-4-5"
+
+   [gateway.upstream.beta]
+   kind         = "key"
+   base_url     = "https://bedrock-mantle.us-east-1.api.aws/anthropic"
+   key          = "bedrock:beta"
+   server_tools = false
+
+   [gateway.upstream.beta.models]
+   "claude-haiku-4-5" = "anthropic.claude-haiku-4-5"
    ```
+
+   Each upstream has its own name, key and models. Status, tokens, cost, fallback and
+   `cabildo gateway use` all go by the upstream name, so give it the name of its key.
 
 3. Restart the daemon. It serves the gateway when `[gateway]` exists, so there is no second
    service:
@@ -60,8 +79,12 @@ of upstream is a change in the gateway, so no session restarts.
    Remove `apiKeyHelper` from the settings. With a helper set, Claude Code sends its key
    instead of your subscription login. `enable` warns when it finds one.
 
+A `key` is `bedrock:NAME` (a name under `[bedrock.keys]` in `~/.config/cabildo/keys.toml`),
+`file:/path`, `op://Vault/Item/field` or `env:NAME`. A change to `keys.toml` or to a key file
+applies to the next request.
+
 The daemon does not see the variables of your shell. A key with `env:NAME` is empty there, and
-the upstream is set aside with "no usable key". Use `file:` or `op://`, or set the variable in
+the upstream is set aside with "no usable key". Use another form, or set the variable in
 `~/.config/systemd/user/cabildo-daemon.service.d/override.conf`.
 
 If the daemon is not running, every session that uses the gateway fails to connect. Run
@@ -76,7 +99,7 @@ If the daemon is not running, every session that uses the gateway fails to conne
 ## How a request is routed
 
 - The upstreams are tried in the order of the file. In the example above: the subscription, then
-  bedrock.
+  alpha, then beta.
 - An upstream that answers 429, 402, 529, 401 (a key), 403 (a key), or 400 with "credit balance"
   is set aside. The same request goes to the next upstream, and Claude Code never sees the error.
 - A set-aside upstream is tried last, not never. If every upstream refuses, the client gets the
@@ -102,7 +125,7 @@ Use this when Bedrock must stay in one region and `bedrock-mantle.<region>.api.a
 [gateway.upstream.bedrock-eu]
 kind   = "bedrock-invoke"
 region = "eu-central-1"                          # or base_url = "https://..."
-key    = "file:~/.config/cabildo/bedrock.key"
+key    = "bedrock:alpha"
 
 [gateway.upstream.bedrock-eu.models]             # required: Bedrock names models its own way
 "claude-opus-5-5" = "eu.anthropic.claude-opus-5"
@@ -135,10 +158,21 @@ For each request the gateway does what the Invoke API needs, and Claude Code see
 
 A model that is not in `models` skips the upstream. Map the background model too.
 
+## Tokens and cost per upstream
+
+`cabildo gateway status`, the workspace's mode line and `cabildo stats` show what each upstream
+served today and in the last 7 days:
+
+- A `key` or `bedrock-invoke` upstream shows an estimated cost, at Anthropic's list prices. Your
+  AWS bill can differ: a regional Bedrock endpoint costs more than the list price.
+- A `passthrough` upstream shows tokens, because your subscription pays for them.
+- The numbers come from the replies the gateway served. They are kept for 400 days, under the
+  upstream name. A renamed upstream starts from zero.
+
 ## Choose the upstream yourself
 
 ```bash
-cabildo gateway use bedrock --for 2h   # try bedrock first for 2 hours
+cabildo gateway use beta --for 2h      # try beta first for 2 hours
 cabildo gateway use auto               # back to the order of the file
 cabildo gateway use                    # show the choice
 cabildo gateway status                 # each upstream: ready or set aside, served, last error

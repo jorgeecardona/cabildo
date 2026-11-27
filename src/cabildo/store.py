@@ -617,6 +617,20 @@ CREATE TABLE IF NOT EXISTS usage_messages (
 CREATE INDEX IF NOT EXISTS idx_usage_messages_ts ON usage_messages(ts);
 CREATE INDEX IF NOT EXISTS idx_usage_messages_session ON usage_messages(session_id);
 
+-- One row per reply the gateway served: the tokens each upstream was used for.
+CREATE TABLE IF NOT EXISTS gateway_usage (
+    ts             REAL NOT NULL,
+    upstream       TEXT NOT NULL,             -- the name in [gateway.upstream.<name>]
+    model          TEXT NOT NULL,             -- the id the client asked for
+    input          INTEGER NOT NULL,
+    output         INTEGER NOT NULL,
+    cache_read     INTEGER NOT NULL,
+    cache_write    INTEGER NOT NULL,          -- every cache write, both durations
+    cache_write_1h INTEGER NOT NULL,
+    fast           INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gateway_usage_ts ON gateway_usage(ts);
+
 -- How far each transcript file has been read into usage_messages.
 CREATE TABLE IF NOT EXISTS usage_cursors (
     path         TEXT PRIMARY KEY,

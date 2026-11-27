@@ -139,7 +139,7 @@ def load(
         mine = usage.spend(conn, at, sessions) if sessions else None
         models = tuple(usage.by_model(conn, 0.0))
         windows: dict[str, tuple[float, tuple[str, ...] | None]] = {
-            "today": (usage._midnight(at), None),
+            "today": (usage.midnight(at), None),
             "7d": (at - 7 * 86400, None),
             "all": (0.0, None),
         }

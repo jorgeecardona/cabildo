@@ -205,7 +205,11 @@ def gateway_group(view: upstreams.View) -> Group:
         if u.forced:
             state += ", first"
         value = f"{u.requests} requests · {u.failovers} failovers · {state}"
-        rows.append(Row(u.name, value, "" if u.ready else "warn", "" if u.ready else u.reason))
+        detail = [] if u.ready else [u.reason]
+        if used := view.used(u):
+            value += f" · {used}"
+            detail.append(used)
+        rows.append(Row(u.name, value, "" if u.ready else "warn", "\n".join(detail)))
     return Group("gateway", "gateway", tuple(rows))
 
 

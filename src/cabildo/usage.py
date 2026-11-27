@@ -24,7 +24,7 @@ import os
 import sqlite3
 import time
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -226,7 +226,8 @@ class Spend:
 #: `ts >= ?` per window. Today is local midnight, not 24 hours back: "today" is read off a
 #: calendar, and a figure that silently dropped this morning's work at noon would be wrong
 #: in the way nobody checks.
-def _midnight(now: float) -> float:
+def midnight(now: float) -> float:
+    """The start of the local day of ``now``, as seconds since 1970."""
     local = datetime.fromtimestamp(now)
     return local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
 
@@ -235,7 +236,7 @@ _GROUPED = (
     "SELECT model, fast, (input + cache_read + cache_write) > ? AS long_prompt, "
     "sum(input) AS input, sum(output) AS output, sum(cache_read) AS cache_read, "
     "sum(cache_write) AS cache_write, sum(cache_write_1h) AS cache_write_1h "
-    "FROM usage_messages WHERE ts >= ?{where} GROUP BY model, fast, long_prompt"
+    "FROM {table} WHERE ts >= ?{where} GROUP BY model, fast, long_prompt"
 )
 
 
@@ -255,11 +256,22 @@ def window(
     if sessions is not None and not sessions:
         return Window()
     where = "" if sessions is None else f" AND session_id IN ({','.join('?' * len(sessions))})"
-    sql = _GROUPED.format(where=where)
+    sql = _GROUPED.format(table="usage_messages", where=where)
     args: tuple = (prices.LONG_PROMPT_TOKENS, since, *(sessions or ()))
+    return _priced(conn.execute(sql, args))
+
+
+def upstream_window(conn: sqlite3.Connection, since: float, upstream: str) -> Window:
+    """What the gateway upstream ``upstream`` served at or after ``since``, priced."""
+    sql = _GROUPED.format(table="gateway_usage", where=" AND upstream = ?")
+    return _priced(conn.execute(sql, (prices.LONG_PROMPT_TOKENS, since, upstream)))
+
+
+def _priced(rows: Iterable[sqlite3.Row]) -> Window:
+    """The sum of ``_GROUPED`` rows, each group priced at its own model's rates."""
     totals = {"input": 0, "output": 0, "cache_write": 0, "cache_read": 0}
     cost, unpriced = 0.0, 0
-    for row in conn.execute(sql, args):
+    for row in rows:
         write_1h = row["cache_write_1h"]
         write_5m = row["cache_write"] - write_1h
         for key in totals:
@@ -347,7 +359,7 @@ def by_model(
     if sessions is not None and not sessions:
         return []
     where = "" if sessions is None else f" AND session_id IN ({','.join('?' * len(sessions))})"
-    sql = _GROUPED.format(where=where)
+    sql = _GROUPED.format(table="usage_messages", where=where)
     args: tuple = (prices.LONG_PROMPT_TOKENS, since, *(sessions or ()))
     found: dict[str, ModelSpend] = {}
     for row in conn.execute(sql, args):
@@ -384,7 +396,7 @@ def spend(
     """
     at = time.time() if now is None else now
     return Spend(
-        today=window(conn, _midnight(at), sessions),
+        today=window(conn, midnight(at), sessions),
         week=window(conn, at - 7 * DAY, sessions),
         all_time=window(conn, 0.0, sessions),
     )
